@@ -64,7 +64,6 @@ const cardNames: Record<KpiCard['code'], string> = {
 };
 const region = 'المنطقة الوسطى';
 const workOrder = 'TBC005754 & TBC006484';
-const projectNumber = 'All';
 type IndicatorValues = FormulaInputs & { evidence?: string };
 
 function currentMonth(): string {
@@ -167,7 +166,6 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
       const { data: kpiMonth, error: monthError } = await supabase.from('kpi_months').upsert({
         month: `${month}-01`,
         work_order: workOrder,
-        project_no: projectNumber,
         region,
         contractor: 'شركة شلفا لإدارة المرافق',
       }, { onConflict: 'month,work_order' }).select('id').single();
@@ -228,7 +226,7 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
   return (
     <div className="grid gap-5">
       <section className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-        <div><p className="text-sm text-slate-500">المنطقة الوسطى · أمر العمل {workOrder} · رقم المشروع {projectNumber}</p><h2 className="mt-1 text-2xl font-bold text-brand-900">بطاقات الأداء الشهرية</h2></div>
+        <div><p className="text-sm text-slate-500">المنطقة الوسطى · أمر العمل {workOrder}</p><h2 className="mt-1 text-2xl font-bold text-brand-900">بطاقات الأداء الشهرية</h2></div>
         <label className="grid gap-1 text-sm font-semibold">شهر التقييم<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
       </section>
 

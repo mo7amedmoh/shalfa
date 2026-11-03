@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { z } from 'zod';
 import { summarizeGeneralPlanProgress } from '../../domain/generalPlans';
+import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
@@ -17,34 +18,60 @@ const planLabels: Record<GeneralPlanType, string> = {
   pest_control: 'مكافحة الآفات ورش المبيدات',
   annual_readiness: 'خطط الاستعداد السنوية',
 };
-const schoolSchema = z.object({ id: z.string().uuid(), school_name: z.string(), ministry_number: z.string() });
+const eligibilitySchema = z.object({
+  buildingTypeHeader: z.string(),
+  independentBuildingValues: z.array(z.string()),
+  primarySharedValues: z.array(z.string()),
+  elevatorContractorHeader: z.string(),
+  noElevatorValues: z.array(z.string()),
+});
+const sourceSchoolSchema = z.object({
+  id: z.string().uuid(),
+  school_name: z.string(),
+  ministry_number: z.string(),
+  source_fields: z.record(z.string(), z.unknown()),
+});
 const rowSchema = z.object({
   id: z.string().uuid(),
   school_id: z.string().uuid(),
-  planned_date: z.string(),
-  status: z.enum(['pending', 'in_progress', 'complete']),
-  completed_at: z.string().nullable(),
+  planned_date: z.string().nullable(),
+  status: z.enum(['planned', 'in_progress', 'done', 'cancelled']),
+  execution_date: z.string().nullable(),
   notes: z.string().nullable(),
   school: z.object({ school_name: z.string(), ministry_number: z.string() }).nullable(),
 });
-type GeneralRow = z.infer<typeof rowSchema>;
+type GeneralRow = Omit<z.infer<typeof rowSchema>, 'status'> & { status: 'pending' | 'in_progress' | 'complete'; completed_at: string | null };
+type CandidateData = { schools: z.infer<typeof sourceSchoolSchema>[]; eligibility: PlanEligibilityConfig | null };
 
-async function loadSchools() {
-  if (!supabase) return [];
-  const { data, error } = await supabase.from('schools').select('id,school_name,ministry_number').order('school_name');
-  if (error) throw error;
-  return z.array(schoolSchema).parse(data);
+async function loadCandidates(): Promise<CandidateData> {
+  if (!supabase) return { schools: [], eligibility: null };
+  const [schoolsResult, configResult] = await Promise.all([
+    supabase.from('schools').select('id,school_name:name,ministry_number:ministry_no,source_fields:extra').order('name'),
+    supabase.from('app_config').select('value').eq('key', 'plan_eligibility').maybeSingle(),
+  ]);
+  if (schoolsResult.error) throw schoolsResult.error;
+  if (configResult.error) throw configResult.error;
+  const eligibility = configResult.data ? eligibilitySchema.parse(configResult.data.value) : null;
+  return { schools: z.array(sourceSchoolSchema).parse(schoolsResult.data), eligibility };
 }
 
 async function loadGeneralRows(type: GeneralPlanType): Promise<GeneralRow[]> {
   if (!supabase) return [];
+  const dbType = type === 'sewage_waste' ? 'sewage_removal' : type;
+  const { data: plans, error: plansError } = await supabase.from('general_plans').select('id').eq('plan_type', dbType);
+  if (plansError) throw plansError;
+  if (!plans.length) return [];
   const { data, error } = await supabase
     .from('general_plan_rows')
-    .select('id,school_id,planned_date,status,completed_at,notes,school:schools(school_name,ministry_number)')
-    .eq('plan_type', type)
+    .select('id,school_id,planned_date,status,execution_date,notes,school:schools(school_name:name,ministry_number:ministry_no)')
+    .in('plan_id', plans.map(({ id }) => id))
     .order('planned_date', { ascending: false });
   if (error) throw error;
-  return z.array(rowSchema).parse(data);
+  return z.array(rowSchema).parse(data).map((row) => ({
+    ...row,
+    status: row.status === 'done' ? 'complete' : row.status === 'in_progress' ? 'in_progress' : 'pending',
+    completed_at: row.execution_date,
+  }));
 }
 
 export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
@@ -56,19 +83,28 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [message, setMessage] = useState('');
-  const schools = useQuery({ queryKey: ['schools-for-general-plans'], queryFn: loadSchools, enabled: Boolean(planType) });
+  const schools = useQuery({ queryKey: ['schools-for-general-plans'], queryFn: loadCandidates, enabled: Boolean(planType) });
   const rows = useQuery({
     queryKey: ['general-plan-rows', planType],
     queryFn: () => planType ? loadGeneralRows(planType) : Promise.resolve([]),
     enabled: Boolean(planType),
   });
   const canManage = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
+  const eligibleIds = useMemo(() => {
+    if (!schools.data?.eligibility) return [];
+    return eligibleSchoolIds(
+      schools.data.schools.map((school) => ({ id: school.id, sourceFields: school.source_fields })),
+      'cleaning',
+      schools.data.eligibility,
+    );
+  }, [schools.data]);
   const filteredSchools = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
-    return (schools.data ?? []).filter((school) =>
+    const eligible = new Set(eligibleIds);
+    return (schools.data?.schools ?? []).filter((school) => eligible.has(school.id) &&
       `${school.school_name} ${school.ministry_number}`.toLocaleLowerCase().includes(query),
     );
-  }, [schools.data, search]);
+  }, [schools.data, eligibleIds, search]);
 
   const createRows = useMutation({
     mutationFn: async () => {
@@ -78,14 +114,18 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
       if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== plannedDate) {
         throw new Error('أدخل تاريخاً صالحاً.');
       }
-      if (selectedIds.length === 0) throw new Error('اختر مدرسة واحدة على الأقل.');
+      if (selectedIds.length === 0 || selectedIds.some((id) => !eligibleIds.includes(id))) throw new Error('اختر مدرسة مؤهلة واحدة على الأقل.');
+      const { data: plan, error: planError } = await supabase.from('general_plans')
+        .upsert({ plan_type: planType === 'sewage_waste' ? 'sewage_removal' : planType, year: Number(plannedDate.slice(0, 4)) }, { onConflict: 'plan_type,year' })
+        .select('id')
+        .single();
+      if (planError) throw planError;
       const { error } = await supabase.from('general_plan_rows').insert(
         selectedIds.map((schoolId) => ({
-          plan_type: planType,
+          plan_id: plan.id,
           school_id: schoolId,
           planned_date: plannedDate,
-          status: 'pending',
-          created_by: profile.id,
+          status: 'planned',
         })),
       );
       if (error) throw error;
@@ -104,8 +144,8 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
       const parsedNotes = z.string().max(2000).safeParse(notes);
       if (!parsedNotes.success) throw new Error('يجب ألا تتجاوز الملاحظات 2000 خانة.');
       const { error } = await supabase.from('general_plan_rows').update({
-        status,
-        completed_at: status === 'complete' ? new Date().toISOString().slice(0, 10) : null,
+        status: status === 'complete' ? 'done' : status === 'pending' ? 'planned' : status,
+        execution_date: status === 'complete' ? new Date().toISOString().slice(0, 10) : null,
         notes: notes.trim() || null,
       }).eq('id', row.id);
       if (error) throw error;
@@ -126,7 +166,8 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
       <section><p className="text-sm text-slate-500">الخطط العامة · متابعة التنفيذ</p><h2 className="mt-1 text-2xl font-bold text-brand-900">{planLabels[planType]}</h2></section>
       {(schools.error || rows.error) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات الخطة أو المدارس.</div>}
       <section className="card grid gap-4 p-5">
-        <div><h3 className="font-bold">إضافة مدارس إلى الخطة</h3><p className="mt-1 text-sm text-slate-500">اختر مدارس موجودة في مرآة المصدر وحدد تاريخ التنفيذ المخطط.</p></div>
+        <div><h3 className="font-bold">إضافة مدارس إلى الخطة</h3><p className="mt-1 text-sm text-slate-500">تُستثنى المباني المشتركة الملحقة. اختر مدرسة مؤهلة وحدد تاريخ التنفيذ المخطط.</p></div>
+        {!schools.isLoading && !schools.data?.eligibility && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">اضبط قواعد أهلية المدارس أولاً.</p>}
         <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
           <label className="grid gap-1 text-sm font-semibold">تاريخ التنفيذ<input type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
           <label className="grid gap-1 text-sm font-semibold">بحث مدرسة<input value={search} onChange={(event) => setSearch(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" placeholder="الاسم أو الرقم الوزاري" /></label>

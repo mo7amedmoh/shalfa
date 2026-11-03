@@ -10,10 +10,10 @@ const poolSchema = z.object({
   reward_month: z.string(),
   engineer_id: z.string().uuid(),
   amount: z.coerce.number().nonnegative(),
-  locked_at: z.string().nullable(),
+  status: z.enum(['open', 'approved']),
 });
-const engineerSchema = z.object({ id: z.string().uuid(), display_name: z.string() });
-const employeeSchema = z.object({ id: z.string().uuid(), full_name: z.string(), job_title: z.string() });
+const engineerSchema = z.object({ id: z.string().uuid(), display_name: z.string().nullable() });
+const employeeSchema = z.object({ id: z.string().uuid(), full_name: z.string(), job_title: z.string().nullable() });
 const distributionSchema = z.object({
   id: z.string().uuid(),
   employee_id: z.string().uuid(),
@@ -24,31 +24,31 @@ const distributionSchema = z.object({
 
 async function loadPools(month: string) {
   if (!supabase) return [];
-  const { data, error } = await supabase.from('reward_pools').select('id,reward_month,engineer_id,amount,locked_at').eq('reward_month', `${month}-01`);
+  const { data, error } = await supabase.from('reward_pools').select('id,reward_month:month,engineer_id,amount,status').eq('month', `${month}-01`);
   if (error) throw error;
   return z.array(poolSchema).parse(data);
 }
 
 async function loadEngineers() {
   if (!supabase) return [];
-  const { data, error } = await supabase.from('user_profiles').select('id,display_name').eq('role', 'area_engineer').order('display_name');
+  const { data, error } = await supabase.from('profiles').select('id:employee_id,display_name:full_name').eq('role', 'area_engineer').not('employee_id', 'is', null).order('full_name');
   if (error) throw error;
   return z.array(engineerSchema).parse(data);
 }
 
 async function loadEmployees() {
   if (!supabase) return [];
-  const { data, error } = await supabase.from('employees').select('id,full_name,job_title').in('employee_category', ['technician', 'supervisor']).order('full_name');
+  const { data, error } = await supabase.from('employees').select('id,full_name,job_title').in('category', ['technician', 'supervisor']).order('full_name');
   if (error) throw error;
   return z.array(employeeSchema).parse(data);
 }
 
 async function loadDistributions(poolId: string) {
   if (!supabase) return [];
-  const { data, error } = await supabase.from('reward_distributions')
+  const { data, error } = await supabase.from('reward_allocations')
     .select('id,employee_id,amount,note,employee:employees(full_name)')
     .eq('pool_id', poolId)
-    .order('created_at');
+    .order('updated_at');
   if (error) throw error;
   return z.array(distributionSchema).parse(data);
 }
@@ -73,7 +73,7 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
   const employees = useQuery({ queryKey: ['reward-employees'], queryFn: loadEmployees, enabled: Boolean(profile) });
 
   useEffect(() => {
-    if (profile?.role === 'area_engineer') setEngineerId(profile.id);
+    if (profile?.role === 'area_engineer') setEngineerId(profile.employee_id ?? '');
     else if (privileged && engineers.data?.length && !engineerId) setEngineerId(engineers.data[0].id);
   }, [profile, privileged, engineers.data, engineerId]);
 
@@ -91,7 +91,7 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
     ? balance.remainingAmount - Number(amount) + (distributions.find((item) => item.employee_id === employeeId)?.amount ?? 0)
     : balance?.remainingAmount;
   const canEditPool = Boolean(privileged && profile);
-  const canDistribute = profile?.role === 'area_engineer' && Boolean(pool && !pool.locked_at);
+  const canDistribute = profile?.role === 'area_engineer' && Boolean(pool && pool.status === 'open');
 
   const savePool = useMutation({
     mutationFn: async () => {
@@ -104,7 +104,7 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
         if (error) throw error;
       } else {
         const { error } = await supabase.from('reward_pools').insert({
-          reward_month: `${month}-01`,
+          month: `${month}-01`,
           engineer_id: engineerId,
           amount: parsed.data,
         });
@@ -121,7 +121,7 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
   const approvePool = useMutation({
     mutationFn: async () => {
       if (!supabase || !profile || !canEditPool || !pool) throw new Error('لا توجد صلاحية اعتماد هذا المخصص.');
-      const { error } = await supabase.from('reward_pools').update({ locked_at: new Date().toISOString(), approved_by: profile.id }).eq('id', pool.id);
+      const { error } = await supabase.from('reward_pools').update({ status: 'approved', approved_by: profile.id }).eq('id', pool.id);
       if (error) throw error;
     },
     onSuccess: async () => {
@@ -142,12 +142,11 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
         distributions.filter((item) => item.employee_id !== employeeId).map((item) => item.amount),
       );
       if (!canAllocateReward(balanceWithoutCurrent, parsedAmount.data)) throw new Error('المبلغ يتجاوز الرصيد المتبقي.');
-      const { error } = await supabase.from('reward_distributions').upsert({
+      const { error } = await supabase.from('reward_allocations').upsert({
         pool_id: pool.id,
         employee_id: employeeId,
         amount: parsedAmount.data,
         note: note.trim() || null,
-        created_by: profile.id,
       }, { onConflict: 'pool_id,employee_id' });
       if (error) throw error;
     },
@@ -178,15 +177,15 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
         </div>
         {canEditPool && <div className="flex flex-wrap items-end gap-3">
           <label className="grid gap-1 text-sm font-semibold">المبلغ الإجمالي المتاح<input inputMode="decimal" type="number" min="0" step="0.01" value={poolAmount} onChange={(event) => setPoolAmount(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
-          <button type="button" onClick={() => savePool.mutate()} disabled={savePool.isPending || !engineerId || Boolean(pool?.locked_at)} className="rounded-lg border border-brand-700 px-4 py-2 text-sm font-bold text-brand-800 disabled:opacity-50">حفظ المخصص</button>
-          {pool && !pool.locked_at && <button type="button" onClick={() => approvePool.mutate()} disabled={approvePool.isPending} className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">اعتماد وإقفال الشهر</button>}
+          <button type="button" onClick={() => savePool.mutate()} disabled={savePool.isPending || !engineerId || pool?.status === 'approved'} className="rounded-lg border border-brand-700 px-4 py-2 text-sm font-bold text-brand-800 disabled:opacity-50">حفظ المخصص</button>
+          {pool && pool.status === 'open' && <button type="button" onClick={() => approvePool.mutate()} disabled={approvePool.isPending} className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">اعتماد وإقفال الشهر</button>}
         </div>}
         {pool && <div className="grid gap-3 sm:grid-cols-3">
           <Metric label="المبلغ المتاح" amount={pool.amount} />
           <Metric label="إجمالي الموزع" amount={balance?.allocatedAmount ?? 0} />
           <Metric label="الرصيد المتبقي" amount={balance?.remainingAmount ?? 0} />
         </div>}
-        {pool?.locked_at && <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">تم اعتماد المخصص وإقفال هذا الشهر.</p>}
+        {pool?.status === 'approved' && <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">تم اعتماد المخصص وإقفال هذا الشهر.</p>}
         {!pool && <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{privileged ? 'لم يُحدد مخصص لهذا المهندس والشهر.' : 'لم يُحدد مخصص متاح لحسابك لهذا الشهر.'}</p>}
       </section>
 

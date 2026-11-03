@@ -4,12 +4,12 @@ import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
 
 const auditEventSchema = z.object({
-  id: z.string().uuid(),
+  id: z.number(),
   actor_id: z.string().uuid().nullable(),
   action: z.string(),
-  entity: z.string(),
+  entity: z.string().nullable(),
   entity_id: z.string().nullable(),
-  details: z.record(z.string(), z.unknown()),
+  details: z.record(z.string(), z.unknown()).nullable(),
   created_at: z.string(),
 });
 
@@ -17,6 +17,7 @@ const actionLabels: Record<string, string> = {
   INSERT: 'إضافة',
   UPDATE: 'تعديل',
   DELETE: 'حذف',
+  REVEAL_RESIDENCE: 'إظهار بيانات حساسة',
   export: 'تصدير',
   reveal: 'إظهار بيانات حساسة',
   sync: 'مزامنة',
@@ -25,8 +26,8 @@ const actionLabels: Record<string, string> = {
 async function loadAuditEvents() {
   if (!supabase) return [];
   const { data, error } = await supabase.from('audit_log')
-    .select('id,actor_id,action,entity,entity_id,details,created_at')
-    .order('created_at', { ascending: false })
+    .select('id,actor_id:actor,action,entity:table_name,entity_id:row_id,details,created_at:at')
+    .order('at', { ascending: false })
     .limit(250);
   if (error) throw error;
   return z.array(auditEventSchema).parse(data);

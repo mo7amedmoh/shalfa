@@ -12,7 +12,7 @@ const persistedConfigSchema = z.object({
 
 async function loadConfig(): Promise<SchoolSyncConfig | null> {
   if (!supabase) return null;
-  const { data, error } = await supabase.from('app_settings').select('key,value').eq('key', 'school_sync').maybeSingle();
+  const { data, error } = await supabase.from('app_config').select('key,value').eq('key', 'school_sync').maybeSingle();
   if (error) throw error;
   if (!data) return null;
   return persistedConfigSchema.parse(data).value;
@@ -38,10 +38,9 @@ export function SyncSettingsPage() {
   const saveMutation = useMutation({
     mutationFn: async (config: SchoolSyncConfig) => {
       if (!supabase) throw new Error('يلزم إعداد Supabase.');
-      const { error } = await supabase.from('app_settings').upsert({
+      const { error } = await supabase.from('app_config').upsert({
         key: 'school_sync',
         value: config,
-        updated_at: new Date().toISOString(),
       });
       if (error) throw error;
     },

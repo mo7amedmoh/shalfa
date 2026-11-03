@@ -16,7 +16,7 @@ export const defaultPreferences: UserPreferences = {
 
 export async function loadUserPreferences(userId: string): Promise<UserPreferences> {
   if (!supabase) return defaultPreferences;
-  const { data, error } = await supabase.from('user_preferences').select('numerals,date_format,rows_per_page').eq('user_id', userId).maybeSingle();
+  const { data, error } = await supabase.from('profiles').select('prefs').eq('id', userId).maybeSingle();
   if (error) throw error;
-  return data ? preferencesSchema.parse(data) : defaultPreferences;
+  return data ? preferencesSchema.parse(data.prefs) : defaultPreferences;
 }

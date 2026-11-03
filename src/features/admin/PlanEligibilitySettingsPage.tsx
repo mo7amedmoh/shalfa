@@ -28,7 +28,7 @@ const initialConfig: EligibilitySettings = {
 
 async function loadEligibility(): Promise<EligibilitySettings | null> {
   if (!supabase) return null;
-  const { data, error } = await supabase.from('app_settings').select('key,value').eq('key', 'plan_eligibility').maybeSingle();
+  const { data, error } = await supabase.from('app_config').select('key,value').eq('key', 'plan_eligibility').maybeSingle();
   if (error) throw error;
   return data ? savedSchema.parse(data).value : null;
 }
@@ -43,7 +43,7 @@ export function PlanEligibilitySettingsPage() {
   const save = useMutation({
     mutationFn: async (config: EligibilitySettings) => {
       if (!supabase) throw new Error('يلزم إعداد Supabase.');
-      const { error } = await supabase.from('app_settings').upsert({ key: 'plan_eligibility', value: config, updated_at: new Date().toISOString() });
+      const { error } = await supabase.from('app_config').upsert({ key: 'plan_eligibility', value: config });
       if (error) throw error;
     },
     onSuccess: async () => {

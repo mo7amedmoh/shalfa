@@ -48,8 +48,8 @@ const planTitles: Record<PlanType, string> = {
 async function loadCandidates(): Promise<CandidateData> {
   if (!supabase) return { schools: [], eligibility: null };
   const [schoolsResult, settingsResult] = await Promise.all([
-    supabase.from('schools').select('id,school_name,ministry_number,source_fields').order('school_name'),
-    supabase.from('app_settings').select('value').eq('key', 'plan_eligibility').maybeSingle(),
+    supabase.from('schools').select('id,school_name:name,ministry_number:ministry_no,source_fields:extra').order('name'),
+    supabase.from('app_config').select('value').eq('key', 'plan_eligibility').maybeSingle(),
   ]);
   if (schoolsResult.error) throw schoolsResult.error;
   if (settingsResult.error) throw settingsResult.error;
@@ -64,9 +64,9 @@ async function loadPlans(planType: PlanType) {
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('monthly_plans')
-    .select('id,plan_month,created_by')
+    .select('id,plan_month:month,created_by')
     .eq('plan_type', planType)
-    .order('plan_month', { ascending: false });
+    .order('month', { ascending: false });
   if (error) throw error;
   return z.array(planSchema).parse(data);
 }
@@ -75,7 +75,7 @@ async function loadPlanRows(planId: string): Promise<PlanRow[]> {
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('monthly_plan_rows')
-    .select('id,school_id,planned_date,visited_at,report_completed_at,school:schools(school_name,ministry_number)')
+    .select('id,school_id,planned_date,visited_at:visited_date,report_completed_at:report_done_date,school:schools(school_name:name,ministry_number:ministry_no)')
     .eq('plan_id', planId)
     .order('planned_date');
   if (error) throw error;
@@ -167,7 +167,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
       }
       const { data: createdPlan, error: createError } = await supabase
         .from('monthly_plans')
-        .insert({ plan_month: `${month}-01`, plan_type: planType, created_by: profile.id })
+        .insert({ month: `${month}-01`, plan_type: planType, created_by: profile.id })
         .select('id')
         .single();
       if (createError) throw createError;
@@ -195,7 +195,10 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const updateRow = useMutation({
     mutationFn: async ({ rowId, field, value }: { rowId: string; field: 'visited_at' | 'report_completed_at'; value: string | null }) => {
       if (!supabase) throw new Error('يلزم إعداد Supabase.');
-      const { error } = await supabase.from('monthly_plan_rows').update({ [field]: value }).eq('id', rowId);
+      const { error } = await supabase.from('monthly_plan_rows').update({
+        [field === 'visited_at' ? 'visited_date' : 'report_done_date']: value || null,
+        [field === 'visited_at' ? 'visited' : 'report_done']: Boolean(value),
+      }).eq('id', rowId);
       if (error) throw error;
     },
     onSuccess: async () => {

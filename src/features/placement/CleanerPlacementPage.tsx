@@ -19,19 +19,19 @@ const configSchema = z.object({
   schoolSizeHeader: z.string().default(''),
 });
 const schoolSchema = z.object({ id: z.string().uuid(), school_name: z.string(), ministry_number: z.string(), source_fields: z.record(z.string(), z.unknown()) });
-const employeeSchema = z.object({ id: z.string().uuid(), full_name: z.string(), employee_number: z.string(), job_title: z.string(), phone: z.string().nullable() });
+const employeeSchema = z.object({ id: z.string().uuid(), full_name: z.string(), employee_number: z.string().nullable(), job_title: z.string().nullable(), phone: z.string().nullable() });
 const assignmentSchema = z.object({
   id: z.string().uuid(),
   school_id: z.string().uuid(),
   employee_id: z.string().uuid(),
   labour_source: z.string().nullable(),
-  employee: z.object({ full_name: z.string(), employee_number: z.string() }).nullable(),
+  employee: z.object({ full_name: z.string(), employee_number: z.string().nullable() }).nullable(),
 });
-const overrideSchema = z.object({
+const schoolSizeSchema = z.object({
   school_id: z.string().uuid(),
-  corrected_size: z.string().nullable(),
-  staffing_exception: z.unknown(),
+  corrected_size: z.string(),
 });
+const exceptionRowSchema = z.object({ school_id: z.string().uuid(), required_count: z.number().int(), reason: z.string() });
 const exceptionSchema = z.object({ requiredCleaners: z.number().int().min(0), reason: z.string().trim().min(1) });
 type School = z.infer<typeof schoolSchema>;
 type Assignment = z.infer<typeof assignmentSchema>;
@@ -47,20 +47,26 @@ type SchoolSummary = { school: School; staffing: StaffingResult; neighborhood: s
 
 async function loadPlacementData(): Promise<SchoolData> {
   if (!supabase) return { schools: [], employees: [], assignments: [], overrides: new Map(), config: null };
-  const [schoolsResult, employeeResult, assignmentResult, overrideResult, configResult] = await Promise.all([
-    supabase.from('schools').select('id,school_name,ministry_number,source_fields').order('school_name'),
-    supabase.from('employees').select('id,full_name,employee_number,job_title,phone').eq('employee_category', 'cleaner').order('full_name'),
-    supabase.from('cleaner_assignments').select('id,school_id,employee_id,labour_source,employee:employees(full_name,employee_number)'),
-    supabase.from('school_overrides').select('school_id,corrected_size,staffing_exception'),
-    supabase.from('app_settings').select('value').eq('key', 'plan_eligibility').maybeSingle(),
+  const [schoolsResult, employeeResult, assignmentResult, sizesResult, exceptionResult, configResult] = await Promise.all([
+    supabase.from('schools').select('id,school_name:name,ministry_number:ministry_no,source_fields:extra').order('name'),
+    supabase.from('employees').select('id,full_name,employee_number:employee_no,job_title,phone').eq('category', 'cleaner').order('full_name'),
+    supabase.from('cleaner_assignments').select('id,school_id,employee_id,labour_source,employee:employees(full_name,employee_number:employee_no)'),
+    supabase.from('school_size_corrections').select('school_id,corrected_size'),
+    supabase.from('staffing_exceptions').select('school_id,required_count,reason'),
+    supabase.from('app_config').select('value').eq('key', 'plan_eligibility').maybeSingle(),
   ]);
-  for (const result of [schoolsResult, employeeResult, assignmentResult, overrideResult, configResult]) {
+  for (const result of [schoolsResult, employeeResult, assignmentResult, sizesResult, exceptionResult, configResult]) {
     if (result.error) throw result.error;
   }
   const overrides = new Map<string, { correctedSize: string | null; exception: z.infer<typeof exceptionSchema> | null }>();
-  for (const item of z.array(overrideSchema).parse(overrideResult.data)) {
-    const exception = item.staffing_exception === null ? null : exceptionSchema.parse(item.staffing_exception);
-    overrides.set(item.school_id, { correctedSize: item.corrected_size, exception });
+  const sizeRows = z.array(schoolSizeSchema).parse(sizesResult.data);
+  const exceptions = new Map(z.array(exceptionRowSchema).parse(exceptionResult.data)
+    .map((item) => [item.school_id, { requiredCleaners: item.required_count, reason: item.reason }]));
+  for (const item of sizeRows) {
+    overrides.set(item.school_id, {
+      correctedSize: item.corrected_size,
+      exception: exceptions.get(item.school_id) ?? null,
+    });
   }
   return {
     schools: z.array(schoolSchema).parse(schoolsResult.data),
@@ -82,6 +88,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   const [message, setMessage] = useState('');
   const data = useQuery({ queryKey: ['cleaner-placement-data'], queryFn: loadPlacementData, enabled: Boolean(profile) });
   const canManage = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
+  const canManageStaffingRules = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
   const eligibleIds = useMemo(() => {
     if (!data.data?.config) return [];
     return eligibleSchoolIds(data.data.schools.map((school) => ({ id: school.id, sourceFields: school.source_fields })), 'maintenance', data.data.config);
@@ -135,7 +142,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
     mutationFn: async ({ schoolId, employeeId, source }: { schoolId: string; employeeId: string; source: string }) => {
       if (!supabase || !canManage) throw new Error('لا تملك صلاحية تعديل التسكين.');
       if (!employeeId) throw new Error('اختر عاملاً أولاً.');
-      const { error } = await supabase.from('cleaner_assignments').insert({ school_id: schoolId, employee_id: employeeId, labour_source: source.trim() || null });
+      const { error } = await supabase.from('cleaner_assignments').insert({ school_id: schoolId, employee_id: employeeId, labour_source: source.trim() || 'org_structure' });
       if (error) throw error;
     },
     onSuccess: async () => {
@@ -159,15 +166,15 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   });
 
   const saveException = useMutation({
-    mutationFn: async ({ schoolId, required, reason, correctedSize }: { schoolId: string; required: string; reason: string; correctedSize: string | null }) => {
-      if (!supabase || !profile || !canManage) throw new Error('لا تملك صلاحية حفظ الاستثناء.');
+    mutationFn: async ({ schoolId, required, reason }: { schoolId: string; required: string; reason: string }) => {
+      if (!supabase || !profile || !canManageStaffingRules) throw new Error('لا تملك صلاحية حفظ الاستثناء.');
       const parsed = /^\d+$/.test(required) ? exceptionSchema.safeParse({ requiredCleaners: Number(required), reason }) : null;
       if (!parsed?.success) throw new Error('يتطلب الاستثناء عدداً صحيحاً وسبباً واضحاً.');
-      const { error } = await supabase.from('school_overrides').upsert({
+      const { error } = await supabase.from('staffing_exceptions').upsert({
         school_id: schoolId,
-        corrected_size: correctedSize,
-        staffing_exception: parsed.data,
-        updated_by: profile.id,
+        created_by: profile.id,
+        required_count: parsed.data.requiredCleaners,
+        reason: parsed.data.reason,
       });
       if (error) throw error;
     },
@@ -180,12 +187,10 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
 
   const saveCorrection = useMutation({
     mutationFn: async ({ schoolId, correctedSize }: { schoolId: string; correctedSize: string }) => {
-      if (!supabase || !profile || !canManage) throw new Error('لا تملك صلاحية تصحيح الحجم.');
-      const currentException = data.data?.overrides.get(schoolId)?.exception ?? null;
-      const { error } = await supabase.from('school_overrides').upsert({
+      if (!supabase || !profile || !canManageStaffingRules) throw new Error('لا تملك صلاحية تصحيح الحجم.');
+      const { error } = await supabase.from('school_size_corrections').upsert({
         school_id: schoolId,
         corrected_size: correctedSize,
-        staffing_exception: currentException,
         updated_by: profile.id,
       });
       if (error) throw error;
@@ -198,16 +203,18 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   });
 
   async function revealResidence(employeeId: string) {
-    if (!supabase || !profile || !['admin', 'project_manager'].includes(profile.role)) return;
+    if (!supabase || !profile || !['admin', 'project_manager', 'area_engineer'].includes(profile.role)) return;
     if (revealed[employeeId]) {
       setRevealed((current) => { const next = { ...current }; delete next[employeeId]; return next; });
       return;
     }
-    const { data: value, error } = await supabase.rpc('reveal_employee_residence', { p_employee_id: employeeId });
+    const { data: value, error } = await supabase.rpc('reveal_residence', { p_kind: 'employees', p_ids: [employeeId] });
     if (error) return setMessage(`تعذر إظهار رقم الإقامة: ${error.message}`);
-    const parsed = z.string().safeParse(value);
+    const parsed = z.array(z.object({ id: z.string().uuid(), residence_no: z.string().nullable() })).length(1).safeParse(value);
     if (!parsed.success) return setMessage('لم يُرجع النظام رقم إقامة صالحاً.');
-    setRevealed((current) => ({ ...current, [employeeId]: parsed.data }));
+    const residenceNumber = parsed.data[0].residence_no;
+    if (!residenceNumber) return setMessage('لا يوجد رقم إقامة مسجل لهذا الموظف.');
+    setRevealed((current) => ({ ...current, [employeeId]: residenceNumber }));
   }
 
   function exportSummary() {
@@ -278,7 +285,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
               <div className="mt-3 grid gap-2">
                 {(data.data?.assignments.filter((item) => item.school_id === school.id) ?? []).map((assignment) => <div key={assignment.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
                   <span className="font-semibold">{assignment.employee?.full_name ?? assignment.employee_id}</span>
-                  <span className="text-xs text-slate-500">{assignment.labour_source ?? 'مصدر العمالة غير محدد'}</span>
+                  <span className="text-xs text-slate-500">{assignment.labour_source === 'ajeer' ? 'أجير' : assignment.labour_source === 'org_structure' ? 'الهيكل التنظيمي' : 'مصدر العمالة غير محدد'}</span>
                   <span className="text-xs text-slate-600">{revealed[assignment.employee_id] ?? '••••••'}</span>
                   {['admin', 'project_manager'].includes(profile?.role ?? '') && <button type="button" onClick={() => void revealResidence(assignment.employee_id)} aria-label={revealed[assignment.employee_id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="rounded p-1 text-brand-700">{revealed[assignment.employee_id] ? <EyeOff size={15} /> : <Eye size={15} />}</button>}
                   {canManage && <button type="button" onClick={() => deleteAssignment.mutate(assignment.id)} className="me-auto text-xs text-rose-700">إزالة</button>}
@@ -286,16 +293,16 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
               </div>
               {canManage && <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
                 <select value={newCleaner[school.id] ?? ''} onChange={(event) => setNewCleaner((current) => ({ ...current, [school.id]: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">اختر عاملاً</option>{(data.data?.employees ?? []).map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name} · {employee.job_title}</option>)}</select>
-                <input value={labourSource[school.id] ?? ''} onChange={(event) => setLabourSource((current) => ({ ...current, [school.id]: event.target.value }))} placeholder="مصدر العمالة" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                <select value={labourSource[school.id] ?? 'org_structure'} onChange={(event) => setLabourSource((current) => ({ ...current, [school.id]: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="org_structure">الهيكل التنظيمي</option><option value="ajeer">أجير</option></select>
                 <button type="button" onClick={() => persistAssignment.mutate({ schoolId: school.id, employeeId: newCleaner[school.id] ?? '', source: labourSource[school.id] ?? '' })} disabled={persistAssignment.isPending} className="rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50">إضافة عامل</button>
               </div>}
-              {canManage && staffing.sizeCorrected && staffing.size && <button type="button" onClick={() => saveCorrection.mutate({ schoolId: school.id, correctedSize: staffing.size! })} disabled={saveCorrection.isPending} className="mt-3 rounded-lg border border-amber-300 px-3 py-2 text-sm text-amber-900 disabled:opacity-50">حفظ تصحيح الحجم</button>}
-              {canManage && staffing.requiredCleaners !== null && <details className="mt-3 rounded-lg border border-slate-200 p-3">
+              {canManageStaffingRules && staffing.sizeCorrected && staffing.size && <button type="button" onClick={() => saveCorrection.mutate({ schoolId: school.id, correctedSize: staffing.size! })} disabled={saveCorrection.isPending} className="mt-3 rounded-lg border border-amber-300 px-3 py-2 text-sm text-amber-900 disabled:opacity-50">حفظ تصحيح الحجم</button>}
+              {canManageStaffingRules && staffing.requiredCleaners !== null && <details className="mt-3 rounded-lg border border-slate-200 p-3">
                 <summary className="cursor-pointer text-sm font-semibold">استثناء لهذه المدرسة</summary>
                 <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_2fr_auto]">
                   <input aria-label="العدد المطلوب بعد الاستثناء" type="number" min="0" value={exceptions[school.id]?.requiredCleaners ?? String(exception?.requiredCleaners ?? staffing.requiredCleaners)} onChange={(event) => setExceptions((current) => ({ ...current, [school.id]: { requiredCleaners: event.target.value, reason: current[school.id]?.reason ?? exception?.reason ?? '' } }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                   <input aria-label="سبب الاستثناء" value={exceptions[school.id]?.reason ?? exception?.reason ?? ''} onChange={(event) => setExceptions((current) => ({ ...current, [school.id]: { requiredCleaners: current[school.id]?.requiredCleaners ?? String(exception?.requiredCleaners ?? staffing.requiredCleaners), reason: event.target.value } }))} placeholder="سبب الاستثناء" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                  <button type="button" onClick={() => saveException.mutate({ schoolId: school.id, required: exceptions[school.id]?.requiredCleaners ?? String(exception?.requiredCleaners ?? staffing.requiredCleaners), reason: exceptions[school.id]?.reason ?? exception?.reason ?? '', correctedSize: data.data?.overrides.get(school.id)?.correctedSize ?? null })} disabled={saveException.isPending} className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-50">حفظ الاستثناء</button>
+                  <button type="button" onClick={() => saveException.mutate({ schoolId: school.id, required: exceptions[school.id]?.requiredCleaners ?? String(exception?.requiredCleaners ?? staffing.requiredCleaners), reason: exceptions[school.id]?.reason ?? exception?.reason ?? '' })} disabled={saveException.isPending} className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-50">حفظ الاستثناء</button>
                 </div>
               </details>}
             </article>)}

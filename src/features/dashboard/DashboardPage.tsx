@@ -15,7 +15,8 @@ const planSchema = z.object({
 });
 const sourceSchoolSchema = z.object({ id: z.string().uuid(), source_fields: z.record(z.string(), z.unknown()) });
 const assignmentSchema = z.object({ school_id: z.string().uuid() });
-const overrideSchema = z.object({ school_id: z.string().uuid(), corrected_size: z.string().nullable(), staffing_exception: z.unknown() });
+const sizeCorrectionSchema = z.object({ school_id: z.string().uuid(), corrected_size: z.string() });
+const exceptionSchemaRow = z.object({ school_id: z.string().uuid(), required_count: z.number().int(), reason: z.string() });
 const eligibilitySchema = z.object({
   buildingTypeHeader: z.string(),
   independentBuildingValues: z.array(z.string()),
@@ -42,8 +43,8 @@ function currentMonth(): string {
 async function loadCurrentPlanRows() {
   if (!supabase) return [];
   const { data, error } = await supabase.from('monthly_plans')
-    .select('plan_type,monthly_plan_rows(visited_at,report_completed_at)')
-    .eq('plan_month', `${currentMonth()}-01`);
+    .select('plan_type,monthly_plan_rows(visited_at:visited_date,report_completed_at:report_done_date)')
+    .eq('month', `${currentMonth()}-01`);
   if (error) throw error;
   return z.array(planSchema).parse(data).flatMap((plan) =>
     plan.monthly_plan_rows.map((row) => ({
@@ -56,13 +57,14 @@ async function loadCurrentPlanRows() {
 
 async function loadStaffingSchools(): Promise<SchoolData> {
   if (!supabase) return { schools: [], assignmentCounts: new Map(), overrides: new Map(), config: null };
-  const [schoolsResult, assignmentsResult, overridesResult, configResult] = await Promise.all([
-    supabase.from('schools').select('id,source_fields'),
+  const [schoolsResult, assignmentsResult, overridesResult, exceptionsResult, configResult] = await Promise.all([
+    supabase.from('schools').select('id,source_fields:extra'),
     supabase.from('cleaner_assignments').select('school_id'),
-    supabase.from('school_overrides').select('school_id,corrected_size,staffing_exception'),
-    supabase.from('app_settings').select('value').eq('key', 'plan_eligibility').maybeSingle(),
+    supabase.from('school_size_corrections').select('school_id,corrected_size'),
+    supabase.from('staffing_exceptions').select('school_id,required_count,reason'),
+    supabase.from('app_config').select('value').eq('key', 'plan_eligibility').maybeSingle(),
   ]);
-  for (const result of [schoolsResult, assignmentsResult, overridesResult, configResult]) {
+  for (const result of [schoolsResult, assignmentsResult, overridesResult, exceptionsResult, configResult]) {
     if (result.error) throw result.error;
   }
   const assignmentCounts = new Map<string, number>();
@@ -70,11 +72,13 @@ async function loadStaffingSchools(): Promise<SchoolData> {
     assignmentCounts.set(school_id, (assignmentCounts.get(school_id) ?? 0) + 1);
   }
   const overrides = new Map<string, { correctedSize: string | null; exception: z.infer<typeof exceptionSchema> | null }>();
-  for (const row of z.array(overrideSchema).parse(overridesResult.data)) {
-    overrides.set(row.school_id, {
-      correctedSize: row.corrected_size,
-      exception: row.staffing_exception === null ? null : exceptionSchema.parse(row.staffing_exception),
-    });
+  for (const row of z.array(sizeCorrectionSchema).parse(overridesResult.data)) {
+    overrides.set(row.school_id, { correctedSize: row.corrected_size, exception: null });
+  }
+  for (const row of z.array(exceptionSchemaRow).parse(exceptionsResult.data)) {
+    const current = overrides.get(row.school_id) ?? { correctedSize: null, exception: null };
+    current.exception = exceptionSchema.parse({ requiredCleaners: row.required_count, reason: row.reason });
+    overrides.set(row.school_id, current);
   }
   return {
     schools: z.array(sourceSchoolSchema).parse(schoolsResult.data),

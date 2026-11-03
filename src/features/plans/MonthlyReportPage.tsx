@@ -34,8 +34,8 @@ async function loadMonthlyReport(month: string): Promise<MonthlyReportRow[]> {
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('monthly_plans')
-    .select('plan_type,monthly_plan_rows(id,planned_date,visited_at,report_completed_at,supervisor_id,school:schools(source_fields),supervisor:employees(full_name))')
-    .eq('plan_month', `${month}-01`);
+    .select('plan_type,monthly_plan_rows(id,planned_date,visited_at:visited_date,report_completed_at:report_done_date,supervisor_id,school:schools(source_fields:extra),supervisor:employees(full_name))')
+    .eq('month', `${month}-01`);
   if (error) throw error;
   return z.array(planSchema).parse(data).flatMap((plan) => plan.monthly_plan_rows.map((row) => ({
     id: row.id,

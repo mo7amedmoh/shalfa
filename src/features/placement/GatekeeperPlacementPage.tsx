@@ -14,23 +14,24 @@ const schoolSchema = z.object({
 const employeeSchema = z.object({
   id: z.string().uuid(),
   full_name: z.string(),
-  employee_number: z.string(),
+  employee_number: z.string().nullable(),
   job_title: z.string(),
   phone: z.string().nullable(),
 });
 const assignmentSchema = z.object({
+  id: z.string().uuid(),
   school_id: z.string().uuid(),
   employee_id: z.string().uuid().nullable(),
   phone: z.string().nullable(),
-  employee: z.object({ id: z.string().uuid(), full_name: z.string(), employee_number: z.string(), phone: z.string().nullable() }).nullable(),
+  employee: z.object({ id: z.string().uuid(), full_name: z.string(), employee_number: z.string().nullable(), phone: z.string().nullable() }).nullable(),
 });
 
 async function loadGatekeeperData() {
   if (!supabase) return { schools: [], employees: [], assignments: [] };
   const [schoolsResult, employeeResult, assignmentResult] = await Promise.all([
-    supabase.from('schools').select('id,school_name,ministry_number,source_fields').order('school_name'),
-    supabase.from('employees').select('id,full_name,employee_number,job_title,phone').eq('employee_category', 'gatekeeper').order('full_name'),
-    supabase.from('gatekeeper_assignments').select('school_id,employee_id,phone,employee:employees(id,full_name,employee_number,phone)'),
+    supabase.from('schools').select('id,school_name:name,ministry_number:ministry_no,source_fields:extra').order('name'),
+    supabase.from('employees').select('id,full_name,employee_number:employee_no,job_title,phone').eq('job_title', 'حارس مدرسة').order('full_name'),
+    supabase.from('gatekeepers').select('id,school_id,employee_id,phone,employee:employees(id,full_name,employee_number:employee_no,phone)'),
   ]);
   for (const result of [schoolsResult, employeeResult, assignmentResult]) {
     if (result.error) throw result.error;
@@ -65,11 +66,14 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
     mutationFn: async ({ schoolId, employeeId, phoneNumber }: { schoolId: string; employeeId: string; phoneNumber: string }) => {
       if (!supabase || !canManage) throw new Error('لا تملك صلاحية تعديل تسكين البوابين.');
       if (!employeeId) throw new Error('اختر بواباً أولاً.');
-      const { error } = await supabase.from('gatekeeper_assignments').upsert({
+      const employee = data.data?.employees.find((candidate) => candidate.id === employeeId);
+      if (!employee) throw new Error('تعذر العثور على الموظف المختار.');
+      const { error } = await supabase.from('gatekeepers').upsert({
         school_id: schoolId,
         employee_id: employeeId,
+        full_name: employee.full_name,
         phone: phoneNumber.trim() || null,
-      });
+      }, { onConflict: 'school_id' });
       if (error) throw error;
     },
     onSuccess: async () => {
@@ -82,7 +86,7 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
   const remove = useMutation({
     mutationFn: async (schoolId: string) => {
       if (!supabase || !canManage) throw new Error('لا تملك صلاحية تعديل تسكين البوابين.');
-      const { error } = await supabase.from('gatekeeper_assignments').delete().eq('school_id', schoolId);
+      const { error } = await supabase.from('gatekeepers').delete().eq('school_id', schoolId);
       if (error) throw error;
     },
     onSuccess: async () => {
@@ -92,23 +96,28 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
     onError: (error: Error) => setMessage(`تعذر إلغاء التسكين: ${error.message}`),
   });
 
-  async function revealResidence(employeeId: string) {
-    if (!supabase || !profile || !['admin', 'project_manager'].includes(profile.role)) return;
-    if (revealed[employeeId]) {
-      setRevealed((current) => { const next = { ...current }; delete next[employeeId]; return next; });
+  async function revealResidence(gatekeeperId: string) {
+    if (!supabase || !profile || !['admin', 'project_manager', 'area_engineer'].includes(profile.role)) return;
+    if (revealed[gatekeeperId]) {
+      setRevealed((current) => { const next = { ...current }; delete next[gatekeeperId]; return next; });
       return;
     }
-    const { data: value, error } = await supabase.rpc('reveal_employee_residence', { p_employee_id: employeeId });
+    const { data: value, error } = await supabase.rpc('reveal_residence', { p_kind: 'gatekeepers', p_ids: [gatekeeperId] });
     if (error) {
       setMessage(`تعذر إظهار رقم الإقامة: ${error.message}`);
       return;
     }
-    const parsed = z.string().safeParse(value);
+    const parsed = z.array(z.object({ id: z.string().uuid(), residence_no: z.string().nullable() })).length(1).safeParse(value);
     if (!parsed.success) {
       setMessage('لم يُرجع النظام رقم إقامة صالحاً.');
       return;
     }
-    setRevealed((current) => ({ ...current, [employeeId]: parsed.data }));
+    const residenceNumber = parsed.data[0].residence_no;
+    if (!residenceNumber) {
+      setMessage('لا يوجد رقم إقامة مسجل لهذا البواب.');
+      return;
+    }
+    setRevealed((current) => ({ ...current, [gatekeeperId]: residenceNumber }));
   }
 
   return (
@@ -142,8 +151,8 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
                 {employee && <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
                   <span className="font-semibold">{employee.full_name}</span>
                   <span className="text-xs text-slate-500">رقم الموظف: {employee.employee_number}</span>
-                  <span className="text-xs text-slate-600">{revealed[employee.id] ?? '••••••'}</span>
-                  {['admin', 'project_manager'].includes(profile?.role ?? '') && <button type="button" onClick={() => void revealResidence(employee.id)} aria-label={revealed[employee.id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="rounded p-1 text-brand-700">{revealed[employee.id] ? <EyeOff size={15} /> : <Eye size={15} />}</button>}
+                  <span className="text-xs text-slate-600">{revealed[assignment?.id ?? ''] ?? '••••••'}</span>
+                  {['admin', 'project_manager', 'area_engineer'].includes(profile?.role ?? '') && <button type="button" onClick={() => void revealResidence(assignment?.id ?? '')} aria-label={revealed[assignment?.id ?? ''] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="rounded p-1 text-brand-700">{revealed[assignment?.id ?? ''] ? <EyeOff size={15} /> : <Eye size={15} />}</button>}
                   <a className="text-brand-700 underline" href={`tel:${assignment?.phone ?? ''}`}>{assignment?.phone || 'رقم الاتصال غير مسجل'}</a>
                 </div>}
                 {canManage && <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">

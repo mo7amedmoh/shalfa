@@ -25,8 +25,8 @@ async function loadSchools(): Promise<School[]> {
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('schools')
-    .select('id,ministry_number,school_name,source_fields,latitude,longitude,last_synced_at')
-    .order('school_name');
+    .select('id,ministry_number:ministry_no,school_name:name,source_fields:extra,latitude:lat,longitude:lng,last_synced_at:synced_at')
+    .order('name');
   if (error) throw error;
   return z.array(schoolSchema).parse(data);
 }

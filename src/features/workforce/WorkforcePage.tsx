@@ -12,32 +12,22 @@ import { supabase } from '../../lib/supabase';
 const employeeSchema = z.object({
   id: z.string().uuid(),
   full_name: z.string(),
-  employee_number: z.string(),
-  job_title: z.string(),
-  employee_category: z.enum(['engineer', 'supervisor', 'administrator', 'technician', 'driver', 'cleaner', 'gatekeeper']),
-  department: z.string(),
+  employee_number: z.string().nullable(),
+  job_title: z.string().nullable(),
+  employee_category: z.enum(['engineer', 'supervisor', 'admin_staff', 'technician', 'driver', 'cleaner']),
+  department: z.string().nullable(),
   nationality: z.string().nullable(),
-  id_type: z.string().nullable(),
   hire_date: z.string().nullable(),
-  employment_status: z.enum(['active', 'inactive']),
+  employment_status: z.enum(['active', 'inactive', 'terminated']),
   phone: z.string().nullable(),
   manager_id: z.string().uuid().nullable(),
 });
 const ratingSchema = z.object({ employee_id: z.string().uuid(), rating: z.number().nullable() });
-const exportSchema = z.object({
-  id: z.string().uuid(),
-  full_name: z.string(),
-  employee_number: z.string(),
-  job_title: z.string(),
-  department: z.string(),
-  phone: z.string().nullable(),
-  rating: z.number().nullable(),
-});
 const employeeInputSchema = z.object({
   full_name: z.string().trim().min(2).max(120),
   employee_number: z.string().trim().min(1).max(60),
   job_title: z.string().trim().min(1).max(120),
-  employee_category: z.enum(['engineer', 'supervisor', 'administrator', 'technician', 'driver', 'cleaner', 'gatekeeper']),
+  employee_category: z.enum(['engineer', 'supervisor', 'admin_staff', 'technician', 'driver', 'cleaner']),
   department: z.string().trim().min(1).max(120),
   phone: z.string().trim().max(30),
   manager_id: z.string().uuid().nullable(),
@@ -47,7 +37,6 @@ type EmployeeInput = z.infer<typeof employeeInputSchema>;
 type EmployeeImportRow = EmployeeInput & {
   residenceNumber: string;
   nationality: string;
-  idType: string;
   hireDate: string | null;
   status: 'active' | 'inactive';
   managerNumber: string;
@@ -57,11 +46,10 @@ type EmployeeImportRow = EmployeeInput & {
 const employeeCategories = [
   ['engineer', 'مهندس'],
   ['supervisor', 'مشرف'],
-  ['administrator', 'إداري'],
+  ['admin_staff', 'إداري'],
   ['technician', 'فني'],
   ['driver', 'سائق'],
   ['cleaner', 'عامل نظافة'],
-  ['gatekeeper', 'بواب'],
 ] as const;
 
 function categoryFromArabic(value: string) {
@@ -71,7 +59,7 @@ function categoryFromArabic(value: string) {
 async function loadEmployees(): Promise<Employee[]> {
   if (!supabase) return [];
   const { data, error } = await supabase.from('employees')
-    .select('id,full_name,employee_number,job_title,employee_category,department,nationality,id_type,hire_date,employment_status,phone,manager_id')
+    .select('id,full_name,employee_number:employee_no,job_title,employee_category:category,department,nationality,hire_date,employment_status:status,phone,manager_id')
     .order('full_name');
   if (error) throw error;
   return z.array(employeeSchema).parse(data);
@@ -109,7 +97,6 @@ function parseImportRows(fileRows: Record<string, unknown>[]): EmployeeImportRow
       manager_id: null,
       residenceNumber: importHeader(row, ['رقم الإقامة', 'رقم الاقامة']),
       nationality: importHeader(row, ['الجنسية']),
-      idType: importHeader(row, ['نوع الهوية']),
       hireDate: importHeader(row, ['تاريخ التعيين']) || null,
       status,
       managerNumber: importHeader(row, ['الرقم الوظيفي للمدير']),
@@ -119,13 +106,12 @@ function parseImportRows(fileRows: Record<string, unknown>[]): EmployeeImportRow
       full_name: z.string().min(2),
       employee_number: z.string().min(1),
       job_title: z.string().min(1),
-      employee_category: z.enum(['engineer', 'supervisor', 'administrator', 'technician', 'driver', 'cleaner', 'gatekeeper']),
+      employee_category: z.enum(['engineer', 'supervisor', 'admin_staff', 'technician', 'driver', 'cleaner']),
       department: z.string().min(1),
       phone: z.string(),
       manager_id: z.null(),
       residenceNumber: z.string(),
       nationality: z.string(),
-      idType: z.string(),
       hireDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
       status: z.enum(['active', 'inactive']),
       managerNumber: z.string(),
@@ -154,7 +140,7 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
   const visibleEmployees = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     return (employees.data ?? []).filter((employee) =>
-      `${employee.full_name} ${employee.employee_number} ${employee.job_title} ${employee.department}`.toLocaleLowerCase().includes(query),
+      `${employee.full_name} ${employee.employee_number ?? ''} ${employee.job_title ?? ''} ${employee.department ?? ''}`.toLocaleLowerCase().includes(query),
     );
   }, [employees.data, search]);
 
@@ -164,12 +150,16 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
     const parsed = employeeInputSchema.safeParse(values);
     if (!parsed.success) return setMessage('تحقق من الاسم والرقم الوظيفي والوظيفة والفئة والقسم.');
     const { error } = await supabase.from('employees').insert({
-      ...parsed.data,
+      full_name: parsed.data.full_name,
+      employee_no: parsed.data.employee_number,
+      job_title: parsed.data.job_title,
+      category: parsed.data.employee_category,
+      department: parsed.data.department,
+      manager_id: parsed.data.manager_id,
       phone: parsed.data.phone || null,
       nationality: null,
-      id_type: null,
       hire_date: null,
-      employment_status: 'active',
+      status: 'active',
     });
     if (error) return setMessage(`تعذر حفظ الموظف: ${error.message}`);
     reset();
@@ -189,14 +179,14 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
       const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[firstSheet], { defval: '', raw: false });
       if (!rawRows.length) throw new Error('ورقة البيانات فارغة.');
       const rows = parseImportRows(rawRows);
-      if (rows.some((row) => row.residenceNumber) && profile.role !== 'admin') {
-        throw new Error('استيراد أرقام الإقامة متاح لمدير النظام فقط.');
+      if (rows.some((row) => row.residenceNumber)) {
+        throw new Error('لا يمكن استيراد أرقام الإقامة من الواجهة؛ استخدم الإجراء الآمن المعتمد.');
       }
       if (rows.some((row) => row.rating !== null) && !isPrivileged) {
         throw new Error('استيراد التقييم متاح لمدير المشروع ومدير النظام فقط.');
       }
 
-      const employeeNumbers = new Map((employees.data ?? []).map((employee) => [employee.employee_number, employee.id]));
+      const employeeNumbers = new Map((employees.data ?? []).flatMap((employee) => employee.employee_number ? [[employee.employee_number, employee.id] as const] : []));
       let completed = 0;
       for (let index = 0; index < rows.length; index += 1) {
         const row = rows[index];
@@ -204,26 +194,18 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
         if (row.managerNumber && !managerId) throw new Error(`تعذر العثور على المدير المرتبط بالصف ${index + 2}.`);
         const { data, error } = await supabase.from('employees').upsert({
           full_name: row.full_name,
-          employee_number: row.employee_number,
+          employee_no: row.employee_number,
           job_title: row.job_title,
-          employee_category: row.employee_category,
+          category: row.employee_category,
           department: row.department,
           phone: row.phone || null,
           nationality: row.nationality || null,
-          id_type: row.idType || null,
           hire_date: row.hireDate,
-          employment_status: row.status,
+          status: row.status,
           manager_id: managerId,
-        }, { onConflict: 'employee_number' }).select('id').single();
+        }, { onConflict: 'employee_no' }).select('id').single();
         if (error) throw new Error(`تعذر حفظ الموظف في الصف ${index + 2}: ${error.message}`);
         employeeNumbers.set(row.employee_number, data.id);
-        if (row.residenceNumber) {
-          const { error: privateError } = await supabase.rpc('set_employee_residence', {
-            p_employee_id: data.id,
-            p_residence_number: row.residenceNumber,
-          });
-          if (privateError) throw new Error(`حُفظ سجل الصف ${index + 2} لكن تعذر حفظ رقم الهوية: ${privateError.message}`);
-        }
         if (row.rating !== null) {
           const { error: ratingError } = await supabase.from('employee_ratings').upsert({
             employee_id: data.id,
@@ -249,44 +231,26 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
       setRevealedIds((current) => { const next = { ...current }; delete next[employeeId]; return next; });
       return;
     }
-    if (!supabase || !isPrivileged) return;
-    const { data, error } = await supabase.rpc('reveal_employee_residence', { p_employee_id: employeeId });
+    if (!supabase || !profile || !['admin', 'project_manager', 'area_engineer'].includes(profile.role)) return;
+    const { data, error } = await supabase.rpc('reveal_residence', { p_kind: 'employees', p_ids: [employeeId] });
     if (error) return setMessage(`تعذر إظهار رقم الهوية: ${error.message}`);
-    const parsed = z.string().safeParse(data);
+    const parsed = z.array(z.object({ id: z.string().uuid(), residence_no: z.string().nullable() })).length(1).safeParse(data);
     if (!parsed.success) return setMessage('لم يُرجع النظام رقم هوية صالحاً.');
-    setRevealedIds((current) => ({ ...current, [employeeId]: parsed.data }));
+    const residenceNumber = parsed.data[0].residence_no;
+    if (!residenceNumber) return setMessage('لا يوجد رقم إقامة مسجل لهذا الموظف.');
+    setRevealedIds((current) => ({ ...current, [employeeId]: residenceNumber }));
   }
 
   async function exportEmployees() {
     if (!visibleEmployees.length) return setMessage('لا توجد سجلات مطابقة للتصدير.');
-    let records;
-    if (isPrivileged) {
-      if (!supabase) return setMessage('يلزم إعداد Supabase لتسجيل عملية التصدير.');
-      const { data, error } = await supabase.rpc('export_employee_roster', {
-        p_employee_ids: visibleEmployees.map((employee) => employee.id),
-      });
-      if (error) return setMessage(`تعذر تصدير البيانات أو تسجيل العملية: ${error.message}`);
-      try {
-        records = z.array(exportSchema).parse(data).map((employee) => ({
-          الاسم: employee.full_name,
-          'الرقم الوظيفي': employee.employee_number,
-          الوظيفة: employee.job_title,
-          القسم: employee.department,
-          'رقم التواصل': employee.phone ?? '',
-          التقييم: employee.rating ?? '',
-        }));
-      } catch (error) {
-        return setMessage(error instanceof Error ? `تعذر التحقق من بيانات التصدير: ${error.message}` : 'بيانات التصدير غير صالحة.');
-      }
-    } else {
-      records = visibleEmployees.map((employee) => ({
+    const records = visibleEmployees.map((employee) => ({
         الاسم: employee.full_name,
         'الرقم الوظيفي': employee.employee_number,
         الوظيفة: employee.job_title,
         القسم: employee.department,
         'رقم التواصل': employee.phone ?? '',
+        ...(isPrivileged ? { التقييم: ratings.data?.get(employee.id) ?? '' } : {}),
       }));
-    }
     const sheet = XLSX.utils.json_to_sheet(records);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, sheet, 'القوى العاملة');
@@ -331,8 +295,8 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
           <div className="table-scroll"><table>
             <thead><tr><th>الاسم</th><th>الرقم الوظيفي</th><th>الوظيفة</th><th>الفئة الوظيفية</th><th>القسم</th><th>رقم الإقامة</th>{isPrivileged && <th>التقييم</th>}</tr></thead>
             <tbody>{visibleEmployees.map((employee) => <tr key={employee.id}>
-              <td className="font-semibold">{employee.full_name}</td><td>{employee.employee_number}</td><td>{employee.job_title}</td><td>{employeeCategories.find(([value]) => value === employee.employee_category)?.[1] ?? '—'}</td><td>{employee.department}</td>
-              <td><span>{isPrivileged && revealedIds[employee.id] ? revealedIds[employee.id] : '••••••'}</span>{isPrivileged && <button type="button" onClick={() => void toggleResidence(employee.id)} aria-label={revealedIds[employee.id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="me-2 rounded p-1 text-brand-700">{revealedIds[employee.id] ? <EyeOff size={16} /> : <Eye size={16} />}</button>}</td>
+              <td className="font-semibold">{employee.full_name}</td><td>{employee.employee_number ?? '—'}</td><td>{employee.job_title ?? '—'}</td><td>{employeeCategories.find(([value]) => value === employee.employee_category)?.[1] ?? '—'}</td><td>{employee.department ?? '—'}</td>
+              <td><span>{revealedIds[employee.id] ?? '••••••'}</span>{profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role) && <button type="button" onClick={() => void toggleResidence(employee.id)} aria-label={revealedIds[employee.id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="me-2 rounded p-1 text-brand-700">{revealedIds[employee.id] ? <EyeOff size={16} /> : <Eye size={16} />}</button>}</td>
               {isPrivileged && <td>{ratings.data?.get(employee.id) ?? '—'}</td>}
             </tr>)}</tbody>
           </table></div>

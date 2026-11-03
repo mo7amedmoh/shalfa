@@ -1,6 +1,7 @@
 const roles = ['admin', 'project_manager', 'area_engineer', 'report_follower', 'supervisor', 'viewer'] as const;
 
 export type CreateUserInput = {
+  email: string;
   username: string;
   displayName: string;
   role: typeof roles[number];
@@ -17,13 +18,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function validateCreateUserInput(input: unknown): ValidationResult {
   if (!isRecord(input)) return { success: false, error: 'بيانات المستخدم غير صالحة.' };
-  const username = typeof input.username === 'string' ? input.username.trim().toLowerCase() : '';
+  const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : '';
+  const username = email.split('@')[0] ?? '';
   const displayName = typeof input.display_name === 'string' ? input.display_name.trim() : '';
   const role = typeof input.role === 'string' ? input.role : '';
   const password = typeof input.password === 'string' ? input.password : '';
 
-  if (!/^[a-zA-Z0-9._-]{3,40}$/.test(username)) {
-    return { success: false, error: 'اسم المستخدم يجب أن يتكون من 3 إلى 40 حرفاً إنجليزياً أو رقماً.' };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.endsWith('@shalfa.local')) {
+    return { success: false, error: 'أدخل بريداً إلكترونياً كاملاً وصالحاً.' };
+  }
+  if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
+    return { success: false, error: 'الجزء السابق لـ @ في البريد يجب أن يتكون من 3 إلى 32 حرفاً أو رقماً.' };
   }
   if (displayName.length < 2 || displayName.length > 120) {
     return { success: false, error: 'أدخل اسماً من خانتين إلى 120 خانة.' };
@@ -38,6 +43,6 @@ export function validateCreateUserInput(input: unknown): ValidationResult {
 
   return {
     success: true,
-    data: { username, displayName, role: validRole, password },
+    data: { email, username, displayName, role: validRole, password },
   };
 }

@@ -8,7 +8,7 @@ const userSchema = z.object({
   id: z.string().uuid(),
   username: z.string(),
   role: z.enum(['admin', 'project_manager', 'area_engineer', 'report_follower', 'supervisor', 'viewer']),
-  display_name: z.string(),
+  display_name: z.string().nullable(),
   phone: z.string().nullable(),
   employee_id: z.string().uuid().nullable(),
 });
@@ -16,7 +16,7 @@ const usersSchema = z.array(userSchema);
 const roleSchema = z.enum(['admin', 'project_manager', 'area_engineer', 'report_follower', 'supervisor', 'viewer']);
 type AppUser = z.infer<typeof userSchema>;
 const newUserSchema = z.object({
-  username: z.string().trim().regex(/^[a-zA-Z0-9._-]{3,40}$/),
+  email: z.string().trim().email(),
   displayName: z.string().trim().min(2).max(120),
   role: roleSchema,
   password: z.string().min(12).regex(/[a-z]/).regex(/[A-Z]/).regex(/\d/).regex(/[^A-Za-z0-9]/),
@@ -34,9 +34,9 @@ const roleLabels: Record<AppUser['role'], string> = {
 
 async function loadUsers(): Promise<AppUser[]> {
   if (!supabase) return [];
-  const { data, error } = await supabase.from('user_profiles')
-    .select('id,username,role,display_name,phone,employee_id')
-    .order('display_name');
+  const { data, error } = await supabase.from('profiles')
+    .select('id,username,role,display_name:full_name,phone,employee_id')
+    .order('full_name');
   if (error) throw error;
   return usersSchema.parse(data);
 }
@@ -45,8 +45,8 @@ export function AdminUsersPage() {
   const client = useQueryClient();
   const [search, setSearch] = useState('');
   const [edits, setEdits] = useState<Record<string, { role: AppUser['role']; phone: string }>>({});
-  const [newUser, setNewUser] = useState<{ username: string; displayName: string; role: AppUser['role']; password: string; confirmPassword: string }>({
-    username: '', displayName: '', role: 'viewer', password: '', confirmPassword: '',
+  const [newUser, setNewUser] = useState<{ email: string; displayName: string; role: AppUser['role']; password: string; confirmPassword: string }>({
+    email: '', displayName: '', role: 'viewer', password: '', confirmPassword: '',
   });
   const [message, setMessage] = useState('');
   const users = useQuery({ queryKey: ['admin-users'], queryFn: loadUsers });
@@ -59,7 +59,7 @@ export function AdminUsersPage() {
     mutationFn: async ({ userId, role, phone }: { userId: string; role: AppUser['role']; phone: string }) => {
       if (!supabase) throw new Error('يلزم إعداد Supabase.');
       if (phone.trim().length > 30) throw new Error('يجب ألا يتجاوز رقم التواصل 30 خانة.');
-      const { error } = await supabase.from('user_profiles').update({ role, phone: phone.trim() || null }).eq('id', userId);
+      const { error } = await supabase.from('profiles').update({ role, phone: phone.trim() || null }).eq('id', userId);
       if (error) throw error;
     },
     onSuccess: async () => {
@@ -72,11 +72,11 @@ export function AdminUsersPage() {
     mutationFn: async () => {
       if (!supabase) throw new Error('يلزم إعداد Supabase.');
       const parsed = newUserSchema.safeParse(newUser);
-      if (!parsed.success) throw new Error('تحقق من اسم المستخدم والاسم والدور وكلمة المرور.');
+      if (!parsed.success) throw new Error('تحقق من البريد الإلكتروني والاسم والدور وكلمة المرور.');
       if (parsed.data.password !== parsed.data.confirmPassword) throw new Error('كلمتا المرور غير متطابقتين.');
       const { data, error } = await supabase.functions.invoke('create-user', {
         body: {
-          username: parsed.data.username,
+          email: parsed.data.email,
           display_name: parsed.data.displayName,
           role: parsed.data.role,
           password: parsed.data.password,
@@ -93,7 +93,7 @@ export function AdminUsersPage() {
       return result.data;
     },
     onSuccess: async (created) => {
-      setNewUser({ username: '', displayName: '', role: 'viewer', password: '', confirmPassword: '' });
+      setNewUser({ email: '', displayName: '', role: 'viewer', password: '', confirmPassword: '' });
       setMessage(`تم إنشاء المستخدم ${created.username}.`);
       await client.invalidateQueries({ queryKey: ['admin-users'] });
     },
@@ -107,13 +107,13 @@ export function AdminUsersPage() {
         <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-950">تُنشأ الحسابات عبر وظيفة Supabase موثقة تتحقق من دور مدير النظام؛ لا يصل مفتاح الخدمة إلى المتصفح. اسم المستخدم ثابت بعد إنشاء الملف.</p>
         <form className="grid gap-3 rounded-xl border border-slate-200 p-4 sm:grid-cols-2 lg:grid-cols-3" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}>
           <h3 className="font-bold sm:col-span-2 lg:col-span-3">إنشاء مستخدم</h3>
-          <label className="grid gap-1 text-sm font-semibold">اسم المستخدم<input autoComplete="off" value={newUser.username} onChange={(event) => setNewUser((current) => ({ ...current, username: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 font-normal" required /></label>
+          <label className="grid gap-1 text-sm font-semibold">البريد الإلكتروني<input type="email" autoComplete="email" value={newUser.email} onChange={(event) => setNewUser((current) => ({ ...current, email: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 font-normal" required /></label>
           <label className="grid gap-1 text-sm font-semibold">الاسم الظاهر<input value={newUser.displayName} onChange={(event) => setNewUser((current) => ({ ...current, displayName: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 font-normal" required /></label>
           <label className="grid gap-1 text-sm font-semibold">الدور<select value={newUser.role} onChange={(event) => { const role = roleSchema.safeParse(event.target.value); if (role.success) setNewUser((current) => ({ ...current, role: role.data })); }} className="rounded-lg border border-slate-300 px-3 py-2 font-normal">{Object.entries(roleLabels).map(([role, label]) => <option key={role} value={role}>{label}</option>)}</select></label>
           <label className="grid gap-1 text-sm font-semibold">كلمة مرور أولية<input type="password" autoComplete="new-password" value={newUser.password} onChange={(event) => setNewUser((current) => ({ ...current, password: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 font-normal" required /></label>
           <label className="grid gap-1 text-sm font-semibold">تأكيد كلمة المرور<input type="password" autoComplete="new-password" value={newUser.confirmPassword} onChange={(event) => setNewUser((current) => ({ ...current, confirmPassword: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 font-normal" required /></label>
           <button type="submit" disabled={create.isPending} className="self-end rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{create.isPending ? 'جارٍ الإنشاء…' : 'إنشاء الحساب'}</button>
-          <p className="text-xs leading-5 text-slate-500 sm:col-span-2 lg:col-span-3">اسم الدخول يُحوّل داخلياً إلى بريد اصطناعي. كلمة المرور الأولية: 12 خانة على الأقل، مع أحرف كبيرة وصغيرة ورقم ورمز؛ سلّمها للمستخدم بأمان.</p>
+          <p className="text-xs leading-5 text-slate-500 sm:col-span-2 lg:col-span-3">يُستخدم البريد الإلكتروني الكامل لتسجيل الدخول، ويكون اسم المستخدم الجزء السابق لـ @. كلمة المرور الأولية: 12 خانة على الأقل، مع أحرف كبيرة وصغيرة ورقم ورمز؛ سلّمها للمستخدم بأمان.</p>
         </form>
         <label className="grid gap-1 text-sm font-semibold">بحث<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="اسم المستخدم أو الاسم أو الدور" className="rounded-lg border border-slate-300 px-3 py-2 font-normal" /></label>
         {users.error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">تعذر تحميل المستخدمين: {users.error.message}</p>}

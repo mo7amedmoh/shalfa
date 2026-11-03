@@ -9,11 +9,11 @@
 
 ## التشغيل
 
-1. انسخ `.env.example` إلى `.env.local` وأضف `VITE_SUPABASE_URL` و`VITE_SUPABASE_ANON_KEY` من إعدادات مشروع Supabase. لا تضع `service_role` في أي ملف عميل.
+1. انسخ `.env.example` إلى `.env.local` وأضف `VITE_SUPABASE_URL` و`VITE_SUPABASE_PUBLISHABLE_KEY` (أو مفتاح anon القديم) من إعدادات مشروع Supabase. لا تضع `service_role` في أي ملف عميل.
 2. نفّذ `npm install`.
-3. طبّق ملفات `supabase/migrations/` على المشروع.
-4. أنشئ مستخدماً أولاً من لوحة Supabase Auth، ثم أضف صف ملفه في `user_profiles` من SQL Editor بدور `admin`. يجب أن يطابق اسم المستخدم اسم الجزء السابق لـ `@shalfa.local` في البريد الاصطناعي.
-5. لنشر وظيفة إنشاء الحسابات الآمنة: ثبّت Supabase CLI، ثم نفّذ `supabase functions deploy create-user`. تحقّق من توفر `SUPABASE_URL` و`SUPABASE_ANON_KEY` و`SUPABASE_SERVICE_ROLE_KEY` كأسرار بيئة الوظيفة؛ لا تضع مفتاح الخدمة في `.env.local` أو إعدادات واجهة الويب. الوظيفة ترفض الطلبات ما لم يكن صاحب الجلسة مدير نظام، وتسجل الإنشاء في `audit_log`.
+3. تأكد من تطبيق المخطط المرجعي `docs/reference/001_shalfa_schema_rls.sql` مرة واحدة، ثم طبّق الترحيل الإضافي الوحيد في `supabase/migrations/`.
+4. أنشئ المستخدم الأول من Supabase Auth ببريده الكامل؛ ينشئ trigger الملف في `profiles`. بعد التحقق من هويته، غيّر دوره من SQL Editor مثلاً عبر `update public.profiles set role = 'admin' where username = 'your_username';`.
+5. لنشر وظيفة إنشاء الحسابات الآمنة: ثبّت Supabase CLI، ثم نفّذ `supabase functions deploy create-user`. تحقّق من توفر `SUPABASE_URL` و`SUPABASE_ANON_KEY` و`SUPABASE_SERVICE_ROLE_KEY` كأسرار بيئة الوظيفة؛ لا تضع مفتاح الخدمة في `.env.local` أو إعدادات واجهة الويب. الوظيفة تتحقق من دور مدير النظام، ويُسجل إنشاء الملف بواسطة trigger قاعدة البيانات.
 6. شغّل `npm run dev`.
 
 الأوامر المتاحة: `npm run lint`، `npm run typecheck`، `npm test`، `npm run build`.
@@ -24,7 +24,9 @@
 
 ## استيراد ملفات مؤشرات الأداء
 
-ضع الملفين الرسميين في `docs/reference/` وشغّل `npm run seed:kpi`. يتعرف السكربت على الأسماء المطلوبة حتى إن اختلفت المسافات والشرطات، ويحفظ قيم الأوراق وصيغ الخلايا المحسوبة إلى JSON تحت `supabase/seed/` دون تعديل الملفات الأصلية. تمت مراجعة صيغ بطاقات أكتوبر واختبار نتيجة المصنف المرجعية. لا يكتب السكربت مباشرة إلى قاعدة بيانات؛ راجع seed وطبّقها بعد إعداد الترحيلات وقاعدة Supabase.
+ضع الملفين الرسميين في `docs/reference/` وشغّل `npm run seed:kpi` لإنتاج بيانات seed خاصة بالمستودع. بعد تطبيق المخطط، شغّل `npm run seed:kpi:database` و`npm run seed:checklist` من بيئة موثوقة تتوفر فيها `SUPABASE_URL` و`SUPABASE_SERVICE_ROLE_KEY`؛ لا تُعرّض مفتاح الخدمة للعميل. تُحمّل واجهة مؤشرات الأداء وقائمة الفحص من قاعدة البيانات مع سياسات RLS، ولا تُخدّم كتالوجاتها من `public/`.
+
+للتحقق من السياسات، عيّن `TEST_<ROLE>_EMAIL` و`TEST_<ROLE>_PASSWORD` لكل دور وشغّل `npm run verify:rls`. بيانات الاعتماد لا تُحفظ في المستودع.
 
 ## النشر المجاني
 

@@ -26,7 +26,7 @@ export function AccountPage({ profile }: { profile: UserProfile | null }) {
   });
 
   useEffect(() => {
-    if (profile) reset({ display_name: profile.display_name, phone: profile.phone ?? '' });
+    if (profile) reset({ display_name: profile.display_name ?? '', phone: profile.phone ?? '' });
   }, [profile, reset]);
 
   useEffect(() => {
@@ -50,7 +50,7 @@ export function AccountPage({ profile }: { profile: UserProfile | null }) {
   const savePreferences = useMutation({
     mutationFn: async (value: Preferences) => {
       if (!supabase || !profile) throw new Error('يلزم تسجيل الدخول.');
-      const { error } = await supabase.from('user_preferences').upsert({ user_id: profile.id, ...value, updated_at: new Date().toISOString() });
+      const { error } = await supabase.from('profiles').update({ prefs: value }).eq('id', profile.id);
       if (error) throw error;
     },
     onSuccess: async () => {
@@ -68,7 +68,10 @@ export function AccountPage({ profile }: { profile: UserProfile | null }) {
       phone: z.string().trim().max(30),
     }).safeParse(values);
     if (!parsed.success) return setProfileMessage('أدخل اسماً صحيحاً ورقم تواصل لا يتجاوز 30 خانة.');
-    const { error } = await supabase.from('user_profiles').update(parsed.data).eq('id', profile.id);
+    const { error } = await supabase.from('profiles').update({
+      full_name: parsed.data.display_name,
+      phone: parsed.data.phone || null,
+    }).eq('id', profile.id);
     if (error) return setProfileMessage(`تعذر حفظ الملف: ${error.message}`);
     setProfileMessage('تم حفظ بيانات الملف الشخصي.');
   }

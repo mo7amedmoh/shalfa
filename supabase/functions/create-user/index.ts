@@ -34,7 +34,7 @@ Deno.serve(async (request) => {
   if (authError || !userResult.user) return response(401, { error: 'جلسة المستخدم غير صالحة.' });
 
   const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { data: actor, error: actorError } = await admin.from('user_profiles')
+  const { data: actor, error: actorError } = await admin.from('profiles')
     .select('role')
     .eq('id', userResult.user.id)
     .maybeSingle();
@@ -52,46 +52,27 @@ Deno.serve(async (request) => {
   }
   const validated = validateCreateUserInput(input);
   if (!validated.success) return response(400, { error: validated.error });
-  const { username, displayName, role, password } = validated.data;
+  const { email, username, displayName, role, password } = validated.data;
 
-  const email = `${username.toLowerCase()}@shalfa.local`;
   const { data: created, error: createError } = await admin.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
-    user_metadata: { username: username.toLowerCase() },
+    user_metadata: { username, full_name: displayName },
   });
   if (createError || !created.user) {
     console.error('Unable to create Auth user.', createError);
     return response(400, { error: 'تعذر إنشاء الحساب؛ تحقق من عدم تكرار اسم المستخدم.' });
   }
 
-  const { error: profileError } = await admin.from('user_profiles').insert({
-    id: created.user.id,
-    username: username.toLowerCase(),
+  const { error: profileError } = await admin.from('profiles').update({
     role,
-    display_name: displayName,
-  });
+  }).eq('id', created.user.id);
   if (profileError) {
-    console.error('Unable to create user profile.', profileError);
+    console.error('Unable to assign role to automatically created profile.', profileError);
     const { error: rollbackError } = await admin.auth.admin.deleteUser(created.user.id);
     if (rollbackError) console.error('Unable to roll back unprofiled auth user.', rollbackError);
-    return response(500, { error: rollbackError ? 'تعذر إنشاء الملف الشخصي أو إلغاء حساب الدخول؛ يلزم فحص حساب Auth يدوياً.' : 'تعذر حفظ ملف المستخدم؛ أُلغيت محاولة إنشاء الحساب.' });
-  }
-
-  const { error: auditError } = await admin.from('audit_log').insert({
-    actor_id: userResult.user.id,
-    action: 'create_auth_user',
-    entity: 'user_profiles',
-    entity_id: created.user.id,
-    details: { username: username.toLowerCase(), role },
-  });
-  if (auditError) {
-    console.error('Unable to audit newly created account.', auditError);
-    const { error: profileRollbackError } = await admin.from('user_profiles').delete().eq('id', created.user.id);
-    const { error: authRollbackError } = await admin.auth.admin.deleteUser(created.user.id);
-    if (profileRollbackError || authRollbackError) console.error('Unable to roll back account after audit failure.', { profileRollbackError, authRollbackError });
-    return response(500, { error: 'تعذر تسجيل العملية؛ أُلغيت محاولة الإنشاء أو يلزم فحص سجل المستخدم.' });
+    return response(500, { error: rollbackError ? 'تعذر تحديث الملف الشخصي أو إلغاء حساب الدخول؛ يلزم فحص حساب Auth يدوياً.' : 'تعذر حفظ الملف الشخصي؛ أُلغيت محاولة إنشاء الحساب.' });
   }
 
   return response(201, { username: username.toLowerCase() });

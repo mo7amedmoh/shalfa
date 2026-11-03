@@ -8,7 +8,7 @@ import { NavLink, Navigate, Route, Routes, useLocation, useParams } from 'react-
 import { useForm } from 'react-hook-form';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
-import { getUserProfile, signInWithUsername, type UserProfile } from '../lib/auth';
+import { getUserProfile, signInWithEmail, type UserProfile } from '../lib/auth';
 import { runThrottledSchoolSync } from '../lib/schoolSync';
 import { defaultPreferences, loadUserPreferences } from '../lib/preferences';
 import { PreferencesProvider } from './PreferencesProvider';
@@ -119,12 +119,12 @@ const adminNavigation = [
 
 function LoginPage({ onSignedIn }: { onSignedIn: () => void }) {
   const [error, setError] = useState('');
-  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<{ username: string; password: string }>();
+  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<{ email: string; password: string }>();
 
-  async function submit(values: { username: string; password: string }) {
+  async function submit(values: { email: string; password: string }) {
     setError('');
     try {
-      await signInWithUsername(values.username, values.password);
+      await signInWithEmail(values.email, values.password);
       onSignedIn();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'تعذر تسجيل الدخول.');
@@ -136,7 +136,7 @@ function LoginPage({ onSignedIn }: { onSignedIn: () => void }) {
       <section className="card w-full max-w-md p-8">
         <img src="/brand/logo.png" alt="شلفا لإدارة المرافق" className="mb-6 h-12 w-auto" />
         <h1 className="text-2xl font-bold text-brand-900">تسجيل الدخول</h1>
-        <p className="mt-2 text-sm text-slate-500">استخدم اسم المستخدم وكلمة المرور المعتمدين.</p>
+        <p className="mt-2 text-sm text-slate-500">استخدم بريدك الإلكتروني وكلمة المرور المعتمدين.</p>
         {!supabase && (
           <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
             يلزم إعداد عنوان Supabase ومفتاح anon في ملف البيئة لتفعيل تسجيل الدخول.
@@ -145,9 +145,9 @@ function LoginPage({ onSignedIn }: { onSignedIn: () => void }) {
         {error && <p role="alert" className="mt-4 text-sm text-rose-700">{error}</p>}
         <form className="mt-6 grid gap-4" onSubmit={handleSubmit(submit)}>
           <label className="grid gap-1 text-sm font-semibold">
-            اسم المستخدم
-            <input autoComplete="username" {...register('username', { required: 'اسم المستخدم مطلوب.', pattern: { value: /^[a-zA-Z0-9._-]{3,40}$/, message: 'استخدم أحرفاً إنجليزية وأرقاماً فقط.' } })} className="rounded-lg border border-slate-300 px-3 py-2" />
-            {errors.username && <span className="text-xs text-rose-700">{errors.username.message}</span>}
+            البريد الإلكتروني
+            <input type="email" autoComplete="email" {...register('email', { required: 'البريد الإلكتروني مطلوب.' })} className="rounded-lg border border-slate-300 px-3 py-2" />
+            {errors.email && <span className="text-xs text-rose-700">{errors.email.message}</span>}
           </label>
           <label className="grid gap-1 text-sm font-semibold">
             كلمة المرور
@@ -238,7 +238,7 @@ function AppShell({
               <span className="min-w-0 truncate text-sm font-semibold">{profile.display_name}</span>
               <button onClick={onSignOut} aria-label="تسجيل الخروج" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><LogOut size={18} /></button>
             </div>
-          ) : <p className="px-2 text-xs leading-6 text-slate-500">وضع معاينة دون بيانات — سجّل الدخول بعد إعداد Supabase.</p>}
+          ) : null}
         </div>
       </aside>
       <div className="main-area">
@@ -250,7 +250,6 @@ function AppShell({
           </div>
           {profile && <span className="hidden rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-800 sm:inline">{profile.role === 'admin' ? 'مدير النظام' : profile.role === 'project_manager' ? 'مدير المشروع' : 'مستخدم'}</span>}
         </header>
-        {!supabase && <div role="status" className="bg-amber-50 px-4 py-2 text-center text-sm text-amber-900">وضع المعاينة: إعداد قاعدة البيانات مطلوب لتفعيل البيانات والحفظ.</div>}
         {syncNotice && <div role="status" className="bg-emerald-50 px-4 py-2 text-center text-sm text-emerald-900">{syncNotice}</div>}
         {preferences.error && <div role="alert" className="bg-rose-50 px-4 py-2 text-center text-sm text-rose-800">تعذر تحميل تفضيلات العرض؛ تُستخدم القيم الافتراضية مؤقتاً.</div>}
         <main className="content-wrap">
@@ -285,7 +284,7 @@ export function App() {
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [syncNotice, setSyncNotice] = useState('');
-  const [authChecked, setAuthChecked] = useState(!supabase);
+  const [authChecked, setAuthChecked] = useState(Boolean(supabase));
 
   useEffect(() => {
     if (!supabase) return;
@@ -339,9 +338,19 @@ export function App() {
     if (error) console.error('تعذر تسجيل الخروج.', error);
   }
 
+  if (!supabase) {
+    return (
+      <main className="grid min-h-screen place-items-center px-4">
+        <section className="card max-w-lg p-6 text-center">
+          <h1 className="text-xl font-bold text-brand-900">إعداد الاتصال مطلوب</h1>
+          <p className="mt-3 text-sm leading-7 text-slate-600">أضف عنوان Supabase ومفتاح النشر إلى متغيرات البناء لإتاحة تسجيل الدخول.</p>
+        </section>
+      </main>
+    );
+  }
   if (!authChecked) return <div className="grid min-h-screen place-items-center text-slate-600">جارٍ التحقق من الجلسة…</div>;
-  if (supabase && !sessionUserId) return <LoginPage onSignedIn={() => setAuthChecked(true)} />;
-  if (supabase && sessionUserId && !profile) {
+  if (!sessionUserId) return <LoginPage onSignedIn={() => setAuthChecked(true)} />;
+  if (sessionUserId && !profile) {
     return <div role="status" className="grid min-h-screen place-items-center text-slate-600">جارٍ تحميل ملف المستخدم والصلاحيات…</div>;
   }
   return <AppShell profile={profile} onSignOut={() => void signOut()} syncNotice={syncNotice} />;

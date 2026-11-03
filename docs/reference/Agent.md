@@ -24,7 +24,7 @@ Reports/incidents (البلاغات) are handled by a separate platform and are 
 | 7 | **Feature ideas go to `docs/SUGGESTIONS.md` only.** Never implement a suggestion without the owner's explicit approval. |
 | 8 | **Security first** (section 9). |
 | 9 | Username is **immutable** after account creation. |
-| 10 | The employee **rating (التقييم)** column is visible to the **Project Manager only** — enforced in the database, not just hidden in the UI. |
+| 10 | Employee ratings and KPI records are readable by **Project Manager and Admin only** — enforced in the database, not just hidden in the UI. |
 
 ## 3. Identity & design system
 
@@ -42,7 +42,7 @@ Reports/incidents (البلاغات) are handled by a separate platform and are 
 
 - **Frontend:** Vite + React 18 + TypeScript (strict) + Tailwind CSS + React Router + TanStack Query + Zod + React Hook Form.
 - **Backend/DB:** Supabase free tier (Postgres + Auth + Row Level Security + Storage). No credit card needed.
-  - Login by **username**: map to a synthetic email `username@shalfa.local` internally; the user never sees it. Optional real email can be linked later in "حسابي".
+  - Login uses the user's **full email address** with Supabase Auth. The username is the local part before `@`, read-only in "حسابي", and immutable in `profiles`.
 - **Maps:** Leaflet + OpenStreetMap tiles (free, no key).
 - **School data source:** Google Sheet  
   `https://docs.google.com/spreadsheets/d/1RQo06DqRHv24M8bh1CmJbOl4c_GmoLPXKkHK_sVIoI8`  
@@ -63,7 +63,7 @@ Reports/incidents (البلاغات) are handled by a separate platform and are 
 | `supervisor` مشرف | read own scope; limited updates |
 | `viewer` مشاهد | read only |
 
-Enforce with **Postgres RLS policies** (not only UI guards). Ratings live in a separate table `employee_ratings` with a policy allowing only `project_manager`/`admin`. Never ship the rating in a query result for other roles.
+Enforce with **Postgres RLS policies** (not only UI guards). Ratings live in a separate table `employee_ratings` with a policy allowing only `project_manager`/`admin`. Never ship the rating in a query result for other roles. The applied schema in `docs/reference/001_shalfa_schema_rls.sql` is authoritative; add migrations rather than rewriting it.
 
 ## 6. Navigation (sidebar, in this order)
 

@@ -9,7 +9,7 @@
 
 ## التشغيل
 
-1. انسخ `.env.example` إلى `.env.local` وأضف `VITE_SUPABASE_URL` و`VITE_SUPABASE_PUBLISHABLE_KEY` (أو مفتاح anon القديم) من إعدادات مشروع Supabase. لا تضع `service_role` في أي ملف عميل.
+1. انسخ `.env.example` إلى `.env.local` وأضف `VITE_SUPABASE_URL` و`VITE_SUPABASE_PUBLISHABLE_KEY` من إعدادات مشروع Supabase. إذا غاب أحدهما تعرض شاشة الإعداد اسمه فقط دون كشف أي قيمة. يمكن استخدام مفتاح anon القديم كبديل للمفتاح العام. لا تضع `service_role` أو أي مفتاح سري في ملف عميل أو إعدادات بناء الواجهة.
 2. نفّذ `npm install`.
 3. تأكد من تطبيق المخطط المرجعي `docs/reference/001_shalfa_schema_rls.sql` مرة واحدة، ثم طبّق الترحيل الإضافي الوحيد في `supabase/migrations/`.
 4. أنشئ المستخدم الأول من Supabase Auth ببريده الكامل؛ ينشئ trigger الملف في `profiles`. بعد التحقق من هويته، غيّر دوره من SQL Editor مثلاً عبر `update public.profiles set role = 'admin' where username = 'your_username';`.

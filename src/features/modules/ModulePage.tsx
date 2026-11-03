@@ -21,8 +21,9 @@ const descriptions: Record<ModuleSection, string> = {
   admin: 'إعدادات النظام والعمليات الإدارية المسموح بها.',
 };
 
-export function ModulePage({ section, profile = null }: { section: ModuleSection; profile?: UserProfile | null }) {
-  const { type = 'index' } = useParams();
+export function ModulePage({ section, profile = null, type: fixedType }: { section: ModuleSection; profile?: UserProfile | null; type?: string }) {
+  const { type: routeType = 'index' } = useParams();
+  const type = fixedType ?? routeType;
   const title = labels[section][type] ?? 'الوحدة المطلوبة';
 
   if (section === 'admin' && type === 'settings') {

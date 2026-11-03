@@ -268,7 +268,7 @@ function AppShell({
               <Route path="/account" element={<AccountPage profile={profile} />} />
               <Route path="/admin/users" element={isAdmin ? <AdminUsersPage /> : <Navigate to="/" replace />} />
               <Route path="/admin/audit" element={isAdmin ? <AuditLogPage /> : <Navigate to="/" replace />} />
-              <Route path="/admin/settings" element={isAdmin ? <ModulePage section="admin" /> : <Navigate to="/" replace />} />
+              <Route path="/admin/settings" element={isAdmin ? <ModulePage section="admin" type="settings" /> : <Navigate to="/" replace />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
@@ -322,8 +322,13 @@ export function App() {
     if (profile?.role !== 'admin') return;
     let active = true;
     void runThrottledSchoolSync()
-      .then((count) => {
-        if (active && count !== null) setSyncNotice(`تمت المزامنة التلقائية لـ ${count} مدرسة.`);
+      .then((result) => {
+        if (active && result !== null) {
+          const duplicatesNotice = result.duplicateCount > 0
+            ? ` وتم تجاهل ${result.duplicateCount} صف مكرر.`
+            : '';
+          setSyncNotice(`تمت المزامنة التلقائية لـ ${result.syncedCount} مدرسة.${duplicatesNotice}`);
+        }
       })
       .catch((error: unknown) => {
         console.error('تعذرت المزامنة التلقائية للمدارس.', error);
@@ -339,11 +344,19 @@ export function App() {
   }
 
   if (!supabase) {
+    const missingVariables = [
+      ['VITE_SUPABASE_URL', import.meta.env.VITE_SUPABASE_URL],
+      ['VITE_SUPABASE_PUBLISHABLE_KEY', import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY],
+    ].filter(([, value]) => !value).map(([name]) => name);
     return (
       <main className="grid min-h-screen place-items-center px-4">
         <section className="card max-w-lg p-6 text-center">
           <h1 className="text-xl font-bold text-brand-900">إعداد الاتصال مطلوب</h1>
-          <p className="mt-3 text-sm leading-7 text-slate-600">أضف عنوان Supabase ومفتاح النشر إلى متغيرات البناء لإتاحة تسجيل الدخول.</p>
+          <p className="mt-3 text-sm leading-7 text-slate-600">أضف متغيرات البيئة الناقصة التالية إلى إعدادات البناء لإتاحة تسجيل الدخول:</p>
+          <ul className="mt-3 list-inside list-disc text-start text-sm font-semibold text-slate-800">
+            {missingVariables.map((name) => <li key={name}><code dir="ltr">{name}</code></li>)}
+          </ul>
+          <p className="mt-3 text-xs leading-6 text-slate-500">استخدم مفتاح النشر أو anon فقط؛ لا تضع service_role أو أي مفتاح سري في إعدادات العميل.</p>
         </section>
       </main>
     );

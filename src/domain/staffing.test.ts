@@ -34,6 +34,18 @@ describe('staffing rules', () => {
     ).toMatchObject({ size: 'medium', requiredCleaners: 2, shortage: 1, sizeCorrected: true });
   });
 
+  it.each([
+    [12, 'small'],
+    [18, 'medium'],
+    [24, 'large'],
+  ] as const)('uses class count for %i classes when source size is %s', (classes, sourceSize) => {
+    expect(calculateStaffing({
+      classes,
+      declaredSize: sourceSize,
+      assignedCleaners: 1,
+    })).toMatchObject({ size: sourceSize, sizeCorrected: false });
+  });
+
   it('applies a reasoned school exception without changing the standard rules', () => {
     expect(
       calculateStaffing({

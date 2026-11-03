@@ -52,8 +52,11 @@ export function SyncSettingsPage() {
   });
   const syncMutation = useMutation({
     mutationFn: () => syncSchools(values),
-    onSuccess: async (count) => {
-      setMessage(`اكتملت مزامنة ${count} مدرسة.`);
+    onSuccess: async ({ syncedCount, duplicateCount }) => {
+      const duplicatesNotice = duplicateCount > 0
+        ? ` تم تجاهل ${duplicateCount} صف مكرر بسبب تكرار الرقم الوزاري.`
+        : '';
+      setMessage(`اكتملت مزامنة ${syncedCount} مدرسة.${duplicatesNotice}`);
       await queryClient.invalidateQueries({ queryKey: ['schools'] });
     },
     onError: (error: Error) => setMessage(`تعذرت المزامنة: ${error.message}`),

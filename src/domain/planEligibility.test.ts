@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from './planEligibility';
+import type { GeneralPlanType, PlanType } from './types';
 
 const config: PlanEligibilityConfig = {
   buildingTypeHeader: 'نوع المبنى',
@@ -24,6 +25,19 @@ describe('configurable school plan eligibility', () => {
   it('requires an elevator contractor for elevator plans', () => {
     expect(eligibleSchoolIds(schools, 'elevators', config)).toEqual(['independent']);
   });
+
+  it.each([
+    'maintenance', 'cleaning', 'security_safety', 'elevators',
+    'gardening', 'landscaping', 'sewage_waste', 'tank_washing', 'pest_control', 'annual_readiness',
+  ] as const satisfies readonly (PlanType | GeneralPlanType)[])(
+    'always excludes annex shared buildings from %s plans',
+    (planType) => {
+      expect(eligibleSchoolIds(schools, planType, {
+        ...config,
+        independentBuildingValues: [...config.independentBuildingValues, 'مشترك ملحق'],
+      })).not.toContain('annex');
+    },
+  );
 
   it('rejects missing source headers rather than silently including schools', () => {
     expect(() => eligibleSchoolIds(schools, 'maintenance', { ...config, buildingTypeHeader: '' })).toThrow();

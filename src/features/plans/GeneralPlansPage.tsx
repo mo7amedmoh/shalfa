@@ -4,12 +4,12 @@ import { useParams } from 'react-router-dom';
 import { z } from 'zod';
 import { summarizeGeneralPlanProgress } from '../../domain/generalPlans';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
+import type { GeneralPlanType } from '../../domain/types';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 
 const planTypes = ['gardening', 'landscaping', 'sewage_waste', 'tank_washing', 'pest_control', 'annual_readiness'] as const;
-type GeneralPlanType = (typeof planTypes)[number];
 const planLabels: Record<GeneralPlanType, string> = {
   gardening: 'البستنة',
   landscaping: 'التنسيق',
@@ -91,13 +91,13 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   });
   const canManage = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
   const eligibleIds = useMemo(() => {
-    if (!schools.data?.eligibility) return [];
+    if (!schools.data?.eligibility || !planType) return [];
     return eligibleSchoolIds(
       schools.data.schools.map((school) => ({ id: school.id, sourceFields: school.source_fields })),
-      'cleaning',
+      planType,
       schools.data.eligibility,
     );
-  }, [schools.data]);
+  }, [schools.data, planType]);
   const filteredSchools = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     const eligible = new Set(eligibleIds);

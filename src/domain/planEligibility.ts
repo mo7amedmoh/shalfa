@@ -1,4 +1,4 @@
-import type { PlanType } from './types';
+import type { GeneralPlanType, PlanType } from './types';
 
 export interface PlanEligibilityConfig {
   buildingTypeHeader: string;
@@ -19,7 +19,7 @@ function normalized(value: unknown): string {
 
 export function eligibleSchoolIds(
   schools: readonly SchoolSourceRecord[],
-  planType: PlanType,
+  planType: PlanType | GeneralPlanType,
   config: PlanEligibilityConfig,
 ): string[] {
   if (!config.buildingTypeHeader.trim() || !config.elevatorContractorHeader.trim()) {
@@ -32,6 +32,7 @@ export function eligibleSchoolIds(
   return schools
     .filter((school) => {
       const buildingType = normalized(school.sourceFields[config.buildingTypeHeader]);
+      if (buildingType === normalized('مشترك ملحق')) return false;
       if (!buildingValues.has(buildingType)) return false;
       if (planType !== 'elevators') return true;
       const contractor = normalized(school.sourceFields[config.elevatorContractorHeader]);

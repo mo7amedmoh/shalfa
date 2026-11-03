@@ -5,6 +5,7 @@ import MarkerClusterGroup from 'react-leaflet-cluster';
 import { Search, Map as MapIcon, List } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { z } from 'zod';
+import { schoolContactFields, schoolContactsExtraKey } from '../../domain/schoolContacts';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
@@ -34,6 +35,21 @@ async function loadSchools(): Promise<School[]> {
 function formatField(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—';
   return typeof value === 'string' || typeof value === 'number' ? String(value) : '—';
+}
+
+function SchoolDetails({ school }: { school: School }) {
+  const contacts = z.record(z.string(), z.unknown()).safeParse(school.source_fields[schoolContactsExtraKey]);
+  const sourceFields = Object.entries(school.source_fields).filter(([field]) =>
+    field !== schoolContactsExtraKey && !/^رقم (الاتصال|التواصل)(?:_\d+)?$/.test(field.trim()),
+  );
+  return (
+    <dl className="grid gap-1 whitespace-normal text-xs font-normal text-slate-600">
+      {schoolContactFields.map(({ key, label }) => (
+        <div key={key}><dt className="inline font-bold">رقم اتصال {label}: </dt><dd className="inline">{formatField(contacts.success ? contacts.data[key] : null)}</dd></div>
+      ))}
+      {sourceFields.map(([field, value]) => <div key={field}><dt className="inline font-bold">{field}: </dt><dd className="inline">{formatField(value)}</dd></div>)}
+    </dl>
+  );
 }
 
 export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
@@ -107,7 +123,7 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
                   <Popup>
                     <strong>{school.school_name}</strong>
                     <p>الرقم الوزاري: {school.ministry_number}</p>
-                    {Object.entries(school.source_fields).map(([field, value]) => <p key={field}>{field}: {formatField(value)}</p>)}
+                    <SchoolDetails school={school} />
                   </Popup>
                 </Marker>
               ))}
@@ -125,9 +141,7 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
                 <td className="font-semibold">
                   <details>
                     <summary className="cursor-pointer">{school.school_name}</summary>
-                    <dl className="mt-2 grid gap-1 whitespace-normal text-xs font-normal text-slate-600">
-                      {Object.entries(school.source_fields).map(([field, value]) => <div key={field}><dt className="inline font-bold">{field}: </dt><dd className="inline">{formatField(value)}</dd></div>)}
-                    </dl>
+                    <div className="mt-2"><SchoolDetails school={school} /></div>
                   </details>
                 </td>
                 <td>{formatField(school.source_fields['نوع المبنى'])}</td>

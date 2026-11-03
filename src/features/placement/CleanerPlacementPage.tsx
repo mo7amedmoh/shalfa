@@ -18,7 +18,13 @@ const configSchema = z.object({
   classCountHeader: z.string().default('عدد الفصول'),
   schoolSizeHeader: z.string().default(''),
 });
-const schoolSchema = z.object({ id: z.string().uuid(), school_name: z.string(), ministry_number: z.string(), source_fields: z.record(z.string(), z.unknown()) });
+const schoolSchema = z.object({
+  id: z.string().uuid(),
+  school_name: z.string(),
+  ministry_number: z.string(),
+  source_fields: z.record(z.string(), z.unknown()),
+  size_source: z.enum(['small', 'medium', 'large']).nullable(),
+});
 const employeeSchema = z.object({ id: z.string().uuid(), full_name: z.string(), employee_number: z.string().nullable(), job_title: z.string().nullable(), phone: z.string().nullable() });
 const assignmentSchema = z.object({
   id: z.string().uuid(),
@@ -48,7 +54,7 @@ type SchoolSummary = { school: School; staffing: StaffingResult; neighborhood: s
 async function loadPlacementData(): Promise<SchoolData> {
   if (!supabase) return { schools: [], employees: [], assignments: [], overrides: new Map(), config: null };
   const [schoolsResult, employeeResult, assignmentResult, sizesResult, exceptionResult, configResult] = await Promise.all([
-    supabase.from('schools').select('id,school_name:name,ministry_number:ministry_no,source_fields:extra').order('name'),
+    supabase.from('schools').select('id,school_name:name,ministry_number:ministry_no,source_fields:extra,size_source').order('name'),
     supabase.from('employees').select('id,full_name,employee_number:employee_no,job_title,phone').eq('category', 'cleaner').order('full_name'),
     supabase.from('cleaner_assignments').select('id,school_id,employee_id,labour_source,employee:employees(full_name,employee_number:employee_no)'),
     supabase.from('school_size_corrections').select('school_id,corrected_size'),
@@ -100,9 +106,9 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
       const currentAssignments = data.data!.assignments.filter((item) => item.school_id === school.id);
       const override = data.data!.overrides.get(school.id);
       const classes = parseClassCount(school.source_fields[data.data!.config!.classCountHeader]);
-      const sourceDeclaredSize = data.data!.config!.schoolSizeHeader
+      const sourceDeclaredSize = school.size_source ?? (data.data!.config!.schoolSizeHeader
         ? String(school.source_fields[data.data!.config!.schoolSizeHeader] ?? '')
-        : null;
+        : null);
       const sourceStaffing = classes === null
         ? {
             size: null, requiredCleaners: null, assignedCleaners: currentAssignments.length,

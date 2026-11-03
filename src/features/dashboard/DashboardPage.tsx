@@ -13,7 +13,11 @@ const planSchema = z.object({
   plan_type: planTypeSchema,
   monthly_plan_rows: z.array(z.object({ visited_at: z.string().nullable(), report_completed_at: z.string().nullable() })),
 });
-const sourceSchoolSchema = z.object({ id: z.string().uuid(), source_fields: z.record(z.string(), z.unknown()) });
+const sourceSchoolSchema = z.object({
+  id: z.string().uuid(),
+  source_fields: z.record(z.string(), z.unknown()),
+  size_source: z.enum(['small', 'medium', 'large']).nullable(),
+});
 const assignmentSchema = z.object({ school_id: z.string().uuid() });
 const sizeCorrectionSchema = z.object({ school_id: z.string().uuid(), corrected_size: z.string() });
 const exceptionSchemaRow = z.object({ school_id: z.string().uuid(), required_count: z.number().int(), reason: z.string() });
@@ -58,7 +62,7 @@ async function loadCurrentPlanRows() {
 async function loadStaffingSchools(): Promise<SchoolData> {
   if (!supabase) return { schools: [], assignmentCounts: new Map(), overrides: new Map(), config: null };
   const [schoolsResult, assignmentsResult, overridesResult, exceptionsResult, configResult] = await Promise.all([
-    supabase.from('schools').select('id,source_fields:extra'),
+    supabase.from('schools').select('id,source_fields:extra,size_source'),
     supabase.from('cleaner_assignments').select('school_id'),
     supabase.from('school_size_corrections').select('school_id,corrected_size'),
     supabase.from('staffing_exceptions').select('school_id,required_count,reason'),
@@ -102,7 +106,7 @@ export function DashboardPage() {
         id: school.id,
         sourceFields: school.source_fields,
         assignedCleaners: data.assignmentCounts.get(school.id) ?? 0,
-        declaredSize: override?.correctedSize ?? (data.config!.schoolSizeHeader ? String(school.source_fields[data.config!.schoolSizeHeader] ?? '') : null),
+        declaredSize: override?.correctedSize ?? school.size_source ?? (data.config!.schoolSizeHeader ? String(school.source_fields[data.config!.schoolSizeHeader] ?? '') : null),
         exception: override?.exception,
       };
     });

@@ -7,7 +7,7 @@ import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 
 const checklistItemSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().uuid(),
   code: z.enum(['CM', 'OM']),
   number: z.number().int().positive(),
   axis: z.string(),
@@ -15,22 +15,15 @@ const checklistItemSchema = z.object({
   reference: z.string(),
   evidence: z.string(),
   frequency: z.string(),
-  initialStatus: z.enum(checklistStatuses),
+  owner: z.string(),
+  status: z.enum(['done', 'in_progress', 'not_started', 'not_applicable']),
+  notes: z.string(),
+  updated_at: z.string(),
   isRecommendation: z.boolean(),
 });
 const checklistCatalogSchema = z.array(checklistItemSchema).min(1);
-const progressRowSchema = z.object({
-  id: z.string(),
-  owner: z.string(),
-  status: z.enum(checklistStatuses),
-  notes: z.string(),
-  updated_at: z.string(),
-});
-const progressRowsSchema = z.array(progressRowSchema);
-type ChecklistItem = z.infer<typeof checklistItemSchema> & {
-  owner: string;
+type ChecklistItem = Omit<z.infer<typeof checklistItemSchema>, 'status' | 'updated_at'> & {
   status: ChecklistStatus;
-  notes: string;
   updatedAt: string | null;
 };
 type ChecklistDraft = Pick<ChecklistItem, 'owner' | 'status' | 'notes'>;
@@ -51,33 +44,32 @@ const statusLabels: Record<ChecklistStatus, string> = {
 };
 
 async function loadChecklist(): Promise<ChecklistItem[]> {
-  const response = await fetch('/data/kpi-checklist.json');
-  if (!response.ok) throw new Error(`تعذر تحميل بنود قائمة الفحص (HTTP ${response.status}).`);
-  const catalog = checklistCatalogSchema.parse(await response.json());
-  if (!supabase) {
-    return catalog.map((item) => ({
-      ...item,
-      owner: '',
-      status: item.initialStatus,
-      notes: '',
-      updatedAt: null,
-    }));
-  }
-
-  const { data, error } = await supabase.from('kpi_checklist_progress')
-    .select('id,owner,status,notes,updated_at');
+  if (!supabase) throw new Error('يلزم تسجيل الدخول للاتصال بقاعدة البيانات.');
+  const { data, error } = await supabase.from('checklist_items')
+    .select('id,domain,seq,axis,item,contract_ref,evidence,frequency,owner,status,notes,updated_at,is_recommendation')
+    .order('domain')
+    .order('seq');
   if (error) throw error;
-  const saved = new Map(progressRowsSchema.parse(data).map((row) => [row.id, row]));
-  return catalog.map((item) => {
-    const progress = saved.get(item.id);
-    return {
-      ...item,
-      owner: progress?.owner ?? '',
-      status: progress?.status ?? item.initialStatus,
-      notes: progress?.notes ?? '',
-      updatedAt: progress?.updated_at ?? null,
-    };
-  });
+  return checklistCatalogSchema.parse(data.map((row) => ({
+    ...row,
+    code: row.domain,
+    number: row.seq,
+    reference: row.contract_ref ?? '',
+    evidence: row.evidence ?? '',
+    frequency: row.frequency ?? '',
+    owner: row.owner ?? '',
+    notes: row.notes ?? '',
+    isRecommendation: row.is_recommendation,
+  }))).map((item) => ({
+    ...item,
+    status: ({
+      done: 'مكتمل',
+      in_progress: 'جارٍ',
+      not_started: 'لم يبدأ',
+      not_applicable: 'لا ينطبق',
+    } as const)[item.status],
+    updatedAt: item.updated_at,
+  }));
 }
 
 export function ChecklistPage({ profile }: { profile: UserProfile | null }) {
@@ -91,7 +83,7 @@ export function ChecklistPage({ profile }: { profile: UserProfile | null }) {
   const [drafts, setDrafts] = useState<Record<string, ChecklistDraft>>({});
   const checklist = useQuery({ queryKey: ['kpi-checklist'], queryFn: loadChecklist });
   const items = useMemo(() => checklist.data ?? [], [checklist.data]);
-  const canEdit = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
+  const canEdit = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
   const editable = Boolean(supabase && canEdit);
   const axes = useMemo(() => [...new Set(items.map((item) => item.axis))], [items]);
   const filteredItems = useMemo(() => {
@@ -125,11 +117,15 @@ export function ChecklistPage({ profile }: { profile: UserProfile | null }) {
   const save = useMutation({
     mutationFn: async ({ id, draft }: { id: string; draft: ChecklistDraft }) => {
       if (!supabase || !profile || !canEdit) throw new Error('لا تملك صلاحية تعديل قائمة الفحص.');
-      const { error } = await supabase.from('kpi_checklist_progress').upsert({
-        id,
+      const { error } = await supabase.from('checklist_items').update({
         ...draft,
-        updated_by: profile.id,
-      }, { onConflict: 'id' });
+        status: ({
+          مكتمل: 'done',
+          'جارٍ': 'in_progress',
+          'لم يبدأ': 'not_started',
+          'لا ينطبق': 'not_applicable',
+        } as const)[draft.status],
+      }).eq('id', id);
       if (error) throw error;
     },
     onSuccess: async (_data, variables) => {
@@ -158,8 +154,7 @@ export function ChecklistPage({ profile }: { profile: UserProfile | null }) {
 
       {checklist.isLoading && <p role="status" className="card p-5 text-center">جارٍ تحميل بنود قائمة الفحص…</p>}
       {checklist.error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">تعذر تحميل قائمة الفحص: {checklist.error.message}</p>}
-      {!supabase && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">وضع المعاينة: تعرض الحالات الأصلية من المصنف. يتطلب الحفظ إعداد Supabase.</p>}
-      {!editable && supabase && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">يمكن عرض البنود، لكن تعديلها متاح لمدير النظام ومدير المشروع ومهندس المنطقة.</p>}
+      {!editable && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">عرض وتعديل بيانات KPI متاحان لمدير النظام ومدير المشروع فقط.</p>}
       {save.error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">تعذر حفظ البند: {save.error.message}</p>}
 
       <section className="grid gap-3 sm:grid-cols-2" aria-label="ملخص إنجاز قائمة الفحص">

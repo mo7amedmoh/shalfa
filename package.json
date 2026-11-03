@@ -11,7 +11,10 @@
     "typecheck": "tsc -b --pretty",
     "test": "vitest run",
     "test:watch": "vitest",
-    "seed:kpi": "tsx scripts/seed-kpi.ts"
+    "seed:kpi": "tsx scripts/seed-kpi.ts",
+    "seed:kpi:database": "tsx scripts/seed-kpi-database.ts",
+    "seed:checklist": "tsx scripts/seed-checklist.ts",
+    "verify:rls": "tsx scripts/verify-rls.ts"
   },
   "dependencies": {
     "@fontsource/cairo": "5.2.6",

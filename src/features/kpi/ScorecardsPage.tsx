@@ -19,15 +19,26 @@ const cardSchema = z.object({
     source: z.string(),
     requiredEvidence: z.string(),
     frequency: z.string(),
-    octoberApplicable: z.boolean(),
-    octoberInputs: z.object({
-      numerator: z.number().nullable(),
-      denominator: z.number().nullable(),
-      observed: z.number().nullable(),
-    }),
   })),
 });
-const catalogSchema = z.array(cardSchema);
+const catalogSchema = z.array(cardSchema).length(4);
+const indicatorRowSchema = z.object({
+  code: z.string(),
+  card: z.enum(['CM', 'OM', 'HS', 'SS']),
+  seq: z.number().int(),
+  name: z.string(),
+  importance: z.string().nullable(),
+  frequency: z.enum(['monthly', 'quarterly', 'annual']),
+  description: z.string().nullable(),
+  formula_text: z.string().nullable(),
+  target_text: z.string().nullable(),
+  source_ref: z.string().nullable(),
+  required_data: z.string().nullable(),
+});
+const weightRowSchema = z.object({
+  card: z.enum(['CM', 'OM', 'HS', 'SS']),
+  weight: z.coerce.number(),
+});
 const sourceInputSchema = z.object({
   applicable: z.boolean(),
   numerator: z.number().optional(),
@@ -35,14 +46,15 @@ const sourceInputSchema = z.object({
   observed: z.number().optional(),
   evidence: z.string().max(2000).optional(),
 });
-const sourceDataSchema = z.object({ indicators: z.record(z.string(), sourceInputSchema) });
-const scorecardRowSchema = z.object({
-  card_code: z.enum(['CM', 'OM', 'HS', 'SS']),
-  source_data: z.record(z.string(), z.unknown()),
-  approved_at: z.string().nullable(),
-  approved_by: z.string().uuid().nullable(),
+const kpiEntrySchema = z.object({
+  indicator_code: z.string(),
+  extra: z.record(z.string(), z.unknown()),
 });
-const scorecardRowsSchema = z.array(scorecardRowSchema);
+const kpiMonthSchema = z.object({
+  id: z.string().uuid(),
+  status: z.enum(['draft', 'submitted', 'approved']),
+  entries: z.array(kpiEntrySchema),
+});
 type KpiCard = z.infer<typeof cardSchema>;
 const cardNames: Record<KpiCard['code'], string> = {
   CM: 'إدارة العقد',
@@ -60,46 +72,61 @@ function currentMonth(): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
-function octoberValues(cards: readonly KpiCard[]): Record<string, IndicatorValues> {
+function parseSavedValues(rows: z.infer<typeof kpiEntrySchema>[]): Record<string, IndicatorValues> {
   const values: Record<string, IndicatorValues> = {};
-  for (const card of cards) {
-    for (const indicator of card.indicators) {
-      const inputs = indicator.octoberInputs;
-      values[indicator.id] = {
-        applicable: indicator.octoberApplicable,
-        ...(inputs.numerator === null ? {} : { numerator: inputs.numerator }),
-        ...(inputs.denominator === null ? {} : { denominator: inputs.denominator }),
-        ...(inputs.observed === null ? {} : { observed: inputs.observed }),
-      };
-    }
-  }
-  return values;
-}
-
-function parseSavedValues(rows: z.infer<typeof scorecardRowsSchema>, month: string, cards: readonly KpiCard[]): Record<string, IndicatorValues> {
-  const values = month === '2026-10' ? octoberValues(cards) : {};
   for (const row of rows) {
-    const parsed = sourceDataSchema.safeParse(row.source_data);
-    if (parsed.success) Object.assign(values, parsed.data.indicators);
+    const parsed = sourceInputSchema.safeParse(row.extra.formInput);
+    if (parsed.success) values[row.indicator_code] = parsed.data;
   }
   return values;
 }
 
 async function loadKpiCatalog(): Promise<KpiCard[]> {
-  const response = await fetch('/data/kpi-scorecards.json');
-  if (!response.ok) throw new Error(`تعذر تحميل تعريفات المؤشرات (HTTP ${response.status}).`);
-  return catalogSchema.parse(await response.json());
+  if (!supabase) throw new Error('يلزم تسجيل الدخول لعرض بيانات مؤشرات الأداء.');
+  const [indicatorsResult, weightsResult] = await Promise.all([
+    supabase.from('kpi_indicators').select('code,card,seq,name,importance,frequency,description,formula_text,target_text,source_ref,required_data').order('card').order('seq'),
+    supabase.from('kpi_card_weights').select('card,weight'),
+  ]);
+  if (indicatorsResult.error) throw indicatorsResult.error;
+  if (weightsResult.error) throw weightsResult.error;
+  const indicators = z.array(indicatorRowSchema).parse(indicatorsResult.data);
+  const weights = new Map(z.array(weightRowSchema).parse(weightsResult.data).map((row) => [row.card, row.weight]));
+  const cards = (['CM', 'OM', 'HS', 'SS'] as const).map((code) => {
+    const weight = weights.get(code);
+    if (weight === undefined) throw new Error(`تعذر تحميل وزن البطاقة ${code}.`);
+    return {
+      code,
+      weight,
+      indicators: indicators.filter((row) => row.card === code).map((row) => ({
+        id: row.code,
+        name: row.name,
+        importance: row.importance ?? '',
+        description: row.description ?? '',
+        formulaDescription: row.formula_text ?? '',
+        target: row.target_text ?? '',
+        source: row.source_ref ?? '',
+        requiredEvidence: row.required_data ?? '',
+        frequency: ({ monthly: 'شهري', quarterly: 'ربع سنوي', annual: 'سنوي' } as const)[row.frequency],
+      })),
+    };
+  });
+  return catalogSchema.parse(cards);
 }
 
 async function loadScorecards(month: string) {
-  if (!supabase) return [];
-  const { data, error } = await supabase.from('kpi_scorecards')
-    .select('card_code,source_data,approved_at,approved_by')
-    .eq('score_month', `${month}-01`)
-    .eq('region', region)
-    .eq('work_order', workOrder);
-  if (error) throw error;
-  return scorecardRowsSchema.parse(data);
+  if (!supabase) throw new Error('يلزم تسجيل الدخول لعرض بيانات مؤشرات الأداء.');
+  const { data: kpiMonth, error: monthError } = await supabase.from('kpi_months')
+    .select('id,status')
+    .eq('month', `${month}-01`)
+    .eq('work_order', workOrder)
+    .maybeSingle();
+  if (monthError) throw monthError;
+  if (!kpiMonth) return null;
+  const { data: entries, error: entriesError } = await supabase.from('kpi_entries')
+    .select('indicator_code,extra')
+    .eq('kpi_month_id', kpiMonth.id);
+  if (entriesError) throw entriesError;
+  return kpiMonthSchema.parse({ ...kpiMonth, entries });
 }
 
 export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
@@ -107,17 +134,17 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
   const [month, setMonth] = useState(currentMonth);
   const [values, setValues] = useState<Record<string, IndicatorValues>>({});
   const [message, setMessage] = useState('');
-  const catalogQuery = useQuery({ queryKey: ['kpi-catalog'], queryFn: loadKpiCatalog, staleTime: Infinity });
+  const canEdit = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
+  const catalogQuery = useQuery({ queryKey: ['kpi-catalog'], queryFn: loadKpiCatalog, staleTime: Infinity, enabled: Boolean(supabase && canEdit) });
   const cards = useMemo(() => catalogQuery.data ?? [], [catalogQuery.data]);
   const scorecards = useQuery({
     queryKey: ['kpi-scorecards', month],
     queryFn: () => loadScorecards(month),
-    enabled: Boolean(supabase),
+    enabled: Boolean(supabase && canEdit),
   });
-  const canEdit = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
   const canApprove = profile?.role === 'admin' || profile?.role === 'project_manager';
-  const savedRows = scorecards.data ?? [];
-  const locked = savedRows.some((row) => row.approved_at !== null);
+  const savedRows = scorecards.data?.entries ?? [];
+  const locked = scorecards.data?.status === 'approved';
   const total = useMemo(() => calculateMonthlyKpiTotal(values), [values]);
   const cardScores = useMemo(() => Object.fromEntries(cards.map((card) => {
     const inputs = card.indicators.flatMap((indicator) => {
@@ -129,30 +156,36 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
 
   useEffect(() => {
     if (!cards.length || scorecards.isLoading) return;
-    if (scorecards.data) setValues(parseSavedValues(scorecards.data, month, cards));
-    else setValues(month === '2026-10' ? octoberValues(cards) : {});
+    if (scorecards.data) setValues(parseSavedValues(scorecards.data.entries));
+    else setValues({});
   }, [cards, scorecards.data, scorecards.isLoading, month]);
 
   const save = useMutation({
     mutationFn: async () => {
       if (!supabase || !profile || !canEdit) throw new Error('لا تملك صلاحية تعديل بطاقة الأداء.');
       if (locked) throw new Error('الشهر معتمد ومقفل.');
-      const rows = cards.map((card) => ({
-        score_month: `${month}-01`,
-        region,
+      const { data: kpiMonth, error: monthError } = await supabase.from('kpi_months').upsert({
+        month: `${month}-01`,
         work_order: workOrder,
-        card_code: card.code,
-        source_data: {
-          indicators: Object.fromEntries(card.indicators.flatMap((indicator) => {
-            const input = values[indicator.id];
-            return input ? [[indicator.id, input]] : [];
-          })),
-        },
-        approved_at: null,
-        approved_by: null,
+        project_no: projectNumber,
+        region,
+        contractor: 'شركة شلفا لإدارة المرافق',
+      }, { onConflict: 'month,work_order' }).select('id').single();
+      if (monthError) throw monthError;
+      const rows = cards.flatMap((card) => card.indicators.map((indicator) => {
+        const input = values[indicator.id];
+        return {
+          kpi_month_id: kpiMonth.id,
+          indicator_code: indicator.id,
+          applicable: input?.applicable ?? false,
+          numerator: input?.numerator ?? null,
+          denominator: input?.denominator ?? null,
+          extra: { formInput: input ?? { applicable: false } },
+          score: input?.applicable ? scoreByIndicatorId(indicator.id, input) : null,
+        };
       }));
-      const { error } = await supabase.from('kpi_scorecards').upsert(rows, {
-        onConflict: 'score_month,region,work_order,card_code',
+      const { error } = await supabase.from('kpi_entries').upsert(rows, {
+        onConflict: 'kpi_month_id,indicator_code',
       });
       if (error) throw error;
     },
@@ -166,14 +199,13 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
   const approve = useMutation({
     mutationFn: async () => {
       if (!supabase || !profile || !canApprove) throw new Error('اعتماد الشهر متاح لمدير المشروع أو مدير النظام.');
-      if (savedRows.length !== cards.length) throw new Error('احفظ البطاقات الأربع قبل اعتماد الشهر.');
-      const { error } = await supabase.from('kpi_scorecards').update({
-        approved_at: new Date().toISOString(),
+      const indicatorCount = cards.reduce((sum, card) => sum + card.indicators.length, 0);
+      if (!scorecards.data?.id || savedRows.length !== indicatorCount) throw new Error('احفظ جميع مؤشرات الشهر قبل اعتماد الشهر.');
+      const { error } = await supabase.from('kpi_months').update({
+        status: 'approved',
         approved_by: profile.id,
       })
-        .eq('score_month', `${month}-01`)
-        .eq('region', region)
-        .eq('work_order', workOrder);
+        .eq('id', scorecards.data.id);
       if (error) throw error;
     },
     onSuccess: async () => {
@@ -204,7 +236,7 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
       {scorecards.isLoading && <p role="status" className="card p-5 text-center">جارٍ تحميل بطاقات الأداء…</p>}
       {catalogQuery.isLoading && <p role="status" className="card p-5 text-center">جارٍ تحميل تعريفات المؤشرات الرسمية…</p>}
       {catalogQuery.error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">تعذر تحميل تعريفات المؤشرات: {catalogQuery.error.message}</p>}
-      {!supabase && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">وضع المعاينة: تعرض بيانات أكتوبر الرسمية، ويتطلب الحفظ إعداد Supabase.</p>}
+      {!canEdit && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">بيانات مؤشرات الأداء متاحة لمدير النظام ومدير المشروع فقط.</p>}
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="ملخص نتائج البطاقات">
         {cards.map((card) => {
@@ -243,7 +275,7 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
 
       <section className="card flex flex-wrap items-center gap-3 p-4">
         <button type="button" disabled={!canEdit || locked || save.isPending} onClick={() => save.mutate()} className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{save.isPending ? 'جارٍ الحفظ…' : 'حفظ بطاقات الشهر'}</button>
-        {canApprove && <button type="button" disabled={locked || approve.isPending || savedRows.length !== cards.length} onClick={() => approve.mutate()} className="rounded-lg border border-brand-700 px-4 py-2 text-sm font-bold text-brand-800 disabled:opacity-50">{approve.isPending ? 'جارٍ الاعتماد…' : 'اعتماد الشهر وإقفاله'}</button>}
+        {canApprove && <button type="button" disabled={locked || approve.isPending || savedRows.length !== cards.reduce((sum, card) => sum + card.indicators.length, 0)} onClick={() => approve.mutate()} className="rounded-lg border border-brand-700 px-4 py-2 text-sm font-bold text-brand-800 disabled:opacity-50">{approve.isPending ? 'جارٍ الاعتماد…' : 'اعتماد الشهر وإقفاله'}</button>}
         {locked && <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">الشهر معتمد ومقفل</span>}
         <button type="button" onClick={() => window.print()} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold">طباعة / حفظ PDF</button>
         {message && <p role="status" className="w-full text-sm text-slate-700">{message}</p>}

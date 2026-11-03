@@ -120,31 +120,7 @@ if (missing.length > 0 || ambiguous.length > 0) {
     penalties,
   }, null, 2), 'utf8');
   console.info(`Imported normalized KPI definitions: ${catalogOutput}`);
-  const publicDataDirectory = resolve('public/data');
-  mkdirSync(publicDataDirectory, { recursive: true });
-  const scorecardsOutput = resolve(publicDataDirectory, 'kpi-scorecards.json');
-  writeFileSync(scorecardsOutput, JSON.stringify(cards), 'utf8');
-  console.info(`Generated scorecard definitions for the app: ${scorecardsOutput}`);
-  const checklistOutput = resolve(publicDataDirectory, 'kpi-checklist.json');
-  const publicChecklist = Object.entries(checklist).flatMap(([code, items]) =>
-    items.flatMap((item) => {
-      if (item.number === null) return [];
-      return [{
-        id: `${code}-${item.number}`,
-        code,
-        number: item.number,
-        axis: String(item.axis ?? ''),
-        item: String(item.item ?? ''),
-        reference: String(item.reference ?? ''),
-        evidence: String(item.evidence ?? ''),
-        frequency: String(item.frequency ?? ''),
-        initialStatus: String(item.initialStatus ?? 'لم يبدأ'),
-        isRecommendation: item.isRecommendation,
-      }];
-    }),
-  );
-  writeFileSync(checklistOutput, JSON.stringify(publicChecklist), 'utf8');
-  console.info(`Generated checklist definitions for the app: ${checklistOutput}`);
+  console.info('KPI definitions are stored in supabase/seed/kpi-catalog.json; seed them in a trusted environment with npm run seed:kpi:database and npm run seed:checklist.');
 }
 
 function normalize(file: string): string {

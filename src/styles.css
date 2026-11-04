@@ -111,6 +111,65 @@ th {
   font-weight: 600;
 }
 
+.schools-table-scroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow: auto;
+  max-height: min(72vh, 900px);
+  border: 1px solid #e9ecf3;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.schools-source-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  text-align: start;
+}
+
+.schools-source-table th,
+.schools-source-table td {
+  padding: 10px 12px;
+  border-block-end: 1px solid #edf0f5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.schools-source-table thead th {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 3;
+  background: #f8f9fc;
+  box-shadow: 0 1px 0 #e1e5ee;
+}
+
+.schools-source-table tbody tr:hover td {
+  background: #eef2fa !important;
+}
+
+.schools-source-table tbody tr.school-row-missing td {
+  background: #fff8e6;
+}
+
+.school-marker-icon {
+  border: 0;
+  background: transparent;
+}
+
+.school-map-marker {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border: 3px solid #fff;
+  border-radius: 9999px;
+  background: #21366a;
+  box-shadow: 0 1px 6px rgba(15, 23, 42, 0.55);
+}
+
 .map-frame {
   height: 420px;
   overflow: hidden;

@@ -8,6 +8,7 @@ import { calculateStaffing, parseClassCount, type StaffingResult } from '../../d
 import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
+import { ImportWizardLauncher } from '../imports/ImportWizard';
 
 const configSchema = z.object({
   buildingTypeHeader: z.string(),
@@ -259,7 +260,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
 
   return (
     <div className="grid gap-5">
-      <section><p className="text-sm text-slate-500">الاحتياج حسب الفصول والاستثناءات المعتمدة</p><h2 className="mt-1 text-2xl font-bold text-brand-900">تسكين العمالة</h2></section>
+      <section className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm text-slate-500">الاحتياج حسب الفصول والاستثناءات المعتمدة</p><h2 className="mt-1 text-2xl font-bold text-brand-900">تسكين العمالة</h2></div><ImportWizardLauncher target={{ kind: 'cleaners' }} profile={profile} /></section>
       {data.error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات التسكين: {data.error.message}</div>}
       {!data.data?.config && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-7 text-amber-950">يلزم إعداد مطابقة أهلية المدارس في إعدادات النظام قبل عرض المدارس المستقلة والمشترك الأساسي.</div>}
       <section className="grid gap-3 sm:grid-cols-4">

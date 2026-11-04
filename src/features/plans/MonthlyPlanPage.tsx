@@ -8,6 +8,7 @@ import type { PlanType } from '../../domain/types';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
+import { ImportWizardLauncher } from '../imports/ImportWizard';
 
 const sourceSchoolSchema = z.object({
   id: z.string().uuid(),
@@ -33,6 +34,7 @@ const rowSchema = z.object({
   planned_date: z.string(),
   visited_at: z.string().nullable(),
   report_completed_at: z.string().nullable(),
+  contractor_name: z.string().nullable(),
   school: z.object({ school_name: z.string(), ministry_number: z.string() }).nullable(),
 });
 type PlanRow = z.infer<typeof rowSchema>;
@@ -75,7 +77,7 @@ async function loadPlanRows(planId: string): Promise<PlanRow[]> {
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('monthly_plan_rows')
-    .select('id,school_id,planned_date,visited_at:visited_date,report_completed_at:report_done_date,school:schools(school_name:name,ministry_number:ministry_no)')
+    .select('id,school_id,planned_date,visited_at:visited_date,report_completed_at:report_done_date,contractor_name,school:schools(school_name:name,ministry_number:ministry_no)')
     .eq('plan_id', planId)
     .order('planned_date');
   if (error) throw error;
@@ -224,9 +226,10 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
 
   return (
     <div className="grid gap-5">
-      <section>
-        <p className="text-sm text-slate-500">الخطط الشهرية · متابعة المدارس والإنجاز</p>
-        <h2 className="mt-1 text-2xl font-bold text-brand-900">خطة {planTitles[planType]}</h2>
+      <section className="flex flex-wrap items-end justify-between gap-3">
+        <div><p className="text-sm text-slate-500">الخطط الشهرية · متابعة المدارس والإنجاز</p>
+        <h2 className="mt-1 text-2xl font-bold text-brand-900">خطة {planTitles[planType]}</h2></div>
+        <ImportWizardLauncher target={{ kind: 'monthly', planType }} profile={profile} />
       </section>
       {(candidates.error || plans.error || rows.error) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات الخطط أو المدارس. تحقق من اتصال Supabase وسياسات الوصول.</div>}
 
@@ -280,7 +283,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
           <>
             <div className="table-scroll">
               <table>
-                <thead><tr><th>المدرسة</th><th>الموعد المخطط</th><th>تاريخ الزيارة</th><th>تاريخ إنجاز التقرير</th><th>الحالة</th></tr></thead>
+                <thead><tr><th>المدرسة</th><th>الموعد المخطط</th>{planType === 'security_safety' || planType === 'elevators' ? <th>الشركة</th> : null}<th>تاريخ الزيارة</th><th>تاريخ إنجاز التقرير</th><th>الحالة</th></tr></thead>
                 <tbody>{(rows.data ?? []).map((row) => {
                   const dates = actualDates[row.id] ?? { visited: row.visited_at ?? '', report: row.report_completed_at ?? '' };
                   const overdue = isPlanRowOverdue({
@@ -291,6 +294,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                   return <tr key={row.id}>
                     <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small></td>
                     <td>{formatDate(row.planned_date)}</td>
+                    {(planType === 'security_safety' || planType === 'elevators') && <td>{row.contractor_name ?? '—'}</td>}
                     <td><DateEditor value={dates.visited} onChange={(value) => setActualDates((current) => ({ ...current, [row.id]: { ...dates, visited: value } }))} onSave={() => updateRow.mutate({ rowId: row.id, field: 'visited_at', value: dates.visited || null })} label="حفظ الزيارة" disabled={!canUpdate || updateRow.isPending} /></td>
                     <td><DateEditor value={dates.report} onChange={(value) => setActualDates((current) => ({ ...current, [row.id]: { ...dates, report: value } }))} onSave={() => updateRow.mutate({ rowId: row.id, field: 'report_completed_at', value: dates.report || null })} label="حفظ التقرير" disabled={!canUpdate || updateRow.isPending} /></td>
                     <td>{overdue ? <span className="rounded-full bg-rose-50 px-2 py-1 text-xs text-rose-800">متأخر</span> : row.visited_at && row.report_completed_at ? 'مكتمل' : 'قيد المتابعة'}</td>

@@ -28,7 +28,7 @@ describe('configurable school plan eligibility', () => {
 
   it.each([
     'maintenance', 'cleaning', 'security_safety', 'elevators',
-    'gardening', 'landscaping', 'sewage_waste', 'tank_washing', 'pest_control', 'annual_readiness',
+    'gardening', 'landscaping', 'sewage_waste', 'water_supply', 'tank_washing', 'pest_control', 'annual_readiness',
   ] as const satisfies readonly (PlanType | GeneralPlanType)[])(
     'always excludes annex shared buildings from %s plans',
     (planType) => {

@@ -2,6 +2,7 @@ import Papa from 'papaparse';
 import { z } from 'zod';
 import { parseClassCount } from '../domain/staffing';
 import { mapSchoolContactColumns, schoolContactsExtraKey } from '../domain/schoolContacts';
+import { normalizeMinistryNumber } from '../domain/imports';
 import { supabase } from './supabase';
 
 export const schoolSyncConfigSchema = z.object({
@@ -122,7 +123,7 @@ export function prepareSchoolRows(
     const ministryNumber = values[ministryNumberIndex]?.trim();
     const schoolName = values[schoolNameIndex]?.trim();
     if (!ministryNumber || !schoolName) continue;
-    const normalizedMinistryNumber = normalizeDigits(ministryNumber).trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+    const normalizedMinistryNumber = normalizeMinistryNumber(ministryNumber);
     const occurrence = (occurrences.get(normalizedMinistryNumber) ?? 0) + 1;
     occurrences.set(normalizedMinistryNumber, occurrence);
     const sourceRow = sourceIndex + 2;

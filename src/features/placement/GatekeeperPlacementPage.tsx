@@ -4,6 +4,7 @@ import { Eye, EyeOff } from 'lucide-react';
 import { z } from 'zod';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
+import { ImportWizardLauncher } from '../imports/ImportWizard';
 
 const schoolSchema = z.object({
   id: z.string().uuid(),
@@ -124,7 +125,7 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
     <div className="grid gap-5">
       <section>
         <p className="text-sm text-slate-500">ربط المدارس بالبوابين المسجلين في القوى العاملة</p>
-        <h2 className="mt-1 text-2xl font-bold text-brand-900">تسكين البوابين</h2>
+        <div className="flex flex-wrap items-end justify-between gap-3"><h2 className="mt-1 text-2xl font-bold text-brand-900">تسكين البوابين</h2><ImportWizardLauncher target={{ kind: 'gatekeepers' }} profile={profile} /></div>
       </section>
       {data.error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات البوابين: {data.error.message}</div>}
       <section className="card grid gap-4 p-5">

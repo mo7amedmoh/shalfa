@@ -83,6 +83,7 @@ const navigation = [
       ['البستنة', '/general-plans/gardening'],
       ['التنسيق', '/general-plans/landscaping'],
       ['نزح مخلفات الصرف الصحي', '/general-plans/sewage_waste'],
+      ['توريد المياه', '/general-plans/water_supply'],
       ['غسيل الخزانات', '/general-plans/tank_washing'],
       ['مكافحة الآفات ورش المبيدات', '/general-plans/pest_control'],
       ['خطط الاستعداد السنوية', '/general-plans/annual_readiness'],

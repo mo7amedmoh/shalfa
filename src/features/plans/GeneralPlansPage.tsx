@@ -8,12 +8,14 @@ import type { GeneralPlanType } from '../../domain/types';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
+import { ImportWizardLauncher } from '../imports/ImportWizard';
 
-const planTypes = ['gardening', 'landscaping', 'sewage_waste', 'tank_washing', 'pest_control', 'annual_readiness'] as const;
+const planTypes = ['gardening', 'landscaping', 'sewage_waste', 'water_supply', 'tank_washing', 'pest_control', 'annual_readiness'] as const;
 const planLabels: Record<GeneralPlanType, string> = {
   gardening: 'البستنة',
   landscaping: 'التنسيق',
   sewage_waste: 'نزح مخلفات الصرف الصحي',
+  water_supply: 'توريد المياه',
   tank_washing: 'غسيل الخزانات',
   pest_control: 'مكافحة الآفات ورش المبيدات',
   annual_readiness: 'خطط الاستعداد السنوية',
@@ -38,6 +40,8 @@ const rowSchema = z.object({
   status: z.enum(['planned', 'in_progress', 'done', 'cancelled']),
   execution_date: z.string().nullable(),
   notes: z.string().nullable(),
+  responses_count: z.number().int().nullable(),
+  contractor_name: z.string().nullable(),
   school: z.object({ school_name: z.string(), ministry_number: z.string() }).nullable(),
 });
 type GeneralRow = Omit<z.infer<typeof rowSchema>, 'status'> & { status: 'pending' | 'in_progress' | 'complete'; completed_at: string | null };
@@ -63,7 +67,7 @@ async function loadGeneralRows(type: GeneralPlanType): Promise<GeneralRow[]> {
   if (!plans.length) return [];
   const { data, error } = await supabase
     .from('general_plan_rows')
-    .select('id,school_id,planned_date,status,execution_date,notes,school:schools(school_name:name,ministry_number:ministry_no)')
+    .select('id,school_id,planned_date,status,execution_date,notes,responses_count,contractor_name,school:schools(school_name:name,ministry_number:ministry_no)')
     .in('plan_id', plans.map(({ id }) => id))
     .order('planned_date', { ascending: false });
   if (error) throw error;
@@ -163,7 +167,7 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
 
   return (
     <div className="grid gap-5">
-      <section><p className="text-sm text-slate-500">الخطط العامة · متابعة التنفيذ</p><h2 className="mt-1 text-2xl font-bold text-brand-900">{planLabels[planType]}</h2></section>
+      <section className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm text-slate-500">الخطط العامة · متابعة التنفيذ</p><h2 className="mt-1 text-2xl font-bold text-brand-900">{planLabels[planType]}</h2></div><ImportWizardLauncher target={{ kind: 'general', planType }} profile={profile} /></section>
       {(schools.error || rows.error) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات الخطة أو المدارس.</div>}
       <section className="card grid gap-4 p-5">
         <div><h3 className="font-bold">إضافة مدارس إلى الخطة</h3><p className="mt-1 text-sm text-slate-500">تُستثنى المباني المشتركة الملحقة. اختر مدرسة مؤهلة وحدد تاريخ التنفيذ المخطط.</p></div>
@@ -196,8 +200,8 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
         </div>
         {rows.isLoading ? <p role="status">جارٍ تحميل السجلات…</p> : totalCount === 0 ? <p className="rounded-lg bg-slate-50 p-5 text-center text-sm text-slate-500">لا توجد مهام مسجلة لهذه الخطة.</p> : (
           <div className="table-scroll"><table>
-            <thead><tr><th>المدرسة</th><th>التاريخ المخطط</th><th>الحالة</th><th>تاريخ الإنجاز</th><th>الملاحظات</th><th>إجراء</th></tr></thead>
-            <tbody>{(rows.data ?? []).map((row) => <GeneralPlanRow key={row.id} row={row} onSave={(status, notes) => updateRow.mutate({ row, status, notes })} disabled={!canManage || updateRow.isPending} />)}</tbody>
+            <thead><tr><th>المدرسة</th><th>التاريخ المخطط</th>{planType === 'water_supply' || planType === 'sewage_waste' ? <th>عدد الردود</th> : null}<th>الحالة</th><th>تاريخ الإنجاز</th><th>الملاحظات</th><th>إجراء</th></tr></thead>
+            <tbody>{(rows.data ?? []).map((row) => <GeneralPlanRow key={row.id} row={row} showResponses={planType === 'water_supply' || planType === 'sewage_waste'} onSave={(status, notes) => updateRow.mutate({ row, status, notes })} disabled={!canManage || updateRow.isPending} />)}</tbody>
           </table></div>
         )}
       </section>
@@ -205,12 +209,13 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   );
 }
 
-function GeneralPlanRow({ row, onSave, disabled }: { row: GeneralRow; onSave: (status: GeneralRow['status'], notes: string) => void; disabled: boolean }) {
+function GeneralPlanRow({ row, showResponses, onSave, disabled }: { row: GeneralRow; showResponses: boolean; onSave: (status: GeneralRow['status'], notes: string) => void; disabled: boolean }) {
   const [status, setStatus] = useState(row.status);
   const [notes, setNotes] = useState(row.notes ?? '');
   return <tr>
     <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small></td>
     <td>{row.planned_date}</td>
+    {showResponses && <td>{row.responses_count ?? '—'}</td>}
     <td><select value={status} onChange={(event) => { if (event.target.value === 'pending' || event.target.value === 'in_progress' || event.target.value === 'complete') setStatus(event.target.value); }} disabled={disabled} className="rounded border border-slate-300 px-2 py-1"><option value="pending">لم يبدأ</option><option value="in_progress">جارٍ</option><option value="complete">مكتمل</option></select></td>
     <td>{row.completed_at ?? '—'}</td>
     <td><input value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={2000} disabled={disabled} className="max-w-40 rounded border border-slate-300 px-2 py-1" /></td>

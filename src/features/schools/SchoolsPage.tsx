@@ -6,8 +6,10 @@ import { Download, List, Map as MapIcon, Search, SlidersHorizontal } from 'lucid
 import { z } from 'zod';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { duplicateMinistryRows, schoolsWithMapCoordinates } from '../../domain/schoolMap';
+import { resolveSchoolBuildingNames } from '../../domain/schoolBuildings';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { DuplicateSchoolWarning } from './SchoolSyncWarnings';
 import { SchoolDetails } from './SchoolDetails';
 import { SchoolMapMarkers } from './SchoolMapMarkers';
@@ -38,7 +40,7 @@ async function loadSchools(): Promise<SchoolRecord[]> {
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('schools')
-    .select('id,ministry_number:ministry_no,school_name:name,source_columns,source_row,latitude:lat,longitude:lng,synced_at,missing_from_sheet_at,plan_scope,size_source,size_calc,class_count,building_type,has_elevator_contractor')
+    .select(APP_SCHEMA_SELECT.schoolsMap)
     .order('source_row');
   if (error) throw error;
   return z.array(schoolSchema).parse(data);
@@ -55,11 +57,14 @@ function displayValue(value: unknown): string {
 }
 
 function columnWidth(header: string): number {
-  if (header === 'اسم المدرسة') return 240;
-  if (header === 'الرقم الوزاري') return 140;
-  if (header === 'العنوان') return 260;
-  if (header.startsWith('رقم ')) return 160;
-  return 176;
+  if (header === 'م') return 72;
+  if (header === 'الرقم الوزاري') return 132;
+  if (header === 'اسم المدرسة' || header === 'المبني') return 230;
+  if (header === 'العنوان') return 280;
+  if (header.startsWith('رقم ') || header.startsWith('هاتف')) return 140;
+  if (header === 'الحي' || header === 'المرحلة' || header === 'الملكية') return 132;
+  if (header.includes('مقاول') || header.includes('مشرف') || header.includes('مهندس')) return 190;
+  return 158;
 }
 
 function csvCell(value: string): string {
@@ -113,10 +118,15 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
     staleTime: 5 * 60 * 1000,
   });
   const columns = useMemo(() => schools[0]?.source_columns.map(({ header }, index) => ({ index, header })) ?? [], [schools]);
+  const buildingNames = useMemo(() => resolveSchoolBuildingNames(schools), [schools]);
+  const resolvedBuildingNames = useMemo(
+    () => new Map(schools.map((school, index) => [school.id, buildingNames[index] ?? ''])),
+    [schools, buildingNames],
+  );
   useEffect(() => {
     setVisibleColumns((current) => current.length
       ? current.filter((index) => index < columns.length)
-      : columns.map(({ index }) => index));
+      : columns.filter(({ header }) => header !== 'العنوان').map(({ index }) => index));
   }, [columns]);
   useEffect(() => {
     const update = () => setIsOnline(navigator.onLine);
@@ -152,17 +162,19 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
     const ministryIndex = columns.find(({ header: item }) => item === 'الرقم الوزاري')?.index;
     const schoolNameIndex = columns.find(({ header: item }) => item === 'اسم المدرسة')?.index;
     const pinned = [ministryIndex, schoolNameIndex].filter((value): value is number => value !== undefined && visible.has(value));
-    if (!pinned.includes(index)) return { minWidth: `${columnWidth(header)}px`, maxWidth: `${columnWidth(header)}px` };
+    const width = columnWidth(header);
+    if (!pinned.includes(index)) {
+      return { width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` };
+    }
     const offset = pinned.filter((other) => other < index)
       .reduce((sum, other) => sum + columnWidth(columns[other].header), 0);
     return {
       position: 'sticky' as const,
       insetInlineStart: `${offset}px`,
-      minWidth: `${columnWidth(header)}px`,
-      width: `${columnWidth(header)}px`,
-      maxWidth: `${columnWidth(header)}px`,
+      minWidth: `${width}px`,
+      width: `${width}px`,
+      maxWidth: `${width}px`,
       zIndex: isHeader ? 5 : 2,
-      background: 'white',
     };
   }
 
@@ -170,7 +182,11 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
     const selected = columns.filter(({ index }) => visible.has(index));
     const content = [
       selected.map(({ header }) => csvCell(header)).join(','),
-      ...filtered.map((school) => selected.map(({ index }) => csvCell(displayValue(school.source_columns[index]?.value))).join(',')),
+      ...filtered.map((school) => selected.map(({ index, header }) => csvCell(
+        header === 'المبني'
+          ? resolvedBuildingNames.get(school.id) ?? ''
+          : displayValue(school.source_columns[index]?.value),
+      )).join(',')),
     ].join('\r\n');
     const url = URL.createObjectURL(new Blob([`\uFEFF${content}`], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
@@ -332,12 +348,38 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
             <thead><tr>{columns.filter(({ index }) => visible.has(index)).map(({ index, header }) => (
               <th key={index} style={styleForColumn(index, header, true)}>{header}</th>
             ))}</tr></thead>
-            <tbody>{filtered.map((school) => (
+            <tbody>{filtered.map((school, rowIndex) => (
               <tr key={school.id} className={school.missing_from_sheet_at ? 'school-row-missing' : ''}>
                 {columns.filter(({ index }) => visible.has(index)).map(({ index, header }) => (
-                  <td key={index} style={styleForColumn(index, header, false)} title={displayValue(school.source_columns[index]?.value)}>
-                    {displayValue(school.source_columns[index]?.value)}
-                  </td>
+                  header === 'المبني' ? (() => {
+                    const buildingNumber = cellValue(school, 'م');
+                    const buildingName = resolvedBuildingNames.get(school.id) ?? '';
+                    const previous = filtered[rowIndex - 1];
+                    const sharesPreviousCell = Boolean(
+                      previous
+                      && buildingNumber
+                      && cellValue(previous, 'م') === buildingNumber
+                      && resolvedBuildingNames.get(previous.id) === buildingName,
+                    );
+                    if (sharesPreviousCell) return null;
+                    let rowSpan = 1;
+                    while (rowIndex + rowSpan < filtered.length) {
+                      const next = filtered[rowIndex + rowSpan];
+                      if (!buildingNumber
+                        || cellValue(next, 'م') !== buildingNumber
+                        || resolvedBuildingNames.get(next.id) !== buildingName) break;
+                      rowSpan += 1;
+                    }
+                    return (
+                      <td key={index} rowSpan={rowSpan} style={styleForColumn(index, header, false)} title={buildingName}>
+                        {buildingName || displayValue(school.source_columns[index]?.value)}
+                      </td>
+                    );
+                  })() : (
+                    <td key={index} style={styleForColumn(index, header, false)} title={displayValue(school.source_columns[index]?.value)}>
+                      {displayValue(school.source_columns[index]?.value)}
+                    </td>
+                  )
                 ))}
               </tr>
             ))}</tbody>

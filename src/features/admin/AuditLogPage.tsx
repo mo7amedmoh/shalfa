@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 
 const auditEventSchema = z.object({
   id: z.number(),
@@ -26,7 +27,7 @@ const actionLabels: Record<string, string> = {
 async function loadAuditEvents() {
   if (!supabase) return [];
   const { data, error } = await supabase.from('audit_log')
-    .select('id,actor_id:actor,action,entity:table_name,entity_id:row_id,details,created_at:at')
+    .select(APP_SCHEMA_SELECT.auditLog)
     .order('at', { ascending: false })
     .limit(250);
   if (error) throw error;

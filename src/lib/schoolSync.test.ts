@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeRiyadhCoordinates, normalizeSheetSchoolSize, prepareSchoolRows, type SchoolSyncConfig } from './schoolSync';
+import {
+  getMissingMinistryNumbersError,
+  normalizeRiyadhCoordinates,
+  normalizeSheetSchoolSize,
+  parseSchoolWorkbook,
+  prepareSchoolRows,
+  type SchoolSyncConfig,
+  type SchoolSyncResult,
+} from './schoolSync';
+import * as XLSX from 'xlsx';
 
 const headers = [
   'الرقم الوزاري',
@@ -88,6 +97,125 @@ describe('prepareSchoolRows', () => {
     expect(prepared.rows).toHaveLength(1);
     expect(prepared.invalidCoordinates).toBe(1);
     expect(prepared.rows[0]).toMatchObject({ lat: null, lng: null });
+  });
+
+  it('counts source rows omitted for missing identifiers or names', () => {
+    const prepared = prepareSchoolRows(headers, [
+      row('95183', 'مدرسة'),
+      row('', 'بلا رقم وزاري'),
+      row('95184', ''),
+      row('', ''),
+    ], config, 'now');
+    expect(prepared.rows).toHaveLength(1);
+    expect(prepared.skippedRows).toEqual({
+      total: 3,
+      missingMinistryNumber: 2,
+      ministryNumberColumn: { position: 1, header: 'الرقم الوزاري' },
+      missingMinistryNumberRows: [
+        {
+          sourceRow: 3,
+          schoolName: 'بلا رقم وزاري',
+          nearbyCells: [
+            { position: 1, header: 'الرقم الوزاري', value: '' },
+            { position: 2, header: 'اسم المدرسة', value: 'بلا رقم وزاري' },
+            { position: 3, header: 'نوع المبنى', value: 'مستقل' },
+          ],
+        },
+        {
+          sourceRow: 5,
+          schoolName: '',
+          nearbyCells: [
+            { position: 1, header: 'الرقم الوزاري', value: '' },
+            { position: 2, header: 'اسم المدرسة', value: '' },
+            { position: 3, header: 'نوع المبنى', value: 'مستقل' },
+          ],
+        },
+      ],
+      missingSchoolName: 2,
+    });
+  });
+
+  describe('school sync preflight', () => {
+    it('blocks partial syncs when source rows have missing ministry numbers', () => {
+      const skippedRows: SchoolSyncResult['skippedRows'] = {
+        total: 1,
+        missingMinistryNumber: 1,
+        ministryNumberColumn: { position: 3, header: 'الرقم الوزاري' },
+        missingMinistryNumberRows: [{
+          sourceRow: 37,
+          schoolName: 'ثانوية زهير بن قيس - نظام مقررات',
+          nearbyCells: [],
+        }],
+        missingSchoolName: 0,
+      };
+      const error = getMissingMinistryNumbersError(skippedRows);
+      expect(error?.message).toContain('أُوقفت المزامنة قبل حفظ أي تغييرات');
+      expect(error?.message).toContain('37');
+    });
+
+    it('allows syncs when every source row has a ministry number', () => {
+      const skippedRows: SchoolSyncResult['skippedRows'] = {
+        total: 0,
+        missingMinistryNumber: 0,
+        ministryNumberColumn: { position: 3, header: 'الرقم الوزاري' },
+        missingMinistryNumberRows: [],
+        missingSchoolName: 0,
+      };
+      expect(getMissingMinistryNumbersError(skippedRows)).toBeNull();
+    });
+  });
+
+  describe('parseSchoolWorkbook', () => {
+    it('preserves mixed text and numeric ministry numbers and blank physical rows', () => {
+      const workbook = XLSX.utils.book_new();
+      const sheet = XLSX.utils.aoa_to_sheet([
+        ['الرقم الوزاري', 'اسم المدرسة'],
+        [195866, 'الابتدائية'],
+        ['M110179', 'ثانوية زهير بن قيس'],
+        ['', ''],
+        [195452, 'ثانوية طرفة'],
+      ]);
+      XLSX.utils.book_append_sheet(workbook, sheet, 'قاعدة بيانات المدارس');
+      const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+
+      const parsed = parseSchoolWorkbook(bytes, 'قاعدة بيانات المدارس');
+      expect(parsed.headers).toEqual(['الرقم الوزاري', 'اسم المدرسة']);
+      expect(parsed.rows).toEqual([
+        ['195866', 'الابتدائية'],
+        ['M110179', 'ثانوية زهير بن قيس'],
+        ['', ''],
+        ['195452', 'ثانوية طرفة'],
+      ]);
+    });
+
+    it('reports an error when the requested sheet is not present', () => {
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['header']]), 'Other');
+      const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+      expect(() => parseSchoolWorkbook(bytes, 'قاعدة بيانات المدارس'))
+        .toThrow('تعذر العثور على تبويب المدارس في ملف المصدر');
+    });
+  });
+
+  it('keeps physical sheet row numbers correct when blank rows are present', () => {
+    const prepared = prepareSchoolRows(headers, [
+      row('95183', 'المدرسة الأولى'),
+      ['', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+      row('', 'بلا رقم بعد صف فارغ'),
+    ], config, 'now');
+
+    expect(prepared.sourceRows).toBe(2);
+    expect(prepared.skippedRows.missingMinistryNumberRows).toEqual([
+      {
+        sourceRow: 4,
+        schoolName: 'بلا رقم بعد صف فارغ',
+        nearbyCells: [
+          { position: 1, header: 'الرقم الوزاري', value: '' },
+          { position: 2, header: 'اسم المدرسة', value: 'بلا رقم بعد صف فارغ' },
+          { position: 3, header: 'نوع المبنى', value: 'مستقل' },
+        ],
+      },
+    ]);
   });
 
   it('normalizes Arabic-Indic digits when deriving duplicate source keys', () => {

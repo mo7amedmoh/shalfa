@@ -2,10 +2,11 @@ import { useMemo, useState } from 'react';
 import { Download, FileSpreadsheet, Upload, X } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { z } from 'zod';
-import { autoDetectImportColumns, matchImportEmployees, normalizeImportName, normalizeMinistryNumber, normalizePhone, parseImportDate, parseImportInteger, parseMonthlyPlanRows } from '../../domain/imports';
+import { autoDetectImportColumns, matchImportEmployees, normalizeImportName, normalizeMinistryNumber, normalizePhone, parseImportDate, parseMonthlyPlanRows } from '../../domain/imports';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import type { GeneralPlanType, PlanType } from '../../domain/types';
 import type { UserProfile } from '../../lib/auth';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { supabase } from '../../lib/supabase';
 
 type ImportTarget =
@@ -74,10 +75,10 @@ const monthlyLabels: Record<PlanType, string> = {
   security_safety: 'الأمن والسلامة',
   elevators: 'المصاعد',
 };
-const generalNames: Record<string, { date: string; responses?: string; notes?: string }> = {
-  water_supply: { date: 'تاريخ توريد المياه', responses: 'عدد الردود', notes: 'ملاحظات توريد مياة' },
-  sewage_waste: { date: 'تاريخ النزح', responses: 'عدد الردود', notes: 'ملاحظات النزح' },
-  sewage_removal: { date: 'تاريخ النزح', responses: 'عدد الردود', notes: 'ملاحظات النزح' },
+const generalNames: Record<string, { date: string; notes?: string }> = {
+  water_supply: { date: 'تاريخ توريد المياه', notes: 'ملاحظات توريد مياة' },
+  sewage_waste: { date: 'تاريخ النزح', notes: 'ملاحظات النزح' },
+  sewage_removal: { date: 'تاريخ النزح', notes: 'ملاحظات النزح' },
 };
 const generalLabels: Record<GeneralPlanType, string> = {
   gardening: 'البستنة',
@@ -110,7 +111,6 @@ function fieldsFor(target: ImportTarget): Field[] {
       { key: 'ministry', label: 'الرقم الوزاري', aliases: ['الرقم الوزاري'], required: true },
       ...(special.date ? [{ key: 'buildingType', label: 'تصنيف الوحدة', aliases: ['تصنيف الوحدة', 'نوع المبنى'] }] : []),
       { key: 'plannedDate', label: special.date ?? 'التاريخ المخطط', aliases: [special.date ?? 'التاريخ المخطط', 'التاريخ', 'تاريخ التنفيذ'], required: true },
-      ...(special.responses ? [{ key: 'responsesCount', label: 'عدد الردود', aliases: [special.responses], occurrence: target.planType === 'water_supply' ? 0 : 1 }] : []),
       ...(special.notes ? [{ key: 'notes', label: special.notes, aliases: [special.notes] }] : [{ key: 'notes', label: 'ملاحظات', aliases: ['ملاحظات'] }]),
     ];
   }
@@ -220,26 +220,28 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
     const client = supabase;
     const [schools, employees, aliases, gatekeepers, configResult] = await Promise.all([
       loadAllPages(async (start, end) => {
-        const { data, error } = await client.from('schools').select('id,ministry_no,name,plan_scope,source_fields:extra').order('name').range(start, end);
+        let query = client.from('schools').select(APP_SCHEMA_SELECT.schoolsImport).order('name');
+        if (target.kind === 'gatekeepers') query = query.eq('plan_scope', true);
+        const { data, error } = await query.range(start, end);
         if (error) throw error;
         return data;
       }),
       loadAllPages(async (start, end) => {
-        const { data, error } = await client.from('employees').select('id,full_name,employee_no,category,job_title,phone').order('full_name').range(start, end);
+        const { data, error } = await client.from('employees').select(APP_SCHEMA_SELECT.employeesForImport).order('full_name').range(start, end);
         if (error) throw error;
         return data;
       }),
       loadAllPages(async (start, end) => {
-        const { data, error } = await client.from('supervisor_aliases').select('alias_normalised,employee_id').range(start, end);
+        const { data, error } = await client.from('supervisor_aliases').select(APP_SCHEMA_SELECT.supervisorAliases).range(start, end);
         if (error) throw error;
         return data;
       }),
       loadAllPages(async (start, end) => {
-        const { data, error } = await client.from('gatekeepers').select('school_id,phone').range(start, end);
+        const { data, error } = await client.from('gatekeepers').select(APP_SCHEMA_SELECT.gatekeeperPhones).range(start, end);
         if (error) throw error;
         return data;
       }),
-      client.from('app_config').select('value').eq('key', 'plan_eligibility').maybeSingle(),
+      client.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
     ]);
     if (configResult.error) throw configResult.error;
     const eligibility = configResult.data ? eligibilitySchema.parse(configResult.data.value) : null;
@@ -477,9 +479,6 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
       return { status: notes.some((note) => !note.startsWith('تحذير:')) ? 'attention' : 'ready', notes, school, engineer, supervisor, employee: null };
     }
     if (target.kind === 'general') {
-      if (row.values.responsesCount !== '' && parseImportInteger(row.values.responsesCount) === null) {
-        notes.push('عدد الردود يجب أن يكون عدداً صحيحاً غير سالب.');
-      }
       return { status: notes.length ? 'attention' : 'ready', notes, school, engineer: null, supervisor: null, employee: null };
     }
 
@@ -544,9 +543,9 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
       const month = `${selectedMonth}-01`;
       const { data: plan, error: planError } = await supabase.from('monthly_plans')
         .upsert({ plan_type: target.planType, month }, { onConflict: 'plan_type,month' })
-        .select('id').single();
+        .select(APP_SCHEMA_SELECT.id).single();
       if (planError) throw planError;
-      const old = await supabase.from('monthly_plan_rows').select('school_id').eq('plan_id', plan.id);
+      const old = await supabase.from('monthly_plan_rows').select(APP_SCHEMA_SELECT.monthlyPlanSchoolIds).eq('plan_id', plan.id);
       if (old.error) throw old.error;
       const existing = new Set(old.data.map((item) => item.school_id));
       for (let offset = 0; offset < writable.length; offset += 100) {
@@ -577,7 +576,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
       const targetYear = selectedMonth ? Number(selectedMonth.slice(0, 4)) : Number(String(parseImportDate(rows.find((row) => row.values.plannedDate)?.values.plannedDate) ?? '').slice(0, 4));
       const { data: plan, error: planError } = await supabase.from('general_plans')
         .upsert({ plan_type: sourceType, year: targetYear }, { onConflict: 'plan_type,year' })
-        .select('id').single();
+        .select(APP_SCHEMA_SELECT.id).single();
       if (planError) throw planError;
       for (let offset = 0; offset < writable.length; offset += 100) {
         const batch = writable.slice(offset, offset + 100);
@@ -585,7 +584,6 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
           source_line: row.line,
           school_id: state.school!.id,
           planned_date: parseImportDate(row.values.plannedDate),
-          ...(row.values.responsesCount !== '' ? { responses_count: parseImportInteger(row.values.responsesCount)! } : {}),
           ...(row.values.notes ? { notes: String(row.values.notes) } : {}),
         }));
         const result = await supabase.rpc('import_general_plan_rows', { p_plan_id: plan.id, p_rows: payload });
@@ -807,7 +805,6 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
                   </select>
                 </label>
               )}
-              {target.kind === 'general' && generalNames[target.planType] && <p className="rounded-lg bg-sky-50 p-3 text-sm text-sky-900">سيُحفظ الحقل «عدد الردود» كما هو، دون افتراض معنى إضافي.</p>}
               {referenceError && <button type="button" onClick={() => void loadReferences().then((value) => { setReferences(value); setReferenceError(''); }).catch((error: Error) => setReferenceError(error.message))} className="justify-self-start rounded border px-3 py-2 text-sm">إعادة تحميل بيانات المطابقة</button>}
               <div className="max-h-[55vh] overflow-auto rounded-lg border border-slate-200">
                 <table className="min-w-full text-start text-xs">

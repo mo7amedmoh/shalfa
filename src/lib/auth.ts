@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { supabase } from './supabase';
+import { APP_SCHEMA_SELECT } from './schemaColumns';
 
 export const userProfileSchema = z.object({
   id: z.string().uuid(),
@@ -30,7 +31,7 @@ export async function signInWithEmail(email: string, password: string): Promise<
 export async function getUserProfile(userId: string): Promise<UserProfile> {
   if (!supabase) throw new Error('لم يتم إعداد الاتصال بقاعدة البيانات.');
   const { data, error } = await supabase.from('profiles')
-    .select('id,username,role,display_name:full_name,phone,employee_id')
+    .select(APP_SCHEMA_SELECT.profile)
     .eq('id', userId)
     .single();
   if (error) throw error;

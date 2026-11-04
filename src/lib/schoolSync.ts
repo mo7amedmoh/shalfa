@@ -1,9 +1,10 @@
-import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
 import { z } from 'zod';
 import { parseClassCount } from '../domain/staffing';
 import { mapSchoolContactColumns, schoolContactsExtraKey } from '../domain/schoolContacts';
 import { normalizeMinistryNumber } from '../domain/imports';
 import { supabase } from './supabase';
+import { APP_SCHEMA_SELECT } from './schemaColumns';
 
 export const schoolSyncConfigSchema = z.object({
   tabName: z.string().trim().min(1),
@@ -19,6 +20,18 @@ export type DuplicateMinistryNumber = { ministryNumber: string; rows: number[] }
 export type SchoolSyncResult = {
   inserted: number;
   updated: number;
+  sourceRows: number;
+  skippedRows: {
+    total: number;
+    missingMinistryNumber: number;
+    ministryNumberColumn: { position: number; header: string };
+    missingMinistryNumberRows: Array<{
+      sourceRow: number;
+      schoolName: string;
+      nearbyCells: Array<{ position: number; header: string; value: string }>;
+    }>;
+    missingSchoolName: number;
+  };
   duplicatesWarned: number;
   duplicateNumbers: DuplicateMinistryNumber[];
   flaggedMissing: number;
@@ -101,12 +114,39 @@ function sourceFieldsFromColumns(headers: readonly string[], values: readonly st
   return sourceFields;
 }
 
+export function parseSchoolWorkbook(
+  workbookData: ArrayBuffer,
+  tabName: string,
+): { headers: string[]; rows: string[][] } {
+  const workbook = XLSX.read(workbookData, { type: 'array' });
+  const sheet = workbook.Sheets[tabName];
+  if (!sheet) throw new Error(`تعذر العثور على تبويب المدارس في ملف المصدر: ${tabName}`);
+  const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    header: 1,
+    raw: false,
+    defval: '',
+    blankrows: true,
+  });
+  const [rawHeaders = [], ...rawRows] = matrix;
+  const toText = (value: unknown) => String(value ?? '').trim();
+  return {
+    headers: rawHeaders.map(toText),
+    rows: rawRows.map((row) => row.map(toText)),
+  };
+}
+
 export function prepareSchoolRows(
   headers: readonly string[],
   sourceRows: readonly (readonly string[])[],
   config: SchoolSyncConfig,
   synchronizedAt: string,
-): { rows: SyncedSchool[]; duplicateNumbers: DuplicateMinistryNumber[]; invalidCoordinates: number } {
+): {
+  rows: SyncedSchool[];
+  duplicateNumbers: DuplicateMinistryNumber[];
+  invalidCoordinates: number;
+  sourceRows: number;
+  skippedRows: SchoolSyncResult['skippedRows'];
+} {
   const columnIndex = (header: string) => headers.indexOf(header);
   const ministryNumberIndex = columnIndex(config.ministryNumberHeader);
   const schoolNameIndex = columnIndex(config.schoolNameHeader);
@@ -118,15 +158,44 @@ export function prepareSchoolRows(
   const duplicateRows = new Map<string, number[]>();
   const rows: SyncedSchool[] = [];
   let invalidCoordinates = 0;
+  let processedSourceRows = 0;
+  const skippedRows: SchoolSyncResult['skippedRows'] = {
+    total: 0,
+    missingMinistryNumber: 0,
+    ministryNumberColumn: {
+      position: ministryNumberIndex + 1,
+      header: headers[ministryNumberIndex] ?? config.ministryNumberHeader,
+    },
+    missingMinistryNumberRows: [],
+    missingSchoolName: 0,
+  };
   for (const [sourceIndex, rawValues] of sourceRows.entries()) {
     const values = rawValues.map((value) => String(value ?? ''));
+    if (values.every((value) => !value.trim())) continue;
+    processedSourceRows += 1;
+    const sourceRow = sourceIndex + 2;
     const ministryNumber = values[ministryNumberIndex]?.trim();
     const schoolName = values[schoolNameIndex]?.trim();
-    if (!ministryNumber || !schoolName) continue;
+    if (!ministryNumber || !schoolName) {
+      skippedRows.total += 1;
+      if (!ministryNumber) {
+        skippedRows.missingMinistryNumber += 1;
+        const nearbyCells = headers
+          .map((header, index) => ({ header, index, value: values[index]?.trim() ?? '' }))
+          .filter(({ index }) => Math.abs(index - ministryNumberIndex) <= 2)
+          .map(({ header, index, value }) => ({ position: index + 1, header, value }));
+        skippedRows.missingMinistryNumberRows.push({
+          sourceRow,
+          schoolName: schoolName ?? '',
+          nearbyCells,
+        });
+      }
+      if (!schoolName) skippedRows.missingSchoolName += 1;
+      continue;
+    }
     const normalizedMinistryNumber = normalizeMinistryNumber(ministryNumber);
     const occurrence = (occurrences.get(normalizedMinistryNumber) ?? 0) + 1;
     occurrences.set(normalizedMinistryNumber, occurrence);
-    const sourceRow = sourceIndex + 2;
     if (occurrence > 1) {
       const duplicate = duplicateRows.get(normalizedMinistryNumber) ?? [
         rows.find((candidate) => candidate.source_key === `${normalizedMinistryNumber}#1`)!.source_row,
@@ -162,28 +231,29 @@ export function prepareSchoolRows(
     });
   }
   const duplicateNumbers = [...duplicateRows.entries()].map(([ministryNumber, rows]) => ({ ministryNumber, rows }));
-  return { rows, duplicateNumbers, invalidCoordinates };
+  return { rows, duplicateNumbers, invalidCoordinates, sourceRows: processedSourceRows, skippedRows };
+}
+
+export function getMissingMinistryNumbersError(
+  skippedRows: SchoolSyncResult['skippedRows'],
+): Error | null {
+  const missingRows = skippedRows.missingMinistryNumberRows;
+  if (!missingRows.length) return null;
+  const rowNumbers = missingRows.map(({ sourceRow }) => sourceRow).join('، ');
+  return new Error(
+    `أُوقفت المزامنة قبل حفظ أي تغييرات: لم يتضمن ملف المصدر أرقاماً وزارية في ${missingRows.length} صفاً (${rowNumbers}). تحقق من بيانات المصدر ثم أعد المحاولة.`,
+  );
 }
 
 export async function syncSchools(configInput: SchoolSyncConfig): Promise<SchoolSyncResult> {
   if (!supabase) throw new Error('لم يتم إعداد الاتصال بقاعدة البيانات.');
   const config = schoolSyncConfigSchema.parse(configInput);
-  const endpoint = new URL(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq`);
-  endpoint.searchParams.set('tqx', 'out:csv');
-  endpoint.searchParams.set('sheet', config.tabName);
-  const response = await fetch(endpoint);
-  if (!response.ok) throw new Error(`تعذر جلب ورقة المدارس (HTTP ${response.status}).`);
-  const csv = await response.text();
-  const parsed = Papa.parse<string[]>(csv, {
-    header: false,
-    skipEmptyLines: 'greedy',
-    dynamicTyping: false,
-  });
-  if (parsed.errors.length) {
-    throw new Error(`تعذر تحليل CSV: ${parsed.errors[0].message}`);
-  }
-  const [rawHeaders = [], ...sourceRows] = parsed.data;
-  const headers = rawHeaders.map((header) => String(header ?? '').trim());
+  const endpoint = new URL(`https://docs.google.com/spreadsheets/d/${sheetId}/export`);
+  endpoint.searchParams.set('format', 'xlsx');
+  endpoint.searchParams.set('cacheBust', String(Date.now()));
+  const response = await fetch(endpoint, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`تعذر جلب ملف المدارس بصيغة Excel (HTTP ${response.status}).`);
+  const { headers, rows: parsedSourceRows } = parseSchoolWorkbook(await response.arrayBuffer(), config.tabName);
   for (const header of [config.ministryNumberHeader, config.schoolNameHeader]) {
     if (!headers.includes(header)) throw new Error(`عنوان العمود غير موجود في الورقة: ${header}`);
   }
@@ -194,14 +264,20 @@ export async function syncSchools(configInput: SchoolSyncConfig): Promise<School
     if (header && !headers.includes(header)) throw new Error(`عنوان عمود الإحداثيات غير موجود: ${header}`);
   }
   const synchronizedAt = new Date().toISOString();
-  const prepared = prepareSchoolRows(headers, sourceRows, config, synchronizedAt);
-  const { rows: syncRows, duplicateNumbers, invalidCoordinates } = prepared;
+  const prepared = prepareSchoolRows(headers, parsedSourceRows, config, synchronizedAt);
+  const { rows: syncRows, duplicateNumbers, invalidCoordinates, sourceRows: sourceRowCount, skippedRows } = prepared;
+  const missingNumbersError = getMissingMinistryNumbersError(skippedRows);
+  if (missingNumbersError) {
+    throw new Error(
+      `تعذر استيراد بعض الأرقام الوزارية من ملف Excel. ${missingNumbersError.message}`,
+    );
+  }
   if (syncRows.length === 0) throw new Error('لم يعثر على صفوف مدارس صالحة للمزامنة.');
 
   const existing: Array<{ id: string; source_key: string; missing_from_sheet_at: string | null }> = [];
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await supabase.from('schools')
-      .select('id,source_key,missing_from_sheet_at')
+      .select(APP_SCHEMA_SELECT.schoolsSyncState)
       .range(offset, offset + 999);
     if (error) throw new Error(`تعذر قراءة مفاتيح المدارس قبل المزامنة: ${error.message}`);
     existing.push(...data);
@@ -228,6 +304,8 @@ export async function syncSchools(configInput: SchoolSyncConfig): Promise<School
   return {
     inserted,
     updated,
+    sourceRows: sourceRowCount,
+    skippedRows,
     duplicatesWarned: duplicateNumbers.reduce((count, duplicate) => count + duplicate.rows.length - 1, 0),
     duplicateNumbers,
     flaggedMissing: missingRows.length,
@@ -237,13 +315,13 @@ export async function syncSchools(configInput: SchoolSyncConfig): Promise<School
 
 export async function runThrottledSchoolSync(): Promise<SchoolSyncResult | null> {
   if (!supabase) return null;
-  const { data, error } = await supabase.from('app_config').select('value').eq('key', 'school_sync').maybeSingle();
+  const { data, error } = await supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'school_sync').maybeSingle();
   if (error) throw error;
   if (!data) return null;
   const config = schoolSyncConfigSchema.parse(data.value);
   const { data: latest, error: latestError } = await supabase
     .from('schools')
-    .select('synced_at')
+    .select(APP_SCHEMA_SELECT.schoolsSyncTime)
     .not('synced_at', 'is', null)
     .order('synced_at', { ascending: false })
     .limit(1)

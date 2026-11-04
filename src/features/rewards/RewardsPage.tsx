@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { calculateRewardBalance, canAllocateReward } from '../../domain/rewards';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 
 const poolSchema = z.object({
   id: z.string().uuid(),
@@ -24,21 +25,21 @@ const distributionSchema = z.object({
 
 async function loadPools(month: string) {
   if (!supabase) return [];
-  const { data, error } = await supabase.from('reward_pools').select('id,reward_month:month,engineer_id,amount,status').eq('month', `${month}-01`);
+  const { data, error } = await supabase.from('reward_pools').select(APP_SCHEMA_SELECT.rewardPools).eq('month', `${month}-01`);
   if (error) throw error;
   return z.array(poolSchema).parse(data);
 }
 
 async function loadEngineers() {
   if (!supabase) return [];
-  const { data, error } = await supabase.from('profiles').select('id:employee_id,display_name:full_name').eq('role', 'area_engineer').not('employee_id', 'is', null).order('full_name');
+  const { data, error } = await supabase.from('profiles').select(APP_SCHEMA_SELECT.profileEngineer).eq('role', 'area_engineer').not('employee_id', 'is', null).order('full_name');
   if (error) throw error;
   return z.array(engineerSchema).parse(data);
 }
 
 async function loadEmployees() {
   if (!supabase) return [];
-  const { data, error } = await supabase.from('employees').select('id,full_name,job_title').in('category', ['technician', 'supervisor']).order('full_name');
+  const { data, error } = await supabase.from('employees').select(APP_SCHEMA_SELECT.employeesForRewards).in('category', ['technician', 'supervisor']).order('full_name');
   if (error) throw error;
   return z.array(employeeSchema).parse(data);
 }
@@ -46,7 +47,7 @@ async function loadEmployees() {
 async function loadDistributions(poolId: string) {
   if (!supabase) return [];
   const { data, error } = await supabase.from('reward_allocations')
-    .select('id,employee_id,amount,note,employee:employees(full_name)')
+    .select(APP_SCHEMA_SELECT.rewardAllocations)
     .eq('pool_id', poolId)
     .order('updated_at');
   if (error) throw error;

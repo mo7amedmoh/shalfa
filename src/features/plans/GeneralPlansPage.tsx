@@ -8,6 +8,7 @@ import type { GeneralPlanType } from '../../domain/types';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
 
 const planTypes = ['gardening', 'landscaping', 'sewage_waste', 'water_supply', 'tank_washing', 'pest_control', 'annual_readiness'] as const;
@@ -40,7 +41,6 @@ const rowSchema = z.object({
   status: z.enum(['planned', 'in_progress', 'done', 'cancelled']),
   execution_date: z.string().nullable(),
   notes: z.string().nullable(),
-  responses_count: z.number().int().nullable(),
   contractor_name: z.string().nullable(),
   school: z.object({ school_name: z.string(), ministry_number: z.string() }).nullable(),
 });
@@ -50,8 +50,8 @@ type CandidateData = { schools: z.infer<typeof sourceSchoolSchema>[]; eligibilit
 async function loadCandidates(): Promise<CandidateData> {
   if (!supabase) return { schools: [], eligibility: null };
   const [schoolsResult, configResult] = await Promise.all([
-    supabase.from('schools').select('id,school_name:name,ministry_number:ministry_no,source_fields:extra').order('name'),
-    supabase.from('app_config').select('value').eq('key', 'plan_eligibility').maybeSingle(),
+    supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsBasic).order('name'),
+    supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
   ]);
   if (schoolsResult.error) throw schoolsResult.error;
   if (configResult.error) throw configResult.error;
@@ -62,12 +62,12 @@ async function loadCandidates(): Promise<CandidateData> {
 async function loadGeneralRows(type: GeneralPlanType): Promise<GeneralRow[]> {
   if (!supabase) return [];
   const dbType = type === 'sewage_waste' ? 'sewage_removal' : type;
-  const { data: plans, error: plansError } = await supabase.from('general_plans').select('id').eq('plan_type', dbType);
+  const { data: plans, error: plansError } = await supabase.from('general_plans').select(APP_SCHEMA_SELECT.generalPlanId).eq('plan_type', dbType);
   if (plansError) throw plansError;
   if (!plans.length) return [];
   const { data, error } = await supabase
     .from('general_plan_rows')
-    .select('id,school_id,planned_date,status,execution_date,notes,responses_count,contractor_name,school:schools(school_name:name,ministry_number:ministry_no)')
+    .select(APP_SCHEMA_SELECT.generalPlanRows)
     .in('plan_id', plans.map(({ id }) => id))
     .order('planned_date', { ascending: false });
   if (error) throw error;
@@ -121,7 +121,7 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
       if (selectedIds.length === 0 || selectedIds.some((id) => !eligibleIds.includes(id))) throw new Error('اختر مدرسة مؤهلة واحدة على الأقل.');
       const { data: plan, error: planError } = await supabase.from('general_plans')
         .upsert({ plan_type: planType === 'sewage_waste' ? 'sewage_removal' : planType, year: Number(plannedDate.slice(0, 4)) }, { onConflict: 'plan_type,year' })
-        .select('id')
+        .select(APP_SCHEMA_SELECT.id)
         .single();
       if (planError) throw planError;
       const { error } = await supabase.from('general_plan_rows').insert(
@@ -200,8 +200,8 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
         </div>
         {rows.isLoading ? <p role="status">جارٍ تحميل السجلات…</p> : totalCount === 0 ? <p className="rounded-lg bg-slate-50 p-5 text-center text-sm text-slate-500">لا توجد مهام مسجلة لهذه الخطة.</p> : (
           <div className="table-scroll"><table>
-            <thead><tr><th>المدرسة</th><th>التاريخ المخطط</th>{planType === 'water_supply' || planType === 'sewage_waste' ? <th>عدد الردود</th> : null}<th>الحالة</th><th>تاريخ الإنجاز</th><th>الملاحظات</th><th>إجراء</th></tr></thead>
-            <tbody>{(rows.data ?? []).map((row) => <GeneralPlanRow key={row.id} row={row} showResponses={planType === 'water_supply' || planType === 'sewage_waste'} onSave={(status, notes) => updateRow.mutate({ row, status, notes })} disabled={!canManage || updateRow.isPending} />)}</tbody>
+            <thead><tr><th>المدرسة</th><th>التاريخ المخطط</th><th>المقاول</th><th>الحالة</th><th>تاريخ الإنجاز</th><th>الملاحظات</th><th>إجراء</th></tr></thead>
+            <tbody>{(rows.data ?? []).map((row) => <GeneralPlanRow key={row.id} row={row} onSave={(status, notes) => updateRow.mutate({ row, status, notes })} disabled={!canManage || updateRow.isPending} />)}</tbody>
           </table></div>
         )}
       </section>
@@ -209,13 +209,13 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   );
 }
 
-function GeneralPlanRow({ row, showResponses, onSave, disabled }: { row: GeneralRow; showResponses: boolean; onSave: (status: GeneralRow['status'], notes: string) => void; disabled: boolean }) {
+function GeneralPlanRow({ row, onSave, disabled }: { row: GeneralRow; onSave: (status: GeneralRow['status'], notes: string) => void; disabled: boolean }) {
   const [status, setStatus] = useState(row.status);
   const [notes, setNotes] = useState(row.notes ?? '');
   return <tr>
     <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small></td>
     <td>{row.planned_date}</td>
-    {showResponses && <td>{row.responses_count ?? '—'}</td>}
+    <td>{row.contractor_name ?? '—'}</td>
     <td><select value={status} onChange={(event) => { if (event.target.value === 'pending' || event.target.value === 'in_progress' || event.target.value === 'complete') setStatus(event.target.value); }} disabled={disabled} className="rounded border border-slate-300 px-2 py-1"><option value="pending">لم يبدأ</option><option value="in_progress">جارٍ</option><option value="complete">مكتمل</option></select></td>
     <td>{row.completed_at ?? '—'}</td>
     <td><input value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={2000} disabled={disabled} className="max-w-40 rounded border border-slate-300 px-2 py-1" /></td>

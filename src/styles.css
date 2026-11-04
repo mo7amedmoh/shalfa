@@ -116,9 +116,10 @@ th {
   max-width: 100%;
   overflow: auto;
   max-height: min(72vh, 900px);
-  border: 1px solid #e9ecf3;
-  border-radius: 16px;
+  border: 1px solid #cbd4e2;
+  border-radius: 12px;
   background: #fff;
+  box-shadow: 0 4px 14px rgba(27, 44, 88, 0.06);
 }
 
 .schools-source-table {
@@ -132,27 +133,48 @@ th {
 
 .schools-source-table th,
 .schools-source-table td {
-  padding: 10px 12px;
-  border-block-end: 1px solid #edf0f5;
+  padding: 11px 14px;
+  border-block-end: 1px solid #dce2ec;
+  border-inline-end: 1px solid #d6dbe5;
   white-space: normal;
-  overflow-wrap: anywhere;
-  vertical-align: top;
+  overflow-wrap: break-word;
+  vertical-align: middle;
+  line-height: 1.65;
 }
 
 .schools-source-table thead th {
   position: sticky;
   inset-block-start: 0;
   z-index: 3;
-  background: #f8f9fc;
-  box-shadow: 0 1px 0 #e1e5ee;
+  padding-block: 13px;
+  background: #24304d;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 2px 5px rgba(15, 23, 42, 0.14);
+}
+
+.schools-source-table tbody tr:nth-child(even) td {
+  background: #f7f9fc;
+}
+
+.schools-source-table tbody td {
+  color: #26334e;
+  font-size: 0.875rem;
 }
 
 .schools-source-table tbody tr:hover td {
-  background: #eef2fa !important;
+  background: #eaf0fa !important;
 }
 
 .schools-source-table tbody tr.school-row-missing td {
-  background: #fff8e6;
+  background: #fff8e6 !important;
+}
+
+.schools-source-table th:last-child,
+.schools-source-table td:last-child {
+  border-inline-end: 0;
 }
 
 .school-marker-icon {
@@ -214,6 +236,11 @@ th {
     margin: 12mm;
   }
 
+  @page monthly-report {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+
   .sidebar,
   .no-print,
   .app-shell > .main-area > header,
@@ -238,5 +265,31 @@ th {
   .card {
     box-shadow: none;
     break-inside: avoid;
+  }
+
+  .monthly-report-print {
+    page: monthly-report;
+    display: block;
+    color: #111827;
+  }
+
+  .monthly-report-print .table-scroll {
+    overflow: visible;
+  }
+
+  .monthly-report-print table tr,
+  .monthly-report-print .report-keep {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .monthly-report-print .supervisor-heatmap th,
+  .monthly-report-print .supervisor-heatmap td {
+    padding: 3px 4px;
+    font-size: 7pt;
+  }
+
+  .monthly-report-print button {
+    color: inherit;
   }
 }

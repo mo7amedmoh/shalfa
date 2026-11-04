@@ -8,6 +8,7 @@ import { calculateStaffing, parseClassCount, type StaffingResult } from '../../d
 import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
 
 const configSchema = z.object({
@@ -55,12 +56,12 @@ type SchoolSummary = { school: School; staffing: StaffingResult; neighborhood: s
 async function loadPlacementData(): Promise<SchoolData> {
   if (!supabase) return { schools: [], employees: [], assignments: [], overrides: new Map(), config: null };
   const [schoolsResult, employeeResult, assignmentResult, sizesResult, exceptionResult, configResult] = await Promise.all([
-    supabase.from('schools').select('id,school_name:name,ministry_number:ministry_no,source_fields:extra,size_source').order('name'),
-    supabase.from('employees').select('id,full_name,employee_number:employee_no,job_title,phone').eq('category', 'cleaner').order('full_name'),
-    supabase.from('cleaner_assignments').select('id,school_id,employee_id,labour_source,employee:employees(full_name,employee_number:employee_no)'),
-    supabase.from('school_size_corrections').select('school_id,corrected_size'),
-    supabase.from('staffing_exceptions').select('school_id,required_count,reason'),
-    supabase.from('app_config').select('value').eq('key', 'plan_eligibility').maybeSingle(),
+    supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsWithSize).order('name'),
+    supabase.from('employees').select(APP_SCHEMA_SELECT.employeesBasic).eq('category', 'cleaner').order('full_name'),
+    supabase.from('cleaner_assignments').select(APP_SCHEMA_SELECT.cleanerAssignments),
+    supabase.from('school_size_corrections').select(APP_SCHEMA_SELECT.schoolSizeCorrection),
+    supabase.from('staffing_exceptions').select(APP_SCHEMA_SELECT.staffingException),
+    supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
   ]);
   for (const result of [schoolsResult, employeeResult, assignmentResult, sizesResult, exceptionResult, configResult]) {
     if (result.error) throw result.error;

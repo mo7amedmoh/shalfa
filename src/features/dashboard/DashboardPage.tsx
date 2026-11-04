@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { staffingRowsForEligibleSchools, summarizeDashboardPlans, summarizeDashboardStaffing, summarizeDashboardVisits } from '../../domain/dashboard';
 import type { PlanEligibilityConfig } from '../../domain/planEligibility';
 import { supabase } from '../../lib/supabase';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 
 const planTypeSchema = z.enum(['maintenance', 'cleaning', 'security_safety', 'elevators']);
@@ -47,7 +48,7 @@ function currentMonth(): string {
 async function loadCurrentPlanRows() {
   if (!supabase) return [];
   const { data, error } = await supabase.from('monthly_plans')
-    .select('plan_type,monthly_plan_rows(visited_at:visited_date,report_completed_at:report_done_date)')
+    .select(APP_SCHEMA_SELECT.monthlyPlanDashboard)
     .eq('month', `${currentMonth()}-01`);
   if (error) throw error;
   return z.array(planSchema).parse(data).flatMap((plan) =>
@@ -62,11 +63,11 @@ async function loadCurrentPlanRows() {
 async function loadStaffingSchools(): Promise<SchoolData> {
   if (!supabase) return { schools: [], assignmentCounts: new Map(), overrides: new Map(), config: null };
   const [schoolsResult, assignmentsResult, overridesResult, exceptionsResult, configResult] = await Promise.all([
-    supabase.from('schools').select('id,source_fields:extra,size_source'),
-    supabase.from('cleaner_assignments').select('school_id'),
-    supabase.from('school_size_corrections').select('school_id,corrected_size'),
-    supabase.from('staffing_exceptions').select('school_id,required_count,reason'),
-    supabase.from('app_config').select('value').eq('key', 'plan_eligibility').maybeSingle(),
+    supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsDashboard),
+    supabase.from('cleaner_assignments').select(APP_SCHEMA_SELECT.cleanerAssignmentSchool),
+    supabase.from('school_size_corrections').select(APP_SCHEMA_SELECT.schoolSizeCorrection),
+    supabase.from('staffing_exceptions').select(APP_SCHEMA_SELECT.staffingException),
+    supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
   ]);
   for (const result of [schoolsResult, assignmentsResult, overridesResult, exceptionsResult, configResult]) {
     if (result.error) throw result.error;

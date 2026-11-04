@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { z } from 'zod';
 import { supabase } from '../../lib/supabase';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 
 const userSchema = z.object({
   id: z.string().uuid(),
@@ -35,7 +36,7 @@ const roleLabels: Record<AppUser['role'], string> = {
 async function loadUsers(): Promise<AppUser[]> {
   if (!supabase) return [];
   const { data, error } = await supabase.from('profiles')
-    .select('id,username,role,display_name:full_name,phone,employee_id')
+    .select(APP_SCHEMA_SELECT.profile)
     .order('full_name');
   if (error) throw error;
   return usersSchema.parse(data);

@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { loadEnv } from 'vite';
+import { APP_SCHEMA_SELECT } from '../src/lib/schemaColumns';
 
 const roles = ['ADMIN', 'PROJECT_MANAGER', 'AREA_ENGINEER', 'REPORT_FOLLOWER', 'SUPERVISOR', 'VIEWER'] as const;
 type TestRole = (typeof roles)[number];
@@ -54,7 +55,7 @@ if (!configured.length) {
 
     const privileged = role === 'ADMIN' || role === 'PROJECT_MANAGER';
     const { data: profile, error: profileError } = await client.from('profiles')
-      .select('id,username')
+      .select(APP_SCHEMA_SELECT.profileForEdit)
       .eq('id', signedIn.user.id)
       .single();
     if (profileError || !profile) {
@@ -64,7 +65,7 @@ if (!configured.length) {
       const { data: changed, error: usernameError } = await client.from('profiles')
         .update({ username: probe })
         .eq('id', profile.id)
-        .select('id')
+        .select(APP_SCHEMA_SELECT.id)
         .maybeSingle();
       if (!usernameError) {
         if (changed) {
@@ -76,7 +77,7 @@ if (!configured.length) {
     }
 
     for (const table of ['employees', 'gatekeepers'] as const) {
-      const { error } = await client.from(table).select('residence_no').limit(1);
+      const { error } = await client.from(table).select(table === 'employees' ? APP_SCHEMA_SELECT.employeeResidence : APP_SCHEMA_SELECT.gatekeeperResidence).limit(1);
       if (!error) failures.push(`${role}: residence_no is selectable on ${table}`);
     }
 
@@ -91,14 +92,32 @@ if (!configured.length) {
       ['kpi_penalty_entries', 'id'],
       ['kpi_card_scores', 'kpi_month_id'],
       ['kpi_month_totals', 'kpi_month_id'],
-      ['checklist_items', 'id'],
-      ['deliverables', 'id'],
     ] as const;
     for (const [table, column] of restrictedReads) {
       const { data, error } = await client.from(table).select(column).limit(1);
       if (privileged && error) failures.push(`${role}: cannot read ${table} (${error.message})`);
       if (!privileged && (error || (data?.length ?? 0) > 0)) {
         failures.push(`${role}: non-privileged role can read ${table}`);
+      }
+      const { data: deliverables, error: deliverablesError } = await client.from('deliverables')
+        .select(APP_SCHEMA_SELECT.id)
+        .limit(1);
+      const canReadDeliverables = role === 'ADMIN' || role === 'PROJECT_MANAGER' || role === 'AREA_ENGINEER';
+      if (canReadDeliverables && deliverablesError) {
+        failures.push(`${role}: cannot read deliverables (${deliverablesError.message})`);
+      }
+      if (!canReadDeliverables && (deliverablesError || (deliverables?.length ?? 0) > 0)) {
+        failures.push(`${role}: non-authorized role can read deliverables`);
+      }
+      const { data: checklistItems, error: checklistError } = await client.from('checklist_items')
+        .select(APP_SCHEMA_SELECT.id)
+        .limit(1);
+      const canReadChecklist = role === 'ADMIN' || role === 'PROJECT_MANAGER' || role === 'AREA_ENGINEER';
+      if (canReadChecklist && checklistError) {
+        failures.push(`${role}: cannot read checklist_items (${checklistError.message})`);
+      }
+      if (!canReadChecklist && (checklistError || (checklistItems?.length ?? 0) > 0)) {
+        failures.push(`${role}: non-authorized role can read checklist_items`);
       }
     }
     await client.auth.signOut();

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { NavLink, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { getUserProfile, signInWithEmail, type UserProfile } from '../lib/auth';
 import { runThrottledSchoolSync } from '../lib/schoolSync';
@@ -173,6 +173,7 @@ function AppShell({
   syncNotice: string;
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const location = useLocation();
   const isAdmin = profile?.role === 'admin';
   const preferences = useQuery({
@@ -196,7 +197,15 @@ function AppShell({
     return 'منصة إدارة المرافق المدرسية';
   }, [location.pathname]);
 
-  useEffect(() => setSidebarOpen(false), [location.pathname]);
+  useEffect(() => {
+    setSidebarOpen(false);
+    const activeGroup = navigation.find((item) =>
+      'children' in item && item.children?.some(([, path]) => path === location.pathname),
+    );
+    if (activeGroup) {
+      setExpandedGroups((current) => ({ ...current, [activeGroup.label]: true }));
+    }
+  }, [location.pathname]);
 
   return (
     <PreferencesProvider value={preferences.data ?? defaultPreferences}>
@@ -215,12 +224,25 @@ function AppShell({
                   <NavLink to={item.path!} end className="nav-link"><Icon size={19} /><span>{item.label}</span></NavLink>
                 ) : (
                   <>
-                    <div className="nav-link cursor-default"><Icon size={19} /><span className="font-semibold">{item.label}</span><ChevronDown size={16} className="me-auto" /></div>
-                    <div className="me-4 grid border-e border-slate-200 pe-2">
+                    <button
+                      type="button"
+                      className="nav-link w-full text-start"
+                      aria-expanded={Boolean(expandedGroups[item.label])}
+                      aria-controls={`nav-group-${navigation.indexOf(item)}`}
+                      onClick={() => setExpandedGroups((current) => ({
+                        ...current,
+                        [item.label]: !current[item.label],
+                      }))}
+                    >
+                      <Icon size={19} />
+                      <span className="font-semibold">{item.label}</span>
+                      <ChevronDown size={16} className={`me-auto transition-transform ${expandedGroups[item.label] ? 'rotate-180' : ''}`} />
+                    </button>
+                    {expandedGroups[item.label] && <div id={`nav-group-${navigation.indexOf(item)}`} className="me-4 grid border-e border-slate-200 pe-2">
                       {item.children?.map(([label, path]) => (
                         <NavLink key={path} to={path} className="nav-link min-h-9 text-sm" aria-current={location.pathname === path ? 'page' : undefined}>{label}</NavLink>
                       ))}
-                    </div>
+                    </div>}
                   </>
                 )}
               </section>
@@ -281,6 +303,7 @@ function AppShell({
 }
 
 export function App() {
+  const queryClient = useQueryClient();
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [syncNotice, setSyncNotice] = useState('');
@@ -324,10 +347,11 @@ export function App() {
     void runThrottledSchoolSync()
       .then((result) => {
         if (active && result !== null) {
+          void queryClient.invalidateQueries({ queryKey: ['schools'] });
           const duplicatesNotice = result.duplicatesWarned > 0
             ? ` يوجد ${result.duplicatesWarned} صفاً برقم وزاري مكرر.`
             : '';
-          setSyncNotice(`اكتملت المزامنة التلقائية: جديد ${result.inserted}، محدث ${result.updated}، معلّم كمفقود ${result.flaggedMissing}، إحداثيات ناقصة/غير صالحة ${result.invalidCoordinates}.${duplicatesNotice}`);
+          setSyncNotice(`اكتملت المزامنة التلقائية: صفوف المصدر ${result.sourceRows}، مستبعدة لنقص الرقم الوزاري ${result.skippedRows.missingMinistryNumber} أو الاسم ${result.skippedRows.missingSchoolName}، جديد ${result.inserted}، محدث ${result.updated}، معلّم كمفقود ${result.flaggedMissing}، إحداثيات ناقصة/غير صالحة ${result.invalidCoordinates}.${duplicatesNotice}`);
         }
       })
       .catch((error: unknown) => {
@@ -335,7 +359,7 @@ export function App() {
         if (active) setSyncNotice('تعذرت المزامنة التلقائية. راجع إعدادات المصدر والاتصال.');
       });
     return () => { active = false; };
-  }, [profile]);
+  }, [profile, queryClient]);
 
   async function signOut() {
     if (!supabase) return;

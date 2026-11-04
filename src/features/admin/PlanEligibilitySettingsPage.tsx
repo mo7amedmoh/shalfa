@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import type { PlanEligibilityConfig } from '../../domain/planEligibility';
 import { supabase } from '../../lib/supabase';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 
 const configSchema = z.object({
   buildingTypeHeader: z.string().trim().min(1),
@@ -28,7 +29,7 @@ const initialConfig: EligibilitySettings = {
 
 async function loadEligibility(): Promise<EligibilitySettings | null> {
   if (!supabase) return null;
-  const { data, error } = await supabase.from('app_config').select('key,value').eq('key', 'plan_eligibility').maybeSingle();
+  const { data, error } = await supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfig).eq('key', 'plan_eligibility').maybeSingle();
   if (error) throw error;
   return data ? savedSchema.parse(data).value : null;
 }

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { supabase } from './supabase';
+import { APP_SCHEMA_SELECT } from './schemaColumns';
 
 export const preferencesSchema = z.object({
   numerals: z.enum(['latin', 'arabic_indic']),
@@ -35,7 +36,7 @@ export function normalizePreferences(value: unknown): UserPreferences {
 
 export async function loadUserPreferences(userId: string): Promise<UserPreferences> {
   if (!supabase) return defaultPreferences;
-  const { data, error } = await supabase.from('profiles').select('prefs').eq('id', userId).maybeSingle();
+  const { data, error } = await supabase.from('profiles').select(APP_SCHEMA_SELECT.profilePrefs).eq('id', userId).maybeSingle();
   if (error) throw error;
   return data ? normalizePreferences(data.prefs) : defaultPreferences;
 }

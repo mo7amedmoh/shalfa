@@ -8,6 +8,7 @@ import { FileDown, Eye, EyeOff, Search, Upload } from 'lucide-react';
 import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 
 const employeeSchema = z.object({
   id: z.string().uuid(),
@@ -59,7 +60,7 @@ function categoryFromArabic(value: string) {
 async function loadEmployees(): Promise<Employee[]> {
   if (!supabase) return [];
   const { data, error } = await supabase.from('employees')
-    .select('id,full_name,employee_number:employee_no,job_title,employee_category:category,department,nationality,hire_date,employment_status:status,phone,manager_id')
+    .select(APP_SCHEMA_SELECT.employeesCleaner)
     .order('full_name');
   if (error) throw error;
   return z.array(employeeSchema).parse(data);
@@ -67,7 +68,7 @@ async function loadEmployees(): Promise<Employee[]> {
 
 async function loadRatings(): Promise<Map<string, number | null>> {
   if (!supabase) return new Map();
-  const { data, error } = await supabase.from('employee_ratings').select('employee_id,rating');
+  const { data, error } = await supabase.from('employee_ratings').select(APP_SCHEMA_SELECT.employeeRatings);
   if (error) throw error;
   const ratings = z.array(ratingSchema).parse(data);
   return new Map(ratings.map((item) => [item.employee_id, item.rating]));
@@ -203,7 +204,7 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
           hire_date: row.hireDate,
           status: row.status,
           manager_id: managerId,
-        }, { onConflict: 'employee_no' }).select('id').single();
+        }, { onConflict: 'employee_no' }).select(APP_SCHEMA_SELECT.id).single();
         if (error) throw new Error(`تعذر حفظ الموظف في الصف ${index + 2}: ${error.message}`);
         employeeNumbers.set(row.employee_number, data.id);
         if (row.rating !== null) {

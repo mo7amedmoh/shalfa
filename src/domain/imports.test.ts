@@ -77,15 +77,13 @@ describe('monthly plan workbook parser', () => {
       'تاريخ المصاعد',
       'شركة المصاعد',
       'تاريخ توريد المياه',
-      'عدد الردود',
       'ملاحظات توريد مياة',
       'تاريخ النزح',
-      'عدد الردود',
       'ملاحظات النزح',
     ];
     const rows = parseMonthlyPlanRows(headers, [[
       '000123', 'مستقل', 'مهندس مجهول', 46300, 'مشرف تجريبي', 46300, 'مشرف تجريبي',
-      '', '', '', 'شركة تجريبية', '', 'لا ينطبق', 46300, 2, 'ملاحظة', '', 0, '',
+      '', '', '', 'شركة تجريبية', '', 'لا ينطبق', 46300, 'ملاحظة', '', '',
     ]], 'تاريخ الصيانة', 'مشرف الصيانة');
 
     expect(rows[0]).toMatchObject({
@@ -101,8 +99,6 @@ describe('monthly plan workbook parser', () => {
       ministry: ['الرقم الوزاري'],
       class: ['تصنيف الوحدة'],
       date: ['تاريخ الصيانة'],
-      waterResponses: { aliases: ['عدد الردود'], occurrence: 0 },
-      sewageResponses: { aliases: ['عدد الردود'], occurrence: 1 },
-    })).toEqual({ ministry: 0, class: 1, date: 3, waterResponses: 14, sewageResponses: 17 });
+    })).toEqual({ ministry: 0, class: 1, date: 3 });
   });
 });

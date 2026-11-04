@@ -14,7 +14,9 @@
     "seed:kpi": "tsx scripts/seed-kpi.ts",
     "seed:kpi:database": "tsx scripts/seed-kpi-database.ts",
     "seed:checklist": "tsx scripts/seed-checklist.ts",
-    "verify:rls": "tsx scripts/verify-rls.ts"
+    "seed:deliverables": "tsx scripts/seed-deliverables.ts",
+    "verify:rls": "tsx scripts/verify-rls.ts",
+    "verify:schema": "tsx scripts/verify-schema.ts"
   },
   "dependencies": {
     "@fontsource/cairo": "5.2.6",

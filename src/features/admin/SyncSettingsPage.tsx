@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { duplicateMinistryRows } from '../../domain/schoolMap';
 import { schoolSyncConfigSchema, syncSchools, type SchoolSyncConfig, type SchoolSyncResult } from '../../lib/schoolSync';
 import { supabase } from '../../lib/supabase';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { DuplicateSchoolWarning } from '../schools/SchoolSyncWarnings';
 
 const persistedConfigSchema = z.object({
@@ -19,7 +20,7 @@ const schoolStatusSchema = z.object({
 
 async function loadConfig(): Promise<SchoolSyncConfig | null> {
   if (!supabase) return null;
-  const { data, error } = await supabase.from('app_config').select('key,value').eq('key', 'school_sync').maybeSingle();
+  const { data, error } = await supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfig).eq('key', 'school_sync').maybeSingle();
   if (error) throw error;
   if (!data) return null;
   return persistedConfigSchema.parse(data).value;
@@ -28,7 +29,7 @@ async function loadConfig(): Promise<SchoolSyncConfig | null> {
 async function loadSchoolStatus() {
   if (!supabase) return [];
   const { data, error } = await supabase.from('schools')
-    .select('ministry_number:ministry_no,source_row,missing_from_sheet_at')
+    .select(APP_SCHEMA_SELECT.schoolsMissingRows)
     .order('source_row');
   if (error) throw error;
   return z.array(schoolStatusSchema).parse(data);
@@ -72,7 +73,12 @@ export function SyncSettingsPage() {
     mutationFn: () => syncSchools(values),
     onSuccess: async (result) => {
       setLastReport(result);
-      setMessage(`اكتملت المزامنة. جديد: ${result.inserted} · محدث: ${result.updated} · صفوف مكررة للتنبيه: ${result.duplicatesWarned} · معلّمة كمفقودة: ${result.flaggedMissing} · إحداثيات ناقصة/غير صالحة: ${result.invalidCoordinates}`);
+      const missingNumberRows = result.skippedRows.missingMinistryNumberRows;
+      const { position: ministryColumnPosition, header: ministryColumnHeader } = result.skippedRows.ministryNumberColumn;
+      const missingNumberRowsNotice = missingNumberRows.length
+        ? ` · العمود المقروء: ${ministryColumnHeader} (العمود ${ministryColumnPosition}) · الصفوف/المدارس والقيم المجاورة: ${missingNumberRows.map(({ sourceRow, schoolName, nearbyCells }) => `${sourceRow} (${schoolName || 'بلا اسم'}: ${nearbyCells.map(({ position, header, value }) => `#${position} ${header}=${value || '∅'}`).join(' | ')})`).join('، ')}`
+        : '';
+      setMessage(`اكتملت المزامنة. صفوف المصدر: ${result.sourceRows} · مدارس مستوردة: ${result.inserted + result.updated} · مستبعدة لنقص الرقم الوزاري: ${result.skippedRows.missingMinistryNumber}${missingNumberRowsNotice}، ونقص الاسم: ${result.skippedRows.missingSchoolName} · جديد: ${result.inserted} · محدث: ${result.updated} · صفوف مكررة للتنبيه: ${result.duplicatesWarned} · معلّمة كمفقودة: ${result.flaggedMissing} · إحداثيات ناقصة/غير صالحة: ${result.invalidCoordinates}`);
       await queryClient.invalidateQueries({ queryKey: ['schools'] });
       await queryClient.invalidateQueries({ queryKey: ['school-sync-status'] });
     },

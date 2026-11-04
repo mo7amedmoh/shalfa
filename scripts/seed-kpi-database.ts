@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
+import { APP_SCHEMA_SELECT } from '../src/lib/schemaColumns';
 import { z } from 'zod';
 import { loadEnv } from 'vite';
 
@@ -68,7 +69,7 @@ const { data: kpiMonth, error: monthError } = await supabase.from('kpi_months').
   project_no: 'All',
   region: 'المنطقة الوسطى',
   contractor: 'شركة شلفا لإدارة المرافق',
-}, { onConflict: 'month,work_order' }).select('id,status').single();
+}, { onConflict: 'month,work_order' }).select(APP_SCHEMA_SELECT.kpiMonth).single();
 if (monthError) throw new Error(`KPI month seed failed: ${monthError.message}`);
 
 if (kpiMonth.status !== 'approved') {

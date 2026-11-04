@@ -1,0 +1,1 @@
+grant select (employee_no) on public.gatekeepers to authenticated;

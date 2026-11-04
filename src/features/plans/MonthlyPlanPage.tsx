@@ -7,6 +7,7 @@ import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/plan
 import type { PlanType } from '../../domain/types';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
 
@@ -50,8 +51,8 @@ const planTitles: Record<PlanType, string> = {
 async function loadCandidates(): Promise<CandidateData> {
   if (!supabase) return { schools: [], eligibility: null };
   const [schoolsResult, settingsResult] = await Promise.all([
-    supabase.from('schools').select('id,school_name:name,ministry_number:ministry_no,source_fields:extra').order('name'),
-    supabase.from('app_config').select('value').eq('key', 'plan_eligibility').maybeSingle(),
+    supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsBasic).order('name'),
+    supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
   ]);
   if (schoolsResult.error) throw schoolsResult.error;
   if (settingsResult.error) throw settingsResult.error;
@@ -66,7 +67,7 @@ async function loadPlans(planType: PlanType) {
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('monthly_plans')
-    .select('id,plan_month:month,created_by')
+    .select(APP_SCHEMA_SELECT.monthlyPlanList)
     .eq('plan_type', planType)
     .order('month', { ascending: false });
   if (error) throw error;
@@ -77,7 +78,7 @@ async function loadPlanRows(planId: string): Promise<PlanRow[]> {
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('monthly_plan_rows')
-    .select('id,school_id,planned_date,visited_at:visited_date,report_completed_at:report_done_date,contractor_name,school:schools(school_name:name,ministry_number:ministry_no)')
+    .select(APP_SCHEMA_SELECT.monthlyPlanRows)
     .eq('plan_id', planId)
     .order('planned_date');
   if (error) throw error;
@@ -170,7 +171,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
       const { data: createdPlan, error: createError } = await supabase
         .from('monthly_plans')
         .insert({ month: `${month}-01`, plan_type: planType, created_by: profile.id })
-        .select('id')
+        .select(APP_SCHEMA_SELECT.id)
         .single();
       if (createError) throw createError;
       const { error: rowsError } = await supabase.from('monthly_plan_rows').insert(

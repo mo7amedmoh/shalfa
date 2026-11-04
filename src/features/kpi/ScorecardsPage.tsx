@@ -5,6 +5,9 @@ import { calculateMonthlyKpiTotal, scoreByIndicatorId, type FormulaInputs } from
 import { ratingBand } from '../../domain/kpi/scoring';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
+import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
+import { Link } from 'react-router-dom';
+import { summarizeDeliverables, type DeliverableDueDates } from '../../domain/deliverables';
 
 const cardSchema = z.object({
   code: z.enum(['CM', 'OM', 'HS', 'SS']),
@@ -55,6 +58,17 @@ const kpiMonthSchema = z.object({
   status: z.enum(['draft', 'submitted', 'approved']),
   entries: z.array(kpiEntrySchema),
 });
+const deliverablesSummarySchema = z.array(z.object({
+  due_basis: z.string().nullable(),
+  duration_days: z.number().int().nullable(),
+  due_date: z.string().nullable(),
+  status: z.enum(['not_delivered', 'delivered_pending', 'approved']),
+}));
+const deliverablesDatesSchema = z.object({
+  contract_signing_date: z.string(),
+  site_handover_date: z.string(),
+  award_letter_date: z.string().nullable(),
+});
 type KpiCard = z.infer<typeof cardSchema>;
 const cardNames: Record<KpiCard['code'], string> = {
   CM: 'إدارة العقد',
@@ -65,6 +79,11 @@ const cardNames: Record<KpiCard['code'], string> = {
 const region = 'المنطقة الوسطى';
 const workOrder = 'TBC005754 & TBC006484';
 type IndicatorValues = FormulaInputs & { evidence?: string };
+
+function localToday(): string {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
 
 function currentMonth(): string {
   const date = new Date();
@@ -83,8 +102,8 @@ function parseSavedValues(rows: z.infer<typeof kpiEntrySchema>[]): Record<string
 async function loadKpiCatalog(): Promise<KpiCard[]> {
   if (!supabase) throw new Error('يلزم تسجيل الدخول لعرض بيانات مؤشرات الأداء.');
   const [indicatorsResult, weightsResult] = await Promise.all([
-    supabase.from('kpi_indicators').select('code,card,seq,name,importance,frequency,description,formula_text,target_text,source_ref,required_data').order('card').order('seq'),
-    supabase.from('kpi_card_weights').select('card,weight'),
+    supabase.from('kpi_indicators').select(APP_SCHEMA_SELECT.kpiIndicators).order('card').order('seq'),
+    supabase.from('kpi_card_weights').select(APP_SCHEMA_SELECT.kpiWeights),
   ]);
   if (indicatorsResult.error) throw indicatorsResult.error;
   if (weightsResult.error) throw weightsResult.error;
@@ -115,17 +134,40 @@ async function loadKpiCatalog(): Promise<KpiCard[]> {
 async function loadScorecards(month: string) {
   if (!supabase) throw new Error('يلزم تسجيل الدخول لعرض بيانات مؤشرات الأداء.');
   const { data: kpiMonth, error: monthError } = await supabase.from('kpi_months')
-    .select('id,status')
+    .select(APP_SCHEMA_SELECT.kpiMonth)
     .eq('month', `${month}-01`)
     .eq('work_order', workOrder)
     .maybeSingle();
   if (monthError) throw monthError;
   if (!kpiMonth) return null;
   const { data: entries, error: entriesError } = await supabase.from('kpi_entries')
-    .select('indicator_code,extra')
+    .select(APP_SCHEMA_SELECT.kpiEntries)
     .eq('kpi_month_id', kpiMonth.id);
   if (entriesError) throw entriesError;
   return kpiMonthSchema.parse({ ...kpiMonth, entries });
+}
+
+async function loadDeliverablesSummary() {
+  if (!supabase) throw new Error('يلزم تسجيل الدخول لعرض بيانات المخرجات.');
+  const [deliverablesResult, settingsResult] = await Promise.all([
+    supabase.from('deliverables').select(APP_SCHEMA_SELECT.deliverablesSummary),
+    supabase.from('app_settings').select(APP_SCHEMA_SELECT.appSettingsDeliverables).eq('id', 1).single(),
+  ]);
+  if (deliverablesResult.error) throw deliverablesResult.error;
+  if (settingsResult.error) throw settingsResult.error;
+  const items = deliverablesSummarySchema.parse(deliverablesResult.data);
+  const settings = deliverablesDatesSchema.parse(settingsResult.data);
+  const dates: DeliverableDueDates = {
+    contractSigningDate: settings.contract_signing_date,
+    siteHandoverDate: settings.site_handover_date,
+    awardLetterDate: settings.award_letter_date,
+  };
+  return summarizeDeliverables(items.map((item) => ({
+    dueBasis: item.due_basis,
+    durationDays: item.duration_days,
+    dueDateOverride: item.due_date,
+    status: item.status,
+  })), dates, localToday());
 }
 
 export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
@@ -140,6 +182,11 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
     queryKey: ['kpi-scorecards', month],
     queryFn: () => loadScorecards(month),
     enabled: Boolean(supabase && canEdit),
+  });
+  const deliverablesSummary = useQuery({
+    queryKey: ['deliverables-summary'],
+    queryFn: loadDeliverablesSummary,
+    enabled: Boolean(supabase && profile),
   });
   const canApprove = profile?.role === 'admin' || profile?.role === 'project_manager';
   const savedRows = scorecards.data?.entries ?? [];
@@ -168,7 +215,7 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
         work_order: workOrder,
         region,
         contractor: 'شركة شلفا لإدارة المرافق',
-      }, { onConflict: 'month,work_order' }).select('id').single();
+      }, { onConflict: 'month,work_order' }).select(APP_SCHEMA_SELECT.id).single();
       if (monthError) throw monthError;
       const rows = cards.flatMap((card) => card.indicators.map((indicator) => {
         const input = values[indicator.id];
@@ -235,6 +282,17 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
       {catalogQuery.isLoading && <p role="status" className="card p-5 text-center">جارٍ تحميل تعريفات المؤشرات الرسمية…</p>}
       {catalogQuery.error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">تعذر تحميل تعريفات المؤشرات: {catalogQuery.error.message}</p>}
       {!canEdit && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">بيانات مؤشرات الأداء متاحة لمدير النظام ومدير المشروع فقط.</p>}
+
+      {deliverablesSummary.error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">تعذر تحميل ملخص المخرجات: {deliverablesSummary.error.message}</p>}
+      {deliverablesSummary.data && <Link to="/kpi/deliverables" className="card grid gap-3 p-4 transition hover:border-brand-300" aria-label="فتح متابعة المخرجات التعاقدية">
+        <div className="flex items-center justify-between gap-2"><h3 className="font-bold text-brand-900">ملخص المخرجات التعاقدية</h3><span className="text-sm text-brand-700 underline">فتح المتابعة</span></div>
+        <div className="grid grid-cols-3 gap-2 text-sm">
+          <p>تم التسليم <strong>{deliverablesSummary.data.delivered}</strong></p>
+          <p>معتمد <strong>{deliverablesSummary.data.approved}</strong></p>
+          <p className={deliverablesSummary.data.late ? 'text-rose-700' : ''}>متأخر <strong>{deliverablesSummary.data.late}</strong></p>
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-brand-700" style={{ width: `${deliverablesSummary.data.progressPercent}%` }} /></div>
+      </Link>}
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="ملخص نتائج البطاقات">
         {cards.map((card) => {

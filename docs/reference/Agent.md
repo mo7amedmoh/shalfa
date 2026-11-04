@@ -46,7 +46,7 @@ Reports/incidents (البلاغات) are handled by a separate platform and are 
 - **Maps:** Leaflet + OpenStreetMap tiles (free, no key).
 - **School data source:** Google Sheet  
   `https://docs.google.com/spreadsheets/d/1RQo06DqRHv24M8bh1CmJbOl4c_GmoLPXKkHK_sVIoI8`  
-  Read through the Google Visualization CSV endpoint (`/gviz/tq?tqx=out:csv&sheet=<name>`). Parse with `papaparse`. Upsert into Postgres (`schools`) keyed by the ministry number (الرقم الوزاري). Auto-sync on app start (throttled to once per N minutes) + manual "مزامنة الآن" button for admins. Store `last_synced_at` and show it.
+  Read through the Google Visualization CSV endpoint (`/gviz/tq?tqx=out:csv&sheet=<name>`). Parse with `papaparse`. Upsert into Postgres (`schools`) by `source_key` (normalized ministry number + occurrence in sheet); ministry numbers are not unique and duplicates must never be skipped. Preserve every ordered `{header, value}` in `source_columns`, including repeated headers, report duplicate row numbers, and mark rows absent from later syncs without deleting them. Auto-sync on app start (throttled to once per N minutes) + manual "مزامنة الآن" button for admins.
 - **PDF export:** must render Arabic correctly (shaping + RTL). Preferred: a dedicated print stylesheet + `window.print()` for the report page; if a library is needed use `pdfmake` with embedded Cairo. Verify Arabic output visually before calling it done.
 - **Excel import/export:** `xlsx` (SheetJS) only where needed (KPI/checklist seed import, exports).
 - **Deploy:** static hosting on a free host (Cloudflare Pages / Netlify / GitHub Pages). Document in `README.md`.
@@ -73,7 +73,7 @@ Enforce with **Postgres RLS policies** (not only UI guards). Ratings live in a s
 4. المباني المدرسية — table + interactive map.
 5. القوى العاملة.
 6. أعمال إدارية — تسكين العمالة · تسكين البوابين · مكافأة الفنيين.
-7. مؤشرات الأداء — بطاقات الأداء الشهرية · قائمة الفحص (CM/OM) · المخرجات التعاقدية (28).
+7. مؤشرات الأداء — بطاقات الأداء الشهرية · المخرجات التعاقدية (28). قائمة الفحص CM/OM موجودة في قاعدة البيانات لكنها خاملة ولا تظهر كصفحة أو عنصر قائمة.
 8. حسابي.
 
 Admin-only extras (allowed without approval): المستخدمون والصلاحيات · المزامنة والإعدادات · سجل التدقيق.
@@ -84,7 +84,7 @@ Admin-only extras (allowed without approval): المستخدمون والصلا�
 Four plan types: `maintenance`, `cleaning`, `security_safety`, `elevators`.
 
 - A plan = one month + one type. A plan row = a school + planned date.
-- Eligible schools: **independent buildings + primary shared** (المباني المستقلة + المشترك الأساسي). For **elevators**: only schools with an elevator contractor.
+- All monthly and general plans exclude annex-shared schools (`مشترك ملحق`). Monthly plans otherwise use the shared `planEligibility.ts` rule; **elevators** additionally require an elevator contractor.
 - Created by the area engineer; followed by him and the report follower. For each row they mark: **visited** (تمت الزيارة + actual date) and **report completed** (تم إنجاز التقرير + date).
 - Bulk-generate a plan from eligible schools with a date-distribution helper (e.g. N schools/day, skip Fri/Sat); every date editable.
 - Overdue = planned date passed and (not visited or report not done).
@@ -105,6 +105,7 @@ Generic plan engine reusable for gardening, landscaping, sewage-waste removal, t
 - Read-only mirror of the Google Sheet (see §4). Auto-sync + manual sync + `last_synced_at`.
 - Table with search/filters (neighbourhood, size, type, region), column chooser, CSV export.
 - **Interactive map** (Leaflet): one marker per school using the sheet's coordinates (validate lat/lng; list schools with missing/invalid coordinates). Marker clustering. Clicking a marker opens a panel with **all** school fields from the database. Same panel from the table row.
+- Preserve the source's exact header order and values. Persist only the schools query for read-only offline use; never persist personal employee/gatekeeper data or residence numbers. Show the last cached update and note that map tiles may be unavailable offline.
 - Never edit source data locally except through documented override fields (e.g. corrected size) stored separately.
 
 ### 7.5 Workforce (القوى العاملة)

@@ -1,7 +1,6 @@
 import { useParams } from 'react-router-dom';
 import { SyncSettingsPage } from '../admin/SyncSettingsPage';
 import { PlanEligibilitySettingsPage } from '../admin/PlanEligibilitySettingsPage';
-import { ChecklistPage } from '../kpi/ChecklistPage';
 import { ScorecardsPage } from '../kpi/ScorecardsPage';
 import type { UserProfile } from '../../lib/auth';
 
@@ -10,7 +9,6 @@ type ModuleSection = 'kpi' | 'admin';
 const labels: Record<ModuleSection, Record<string, string>> = {
   kpi: {
     scorecards: 'بطاقات الأداء الشهرية',
-    checklist: 'قائمة الفحص CM/OM',
     deliverables: 'المخرجات التعاقدية',
   },
   admin: { settings: 'المزامنة والإعدادات' },
@@ -31,7 +29,6 @@ export function ModulePage({ section, profile = null, type: fixedType }: { secti
   }
   if (section === 'kpi' && type in labels.kpi) {
     if (type === 'scorecards') return <ScorecardsPage profile={profile} />;
-    if (type === 'checklist') return <ChecklistPage profile={profile} />;
     return <div className="grid gap-5"><PageHeading title={title} description={descriptions.kpi} /><KpiUnavailable /></div>;
   }
   return <section role="alert" className="card p-6 text-center text-slate-600">المسار المطلوب غير متاح.</section>;

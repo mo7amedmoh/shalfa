@@ -104,7 +104,6 @@ const navigation = [
     icon: Gauge,
     children: [
       ['بطاقات الأداء الشهرية', '/kpi/scorecards'],
-      ['قائمة الفحص CM/OM', '/kpi/checklist'],
       ['المخرجات التعاقدية', '/kpi/deliverables'],
     ],
   },
@@ -324,10 +323,10 @@ export function App() {
     void runThrottledSchoolSync()
       .then((result) => {
         if (active && result !== null) {
-          const duplicatesNotice = result.duplicateCount > 0
-            ? ` وتم تجاهل ${result.duplicateCount} صف مكرر.`
+          const duplicatesNotice = result.duplicatesWarned > 0
+            ? ` يوجد ${result.duplicatesWarned} صفاً برقم وزاري مكرر.`
             : '';
-          setSyncNotice(`تمت المزامنة التلقائية لـ ${result.syncedCount} مدرسة.${duplicatesNotice}`);
+          setSyncNotice(`اكتملت المزامنة التلقائية: جديد ${result.inserted}، محدث ${result.updated}، معلّم كمفقود ${result.flaggedMissing}، إحداثيات ناقصة/غير صالحة ${result.invalidCoordinates}.${duplicatesNotice}`);
         }
       })
       .catch((error: unknown) => {

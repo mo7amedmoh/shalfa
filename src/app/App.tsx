@@ -7,12 +7,14 @@ import {
 import { NavLink, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { z } from 'zod';
 import { supabase } from '../lib/supabase';
 import { getUserProfile, signInWithEmail, type UserProfile } from '../lib/auth';
 import { runThrottledSchoolSync } from '../lib/schoolSync';
 import { defaultPreferences, loadUserPreferences } from '../lib/preferences';
 import { PreferencesProvider } from './PreferencesProvider';
 import type { PlanType } from '../domain/types';
+import { buildCustomMenu, customPlanTypeSchema, type CustomPlanType } from '../domain/customPlans';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
 
 const SchoolsPage = lazy(() =>
@@ -35,6 +37,12 @@ const AccountPage = lazy(() =>
 );
 const GeneralPlansPage = lazy(() =>
   import('../features/plans/GeneralPlansPage').then((module) => ({ default: module.GeneralPlansPage })),
+);
+const CustomPlanPage = lazy(() =>
+  import('../features/plans/CustomPlanPage').then((module) => ({ default: module.CustomPlanPage })),
+);
+const CustomPlanTypeDialog = lazy(() =>
+  import('../features/plans/CustomPlanTypeDialog').then((module) => ({ default: module.CustomPlanTypeDialog })),
 );
 const WorkforcePage = lazy(() =>
   import('../features/workforce/WorkforcePage').then((module) => ({ default: module.WorkforcePage })),
@@ -181,15 +189,35 @@ function AppShell({
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [dialogGroup, setDialogGroup] = useState<'monthly' | 'general' | null>(null);
   const location = useLocation();
   const isAdmin = profile?.role === 'admin';
+  const canCreateCustom = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
+  const customTypes = useQuery({
+    queryKey: ['custom-plan-types'],
+    queryFn: async () => {
+      if (!supabase) return [] as CustomPlanType[];
+      const { data, error } = await supabase.from('custom_plan_types')
+        .select('id,name,cadence,scope,track_visit_report,group_key,created_at,is_active').order('created_at');
+      if (error) throw error;
+      return z.array(customPlanTypeSchema).parse(data);
+    },
+    enabled: Boolean(profile),
+  });
+  const visibleNavigation = useMemo(() => navigation.map((item) => {
+    if (!('children' in item)) return item;
+    const group = item.label === 'الخطط الشهرية' ? 'monthly' : item.label === 'الخطط العامة' ? 'general' : null;
+    if (!group) return item;
+    const custom = buildCustomMenu(customTypes.data ?? [], group).map(({ label, path }) => [label, path] as [string, string]);
+    return { ...item, children: [...(item.children ?? []), ...custom] };
+  }), [customTypes.data]);
   const preferences = useQuery({
     queryKey: ['user-preferences', profile?.id],
     queryFn: () => loadUserPreferences(profile!.id),
     enabled: Boolean(profile?.id),
   });
   const pageTitle = useMemo(() => {
-    const allItems = [...navigation, ...adminNavigation];
+    const allItems = [...visibleNavigation, ...adminNavigation];
     for (const item of allItems) {
       if ('path' in item && item.path === location.pathname) return item.label;
       if ('children' in item) {
@@ -202,17 +230,17 @@ function AppShell({
     if (location.pathname.startsWith('/kpi/')) return 'مؤشرات الأداء';
     if (location.pathname.startsWith('/placement/')) return 'أعمال إدارية';
     return 'منصة إدارة المرافق المدرسية';
-  }, [location.pathname]);
+  }, [location.pathname, visibleNavigation]);
 
   useEffect(() => {
     setSidebarOpen(false);
-    const activeGroup = navigation.find((item) =>
+    const activeGroup = visibleNavigation.find((item) =>
       'children' in item && item.children?.some(([, path]) => path === location.pathname),
     );
     if (activeGroup) {
       setExpandedGroups((current) => ({ ...current, [activeGroup.label]: true }));
     }
-  }, [location.pathname]);
+  }, [location.pathname, visibleNavigation]);
 
   return (
     <PreferencesProvider value={preferences.data ?? defaultPreferences}>
@@ -223,7 +251,7 @@ function AppShell({
           <button aria-label="إغلاق القائمة" className="mobile-menu hidden rounded-lg p-2 text-slate-500" onClick={() => setSidebarOpen(false)}><X size={20} /></button>
         </div>
         <nav aria-label="القائمة الرئيسية" className="grid gap-1">
-          {navigation.map((item) => {
+          {visibleNavigation.map((item) => {
             const Icon = item.icon;
             return (
               <section key={item.label}>
@@ -235,7 +263,7 @@ function AppShell({
                       type="button"
                       className="nav-link w-full text-start"
                       aria-expanded={Boolean(expandedGroups[item.label])}
-                      aria-controls={`nav-group-${navigation.indexOf(item)}`}
+                      aria-controls={`nav-group-${visibleNavigation.indexOf(item)}`}
                       onClick={() => setExpandedGroups((current) => ({
                         ...current,
                         [item.label]: !current[item.label],
@@ -245,7 +273,7 @@ function AppShell({
                       <span className="font-semibold">{item.label}</span>
                       <ChevronDown size={16} className={`me-auto transition-transform ${expandedGroups[item.label] ? 'rotate-180' : ''}`} />
                     </button>
-                    {expandedGroups[item.label] && <div id={`nav-group-${navigation.indexOf(item)}`} className="me-4 grid border-e border-slate-200 pe-2">
+                    {expandedGroups[item.label] && <div id={`nav-group-${visibleNavigation.indexOf(item)}`} className="me-4 grid border-e border-slate-200 pe-2">
                       {item.children?.map(([label, path]) => (
                         <NavLink key={path} to={path} className="nav-link min-h-9 text-sm" aria-current={location.pathname === path ? 'page' : undefined}>{label}</NavLink>
                       ))}
@@ -255,6 +283,11 @@ function AppShell({
               </section>
             );
           })}
+          {canCreateCustom && <div className="mt-3 grid gap-2 border-t border-slate-100 pt-3">
+            <button type="button" onClick={() => setDialogGroup('monthly')} className="rounded-lg border border-brand-200 px-3 py-2 text-sm font-semibold text-brand-800">+ إضافة خطة شهرية</button>
+            <button type="button" onClick={() => setDialogGroup('general')} className="rounded-lg border border-brand-200 px-3 py-2 text-sm font-semibold text-brand-800">+ إضافة خطة عامة</button>
+            {(customTypes.data ?? []).some((type) => !type.is_active) && <details className="rounded-lg border border-slate-200 p-2 text-sm"><summary className="cursor-pointer font-semibold">خطط مخفية</summary><div className="mt-2 grid gap-2">{(customTypes.data ?? []).filter((type) => !type.is_active).map((type) => <button key={type.id} type="button" onClick={async () => { if (!supabase) return; await supabase.from('custom_plan_types').update({ is_active: true }).eq('id', type.id); await customTypes.refetch(); }} className="text-start text-brand-700">{type.name} · استعادة</button>)}</div></details>}
+          </div>}
           {isAdmin && <div className="mt-3 border-t border-slate-100 pt-3">
             {adminNavigation.map(({ label, path, icon: Icon }) => (
               <NavLink key={path} to={path} className="nav-link"><Icon size={19} /><span>{label}</span></NavLink>
@@ -277,6 +310,7 @@ function AppShell({
             <p className="text-xs text-slate-500">شركة شلفا لإدارة المرافق</p>
             <h1 className="font-bold text-brand-900">{pageTitle}</h1>
           </div>
+          {dialogGroup && profile && <Suspense fallback={null}><CustomPlanTypeDialog profile={profile} group={dialogGroup} onClose={() => setDialogGroup(null)} /></Suspense>}
           {profile && <span className="hidden rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-800 sm:inline">{profile.role === 'admin' ? 'مدير النظام' : profile.role === 'project_manager' ? 'مدير المشروع' : 'مستخدم'}</span>}
         </header>
         {syncNotice && <div role="status" className="bg-emerald-50 px-4 py-2 text-center text-sm text-emerald-900">{syncNotice}</div>}
@@ -290,6 +324,7 @@ function AppShell({
               <Route path="/plans/report" element={<MonthlyReportPage />} />
               <Route path="/plans/:type" element={<MonthlyPlanRoute profile={profile} />} />
               <Route path="/general-plans/:type" element={<GeneralPlansPage profile={profile} />} />
+              <Route path="/plans/custom/:typeId" element={<CustomPlanPage profile={profile} />} />
               <Route path="/workforce" element={<WorkforcePage profile={profile} />} />
               <Route path="/placement/cleaners" element={<CleanerPlacementPage profile={profile} />} />
               <Route path="/placement/gatekeepers" element={<GatekeeperPlacementPage profile={profile} />} />

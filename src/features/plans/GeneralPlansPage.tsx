@@ -11,6 +11,7 @@ import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
+import { CustomPlanTypeDialog } from './CustomPlanTypeDialog';
 
 const planTypes = ['gardening', 'landscaping', 'sewage_waste', 'water_supply', 'tank_washing', 'pest_control', 'annual_readiness'] as const;
 const planLabels: Record<GeneralPlanType, string> = {
@@ -88,6 +89,7 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [message, setMessage] = useState('');
+  const [showCustomDialog, setShowCustomDialog] = useState(false);
   const schools = useQuery({ queryKey: ['schools-for-general-plans'], queryFn: loadCandidates, enabled: Boolean(planType) });
   const rows = useQuery({
     queryKey: ['general-plan-rows', planType],
@@ -204,7 +206,8 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
 
   return (
     <div className="grid gap-5">
-      <section className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm text-slate-500">الخطط العامة · متابعة التنفيذ</p><h2 className="mt-1 text-2xl font-bold text-brand-900">{planLabels[planType]}</h2></div><div className="flex flex-wrap gap-2"><ImportWizardLauncher target={{ kind: 'general', planType }} profile={profile} />{canManage && <><button type="button" onClick={() => deletePlan.mutate({ rowsOnly: true })} className="rounded-lg border border-rose-300 px-3 py-2 text-sm text-rose-800">مسح صفوف الخطة</button><button type="button" onClick={() => deletePlan.mutate({ rowsOnly: false })} className="rounded-lg bg-rose-700 px-3 py-2 text-sm text-white">حذف الخطة</button></>}</div></section>
+      <section className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm text-slate-500">الخطط العامة · متابعة التنفيذ</p><h2 className="mt-1 text-2xl font-bold text-brand-900">{planLabels[planType]}</h2></div><div className="flex flex-wrap gap-2">{profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role) && <button type="button" onClick={() => setShowCustomDialog(true)} className="rounded-lg border border-brand-200 px-3 py-2 text-sm font-semibold text-brand-800">+ إضافة خطة</button>}<ImportWizardLauncher target={{ kind: 'general', planType }} profile={profile} />{canManage && <><button type="button" onClick={() => deletePlan.mutate({ rowsOnly: true })} className="rounded-lg border border-rose-300 px-3 py-2 text-sm text-rose-800">مسح صفوف الخطة</button><button type="button" onClick={() => deletePlan.mutate({ rowsOnly: false })} className="rounded-lg bg-rose-700 px-3 py-2 text-sm text-white">حذف الخطة</button></>}</div></section>
+      {showCustomDialog && profile && <CustomPlanTypeDialog profile={profile} group="general" onClose={() => setShowCustomDialog(false)} />}
       {(schools.error || rows.error) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات الخطة أو المدارس.</div>}
       <section className="card grid gap-4 p-5">
         <div><h3 className="font-bold">إضافة مدارس إلى الخطة</h3><p className="mt-1 text-sm text-slate-500">تُستثنى المباني المشتركة الملحقة. اختر مدرسة مؤهلة وحدد تاريخ التنفيذ المخطط.</p></div>

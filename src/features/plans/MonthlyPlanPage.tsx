@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { z } from 'zod';
+import * as XLSX from 'xlsx';
 import { distributePlanDates, isPlanRowOverdue } from '../../domain/plans';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import type { PlanType } from '../../domain/types';
@@ -35,6 +36,10 @@ const rowSchema = z.object({
   planned_date: z.string(),
   visited_at: z.string().nullable(),
   report_completed_at: z.string().nullable(),
+  engineer_id: z.string().uuid().nullable(),
+  supervisor_id: z.string().uuid().nullable(),
+  supervisor_name: z.string().nullable(),
+  engineer_name: z.string().nullable(),
   contractor_name: z.string().nullable(),
   school: z.object({ school_name: z.string(), ministry_number: z.string() }).nullable(),
 });
@@ -211,6 +216,47 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
     onError: (error: Error) => setMessage(`تعذر تحديث السجل: ${error.message}`),
   });
 
+  const deletePlan = useMutation({
+    mutationFn: async ({ rowsOnly }: { rowsOnly: boolean }) => {
+      if (!supabase || !profile || !activePlan) throw new Error('اختر خطة أولاً.');
+      if (!['admin', 'project_manager', 'area_engineer'].includes(profile.role)) throw new Error('لا تملك صلاحية الحذف.');
+      const currentRows = rows.data ?? [];
+      const visited = currentRows.filter((row) => row.visited_at).length;
+      const reports = currentRows.filter((row) => row.report_completed_at).length;
+      const answer = window.prompt(`سيتم حذف ${currentRows.length} صفاً، ${visited} زيارة، ${reports} تقريراً. اكتب حذف للتأكيد.`);
+      if (answer !== 'حذف') throw new Error('لم يتم تأكيد الحذف.');
+      const book = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(currentRows), 'نسخة احتياطية');
+      XLSX.writeFile(book, `نسخة-خطة-${planType}-${activePlan.plan_month.slice(0, 7)}.xlsx`);
+      const { error: rowError } = await supabase.from('monthly_plan_rows').delete().eq('plan_id', activePlan.id);
+      if (rowError) throw rowError;
+      if (!rowsOnly) {
+        const { error } = await supabase.from('monthly_plans').delete().eq('id', activePlan.id);
+        if (error) throw error;
+      }
+    },
+    onSuccess: async () => {
+      setMessage('تم الحذف وتحديث الصفحة.');
+      setActivePlanId('');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['monthly-plans', planType] }),
+        queryClient.invalidateQueries({ queryKey: ['monthly-plan-rows', activePlanId] }),
+      ]);
+    },
+    onError: (error: Error) => setMessage(error.message),
+  });
+  const deleteRow = useMutation({
+    mutationFn: async (rowId: string) => {
+      if (!supabase || !canCreate) throw new Error('لا تملك صلاحية الحذف.');
+      const answer = window.prompt('اكتب حذف لتأكيد حذف هذا الصف.');
+      if (answer !== 'حذف') throw new Error('لم يتم تأكيد الحذف.');
+      const { error } = await supabase.from('monthly_plan_rows').delete().eq('id', rowId);
+      if (error) throw error;
+    },
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['monthly-plan-rows', activePlanId] }); },
+    onError: (error: Error) => setMessage(error.message),
+  });
+
   function prepareDates() {
     try {
       const dates = distributePlanDates(selectedIds, { startDate, schoolsPerDay: Number(schoolsPerDay) });
@@ -230,7 +276,8 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
       <section className="flex flex-wrap items-end justify-between gap-3">
         <div><p className="text-sm text-slate-500">الخطط الشهرية · متابعة المدارس والإنجاز</p>
         <h2 className="mt-1 text-2xl font-bold text-brand-900">خطة {planTitles[planType]}</h2></div>
-        <ImportWizardLauncher target={{ kind: 'monthly', planType }} profile={profile} />
+        <div className="flex flex-wrap gap-2"><ImportWizardLauncher target={{ kind: 'monthly', planType }} profile={profile} />
+          {activePlan && canCreate && <><button type="button" onClick={() => deletePlan.mutate({ rowsOnly: true })} className="rounded-lg border border-rose-300 px-3 py-2 text-sm text-rose-800">مسح صفوف الخطة</button><button type="button" onClick={() => deletePlan.mutate({ rowsOnly: false })} className="rounded-lg bg-rose-700 px-3 py-2 text-sm text-white">حذف الخطة</button></>}</div>
       </section>
       {(candidates.error || plans.error || rows.error) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات الخطط أو المدارس. تحقق من اتصال Supabase وسياسات الوصول.</div>}
 
@@ -282,6 +329,14 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
         </div>
         {rows.isLoading ? <p role="status">جارٍ تحميل صفوف الخطة…</p> : !activePlan ? <p className="rounded-lg bg-slate-50 p-5 text-center text-sm text-slate-500">لا توجد خطة من هذا النوع بعد.</p> : (
           <>
+            <details className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <summary className="cursor-pointer text-sm font-bold text-brand-900">جودة بيانات الخطة</summary>
+              <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+                <QualityBadge label="صفوف دون مشرف" count={(rows.data ?? []).filter((row) => !row.supervisor_id && planType !== 'elevators' && planType !== 'security_safety').length} />
+                <QualityBadge label="صفوف دون موعد مخطط" count={(rows.data ?? []).filter((row) => !row.planned_date).length} />
+                <QualityBadge label="تقارير مرفوعة دون زيارة" count={(rows.data ?? []).filter((row) => Boolean(row.report_completed_at) && !row.visited_at).length} />
+              </div>
+            </details>
             <div className="table-scroll">
               <table>
                 <thead><tr><th>المدرسة</th><th>الموعد المخطط</th>{planType === 'security_safety' || planType === 'elevators' ? <th>الشركة</th> : null}<th>تاريخ الزيارة</th><th>تاريخ إنجاز التقرير</th><th>الحالة</th></tr></thead>
@@ -293,12 +348,12 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                     reportCompletedAt: row.report_completed_at,
                   }, today);
                   return <tr key={row.id}>
-                    <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small></td>
+                    <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small>{row.supervisor_name && <small className="block text-xs text-slate-500">المشرف: {row.supervisor_name}</small>}</td>
                     <td>{formatDate(row.planned_date)}</td>
                     {(planType === 'security_safety' || planType === 'elevators') && <td>{row.contractor_name ?? '—'}</td>}
                     <td><DateEditor value={dates.visited} onChange={(value) => setActualDates((current) => ({ ...current, [row.id]: { ...dates, visited: value } }))} onSave={() => updateRow.mutate({ rowId: row.id, field: 'visited_at', value: dates.visited || null })} label="حفظ الزيارة" disabled={!canUpdate || updateRow.isPending} /></td>
                     <td><DateEditor value={dates.report} onChange={(value) => setActualDates((current) => ({ ...current, [row.id]: { ...dates, report: value } }))} onSave={() => updateRow.mutate({ rowId: row.id, field: 'report_completed_at', value: dates.report || null })} label="حفظ التقرير" disabled={!canUpdate || updateRow.isPending} /></td>
-                    <td>{overdue ? <span className="rounded-full bg-rose-50 px-2 py-1 text-xs text-rose-800">متأخر</span> : row.visited_at && row.report_completed_at ? 'مكتمل' : 'قيد المتابعة'}</td>
+                    <td>{overdue ? <span className="rounded-full bg-rose-50 px-2 py-1 text-xs text-rose-800">متأخر</span> : row.visited_at && row.report_completed_at ? 'مكتمل' : 'قيد المتابعة'}{canCreate && <button type="button" className="ms-2 text-xs text-rose-700 underline" onClick={() => deleteRow.mutate(row.id)}>حذف الصف</button>}</td>
                   </tr>;
                 })}</tbody>
               </table>
@@ -316,5 +371,11 @@ function DateEditor({ value, onChange, onSave, label, disabled }: { value: strin
   return <div className="flex items-center gap-2">
     <input type="date" value={value} onChange={(event) => onChange(event.target.value)} className="rounded border border-slate-300 px-2 py-1" />
     <button type="button" onClick={onSave} disabled={disabled} className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-50">{label}</button>
+  </div>;
+}
+
+function QualityBadge({ label, count }: { label: string; count: number }) {
+  return <div className={`flex items-center justify-between rounded-lg border px-3 py-2 ${count ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>
+    <span>{label}</span><strong>{count}</strong>
   </div>;
 }

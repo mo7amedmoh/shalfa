@@ -1,4 +1,5 @@
 import { isPlanRowOverdue } from './plans';
+import { normalizeImportName } from './imports';
 
 export type MonthlyReportPlanType = 'maintenance' | 'cleaning' | 'security_safety' | 'elevators';
 
@@ -11,6 +12,10 @@ export interface MonthlyReportRow {
   supervisorId: string | null;
   supervisorName: string | null;
   area: string;
+}
+
+export function supervisorGroupKey(row: Pick<MonthlyReportRow, 'supervisorId' | 'supervisorName'>): string {
+  return row.supervisorId ?? `name:${normalizeImportName(row.supervisorName) || 'unassigned'}`;
 }
 
 export interface MonthlyProgressSummary {
@@ -76,10 +81,11 @@ export function rankSupervisorProgress(
 ): { mostOverdue: SupervisorProgress[]; mostCompliant: SupervisorProgress[] } {
   const groups = new Map<string, MonthlyReportRow[]>();
   for (const row of rows) {
-    if (!['maintenance', 'cleaning'].includes(row.planType) || !row.supervisorId) continue;
-    const group = groups.get(row.supervisorId) ?? [];
+    if (!['maintenance', 'cleaning'].includes(row.planType)) continue;
+    const key = supervisorGroupKey(row);
+    const group = groups.get(key) ?? [];
     group.push(row);
-    groups.set(row.supervisorId, group);
+    groups.set(key, group);
   }
   const progress = [...groups.entries()].map(([id, assigned]) => {
     const visited = assigned.filter((row) => row.visitedAt !== null).length;

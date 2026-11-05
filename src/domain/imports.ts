@@ -20,6 +20,55 @@ export function normalizeImportName(value: unknown): string {
     .toLocaleLowerCase();
 }
 
+export type PlanPersonResolution<T> = {
+  employee: T | null;
+  name: string;
+  source: 'alias' | 'employee' | 'school' | 'free_text' | 'empty';
+};
+
+export function resolvePlanPerson<T extends { id: string; full_name: string }>(
+  value: unknown,
+  employees: readonly T[],
+  aliases: readonly { alias_normalised: string; employee_id: string }[],
+  schoolDefault: unknown = '',
+): PlanPersonResolution<T> {
+  const supplied = String(value ?? '').trim();
+  const normalized = normalizeImportName(supplied);
+  if (normalized) {
+    const alias = aliases.find((item) => item.alias_normalised === normalized);
+    const aliasEmployee = alias ? employees.find((item) => item.id === alias.employee_id) : undefined;
+    if (aliasEmployee) return { employee: aliasEmployee, name: aliasEmployee.full_name, source: 'alias' };
+    const employee = employees.find((item) => normalizeImportName(item.full_name) === normalized);
+    if (employee) return { employee, name: employee.full_name, source: 'employee' };
+    return { employee: null, name: supplied, source: 'free_text' };
+  }
+  const fallback = String(schoolDefault ?? '').trim();
+  const fallbackNormalized = normalizeImportName(fallback);
+  if (!fallbackNormalized) return { employee: null, name: '', source: 'empty' };
+  const alias = aliases.find((item) => item.alias_normalised === fallbackNormalized);
+  const aliasEmployee = alias ? employees.find((item) => item.id === alias.employee_id) : undefined;
+  if (aliasEmployee) return { employee: aliasEmployee, name: aliasEmployee.full_name, source: 'alias' };
+  const employee = employees.find((item) => normalizeImportName(item.full_name) === fallbackNormalized);
+  return employee
+    ? { employee, name: employee.full_name, source: 'employee' }
+    : { employee: null, name: fallback, source: 'school' };
+}
+
+export function schoolPersonDefault(
+  school: { source_fields: Record<string, unknown> },
+  kind: 'engineer' | 'supervisor',
+  planType: string,
+): string {
+  const names = kind === 'engineer'
+    ? ['اسم مهندس المرافق', 'اسم مهندس المقاول']
+    : planType === 'cleaning' ? ['اسم المشرف (نظافة)'] : ['اسم المشرف (صيانة)'];
+  for (const header of names) {
+    const value = school.source_fields[header];
+    if (String(value ?? '').trim()) return String(value).trim();
+  }
+  return '';
+}
+
 export function matchImportEmployees<T extends { id: string; full_name: string }>(
   value: unknown,
   employees: readonly T[],

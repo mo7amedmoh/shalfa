@@ -217,6 +217,8 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
         }
         completed += 1;
       }
+      const { error: relinkError } = await supabase.rpc('relink_plan_names');
+      if (relinkError) throw new Error(`تم استيراد الموظفين لكن تعذر إعادة ربط أسماء الخطط: ${relinkError.message}`);
       setMessage(`اكتمل استيراد ${completed} سجلاً.`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['employees'] }),

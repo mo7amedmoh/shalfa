@@ -4,6 +4,40 @@ export interface MappableSchool {
   longitude: number | null;
 }
 
+export type SlimMapSchool = {
+  id: string;
+  name: string;
+  ministryNumber: string;
+  latitude: number | null;
+  longitude: number | null;
+  size: 'small' | 'medium' | 'large' | null;
+  buildingType: string | null;
+  planScope: boolean;
+};
+
+export function toSlimMapSchool(school: {
+  id: string;
+  school_name: string;
+  ministry_number: string;
+  latitude: number | null;
+  longitude: number | null;
+  size_source: 'small' | 'medium' | 'large' | null;
+  size_calc: 'small' | 'medium' | 'large' | null;
+  building_type: string | null;
+  plan_scope: boolean;
+}): SlimMapSchool {
+  return {
+    id: school.id,
+    name: school.school_name,
+    ministryNumber: school.ministry_number,
+    latitude: school.latitude,
+    longitude: school.longitude,
+    size: school.size_calc ?? school.size_source,
+    buildingType: school.building_type,
+    planScope: school.plan_scope,
+  };
+}
+
 export function isRiyadhCoordinate(latitude: number | null, longitude: number | null): boolean {
   return latitude !== null && longitude !== null
     && latitude >= 24 && latitude <= 25.5

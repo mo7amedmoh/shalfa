@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { z } from 'zod';
+import * as XLSX from 'xlsx';
 import { summarizeGeneralPlanProgress } from '../../domain/generalPlans';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import type { GeneralPlanType } from '../../domain/types';
@@ -161,13 +162,49 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
     onError: (error: Error) => setMessage(`تعذر تحديث التنفيذ: ${error.message}`),
   });
 
+  const deletePlan = useMutation({
+    mutationFn: async ({ rowsOnly, rowId }: { rowsOnly?: boolean; rowId?: string }) => {
+      if (!supabase || !profile || !canManage) throw new Error('لا تملك صلاحية الحذف.');
+      if (rowId) {
+        if (window.prompt('اكتب حذف لتأكيد حذف هذا الصف.') !== 'حذف') throw new Error('لم يتم تأكيد الحذف.');
+        const { error } = await supabase.from('general_plan_rows').delete().eq('id', rowId);
+        if (error) throw error;
+        return;
+      }
+      const dbType = planType === 'sewage_waste' ? 'sewage_removal' : planType;
+      const { data: plansToDelete, error: plansError } = await supabase.from('general_plans').select('id').eq('plan_type', dbType);
+      if (plansError) throw plansError;
+      const ids = (plansToDelete ?? []).map((item) => item.id);
+      const currentRows = (rows.data ?? []);
+      const visited = currentRows.filter((row) => row.execution_date).length;
+      const answer = window.prompt(`سيتم حذف ${currentRows.length} صفاً، ${visited} زيارة، ${visited} تقريراً. اكتب حذف للتأكيد.`);
+      if (answer !== 'حذف') throw new Error('لم يتم تأكيد الحذف.');
+      const book = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(currentRows), 'نسخة احتياطية');
+      XLSX.writeFile(book, `نسخة-خطة-${planType}.xlsx`);
+      if (ids.length) {
+        const { error } = await supabase.from('general_plan_rows').delete().in('plan_id', ids);
+        if (error) throw error;
+        if (!rowsOnly) {
+          const { error: deletePlansError } = await supabase.from('general_plans').delete().in('id', ids);
+          if (deletePlansError) throw deletePlansError;
+        }
+      }
+    },
+    onSuccess: async () => {
+      setMessage('تم الحذف وتحديث الصفحة.');
+      await queryClient.invalidateQueries({ queryKey: ['general-plan-rows', planType] });
+    },
+    onError: (error: Error) => setMessage(error.message),
+  });
+
   if (!planType) return <section className="card p-6 text-center">نوع الخطة غير معروف.</section>;
   const progress = summarizeGeneralPlanProgress((rows.data ?? []).map((row) => row.status));
   const { complete: completeCount, total: totalCount } = progress;
 
   return (
     <div className="grid gap-5">
-      <section className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm text-slate-500">الخطط العامة · متابعة التنفيذ</p><h2 className="mt-1 text-2xl font-bold text-brand-900">{planLabels[planType]}</h2></div><ImportWizardLauncher target={{ kind: 'general', planType }} profile={profile} /></section>
+      <section className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm text-slate-500">الخطط العامة · متابعة التنفيذ</p><h2 className="mt-1 text-2xl font-bold text-brand-900">{planLabels[planType]}</h2></div><div className="flex flex-wrap gap-2"><ImportWizardLauncher target={{ kind: 'general', planType }} profile={profile} />{canManage && <><button type="button" onClick={() => deletePlan.mutate({ rowsOnly: true })} className="rounded-lg border border-rose-300 px-3 py-2 text-sm text-rose-800">مسح صفوف الخطة</button><button type="button" onClick={() => deletePlan.mutate({ rowsOnly: false })} className="rounded-lg bg-rose-700 px-3 py-2 text-sm text-white">حذف الخطة</button></>}</div></section>
       {(schools.error || rows.error) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات الخطة أو المدارس.</div>}
       <section className="card grid gap-4 p-5">
         <div><h3 className="font-bold">إضافة مدارس إلى الخطة</h3><p className="mt-1 text-sm text-slate-500">تُستثنى المباني المشتركة الملحقة. اختر مدرسة مؤهلة وحدد تاريخ التنفيذ المخطط.</p></div>
@@ -201,7 +238,7 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
         {rows.isLoading ? <p role="status">جارٍ تحميل السجلات…</p> : totalCount === 0 ? <p className="rounded-lg bg-slate-50 p-5 text-center text-sm text-slate-500">لا توجد مهام مسجلة لهذه الخطة.</p> : (
           <div className="table-scroll"><table>
             <thead><tr><th>المدرسة</th><th>التاريخ المخطط</th><th>المقاول</th><th>الحالة</th><th>تاريخ الإنجاز</th><th>الملاحظات</th><th>إجراء</th></tr></thead>
-            <tbody>{(rows.data ?? []).map((row) => <GeneralPlanRow key={row.id} row={row} onSave={(status, notes) => updateRow.mutate({ row, status, notes })} disabled={!canManage || updateRow.isPending} />)}</tbody>
+            <tbody>{(rows.data ?? []).map((row) => <GeneralPlanRow key={row.id} row={row} onSave={(status, notes) => updateRow.mutate({ row, status, notes })} onDelete={() => deletePlan.mutate({ rowId: row.id })} disabled={!canManage || updateRow.isPending} />)}</tbody>
           </table></div>
         )}
       </section>
@@ -209,7 +246,7 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   );
 }
 
-function GeneralPlanRow({ row, onSave, disabled }: { row: GeneralRow; onSave: (status: GeneralRow['status'], notes: string) => void; disabled: boolean }) {
+function GeneralPlanRow({ row, onSave, onDelete, disabled }: { row: GeneralRow; onSave: (status: GeneralRow['status'], notes: string) => void; onDelete?: () => void; disabled: boolean }) {
   const [status, setStatus] = useState(row.status);
   const [notes, setNotes] = useState(row.notes ?? '');
   return <tr>
@@ -219,6 +256,6 @@ function GeneralPlanRow({ row, onSave, disabled }: { row: GeneralRow; onSave: (s
     <td><select value={status} onChange={(event) => { if (event.target.value === 'pending' || event.target.value === 'in_progress' || event.target.value === 'complete') setStatus(event.target.value); }} disabled={disabled} className="rounded border border-slate-300 px-2 py-1"><option value="pending">لم يبدأ</option><option value="in_progress">جارٍ</option><option value="complete">مكتمل</option></select></td>
     <td>{row.completed_at ?? '—'}</td>
     <td><input value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={2000} disabled={disabled} className="max-w-40 rounded border border-slate-300 px-2 py-1" /></td>
-    <td><button type="button" onClick={() => onSave(status, notes)} disabled={disabled} className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-50">حفظ</button></td>
+    <td><button type="button" onClick={() => onSave(status, notes)} disabled={disabled} className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-50">حفظ</button>{onDelete && <button type="button" onClick={onDelete} className="ms-2 text-xs text-rose-700 underline">حذف</button>}</td>
   </tr>;
 }

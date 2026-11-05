@@ -8,6 +8,8 @@ import {
   parseImportDate,
   parseImportInteger,
   parseMonthlyPlanRows,
+  resolvePlanPerson,
+  schoolPersonDefault,
 } from './imports';
 
 describe('import value normalization', () => {
@@ -31,6 +33,21 @@ describe('import value normalization', () => {
       { alias_normalised: normalizeImportName('بديل تجريبي'), employee_id: 'one' },
     ])).toEqual([employees[0]]);
     expect(matchImportEmployees('مشرف تجريبي ', employees, [])).toEqual([employees[0]]);
+  });
+
+  it('resolves names in order and falls back to free text', () => {
+    const employees = [{ id: 'one', full_name: 'هاني عراقي' }];
+    const aliases = [{ alias_normalised: normalizeImportName('هاني'), employee_id: 'one' }];
+    expect(resolvePlanPerson('هاني', employees, aliases).source).toBe('alias');
+    expect(resolvePlanPerson('اسم غير مسجل', employees, aliases)).toMatchObject({ employee: null, name: 'اسم غير مسجل', source: 'free_text' });
+    expect(resolvePlanPerson('', employees, [], 'هاني عراقي').source).toBe('employee');
+    expect(resolvePlanPerson('', [], [], 'اسم من قاعدة المباني').source).toBe('school');
+  });
+
+  it('uses only name columns from the school source fields', () => {
+    const school = { source_fields: { 'اسم مهندس المرافق': 'مهندس المدرسة', 'رقم الاتصال': '0500000000', 'اسم المشرف (صيانة)': 'مشرف المدرسة' } };
+    expect(schoolPersonDefault(school, 'engineer', 'maintenance')).toBe('مهندس المدرسة');
+    expect(schoolPersonDefault(school, 'supervisor', 'maintenance')).toBe('مشرف المدرسة');
   });
 
   it.each([

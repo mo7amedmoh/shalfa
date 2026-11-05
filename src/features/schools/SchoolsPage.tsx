@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { MapContainer, TileLayer, useMap, useMapEvents } from 'react-leaflet';
-import MarkerClusterGroup from 'react-leaflet-cluster';
 import { Download, List, Map as MapIcon, Search, SlidersHorizontal } from 'lucide-react';
 import { z } from 'zod';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
-import { duplicateMinistryRows, schoolsWithMapCoordinates } from '../../domain/schoolMap';
+import { duplicateMinistryRows, schoolsWithMapCoordinates, toSlimMapSchool } from '../../domain/schoolMap';
 import { resolveSchoolBuildingNames } from '../../domain/schoolBuildings';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
@@ -106,7 +105,7 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [visibleColumns, setVisibleColumns] = useState<number[]>([]);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
-  const [zoom, setZoom] = useState(10);
+  const [, setZoom] = useState(10);
   const [mapTargetId, setMapTargetId] = useState('');
   const [mapSearch, setMapSearch] = useState('');
   const [selectedSchoolId, setSelectedSchoolId] = useState('');
@@ -147,6 +146,7 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
     });
   }, [schools, search, filters, filterHeaders]);
   const mappableSchools = useMemo(() => schoolsWithMapCoordinates(filtered), [filtered]);
+  const slimMapSchools = useMemo(() => mappableSchools.map(toSlimMapSchool), [mappableSchools]);
   const coordinateIssues = useMemo(() => filtered.filter((school) =>
     !schoolsWithMapCoordinates([school]).length,
   ), [filtered]);
@@ -315,10 +315,13 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
               <MapContainer center={[24.7136, 46.6753]} zoom={10} scrollWheelZoom className="map-frame" aria-label="خريطة المدارس">
                 <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                 <MapViewport schools={mappableSchools} target={mapTarget} onZoom={setZoom} />
-                <MarkerClusterGroup chunkedLoading showCoverageOnHover={false}>
-                  <SchoolMapMarkers schools={mappableSchools} zoom={zoom} onSelect={(school) => setSelectedSchoolId(school.id)} />
-                </MarkerClusterGroup>
+                <SchoolMapMarkers schools={slimMapSchools} onSelect={setSelectedSchoolId} />
               </MapContainer>
+              <div className="flex flex-wrap gap-3 px-2 pt-3 text-xs text-slate-600" aria-label="دليل أحجام المدارس">
+                <span><i className="school-map-legend-dot school-map-legend-small" /> صغيرة</span>
+                <span><i className="school-map-legend-dot school-map-legend-medium" /> متوسطة</span>
+                <span><i className="school-map-legend-dot school-map-legend-large" /> كبيرة</span>
+              </div>
               <p className="px-2 pt-3 text-xs text-slate-500">تجميع العلامات يعرض عدد المدارس في كل مجموعة. أسماء المدارس تظهر عند التحويم، وتبقى ظاهرة قرب مقياس تفصيلي.</p>
             </div>
           </div>

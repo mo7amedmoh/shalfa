@@ -1,7 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { duplicateMinistryRows, isRiyadhCoordinate, schoolsWithMapCoordinates } from './schoolMap';
+import { duplicateMinistryRows, isRiyadhCoordinate, schoolsWithMapCoordinates, toSlimMapSchool } from './schoolMap';
 
 describe('school map data', () => {
+  it('projects only the fields needed by the map', () => {
+    expect(toSlimMapSchool({
+      id: 'one',
+      school_name: 'مدرسة',
+      ministry_number: '10',
+      latitude: 24.7,
+      longitude: 46.6,
+      size_source: 'small',
+      size_calc: 'medium',
+      building_type: 'مستقل',
+      plan_scope: true,
+    })).toEqual({
+      id: 'one',
+      name: 'مدرسة',
+      ministryNumber: '10',
+      latitude: 24.7,
+      longitude: 46.6,
+      size: 'medium',
+      buildingType: 'مستقل',
+      planScope: true,
+    });
+  });
   it('creates a map marker candidate for each school with a valid Riyadh coordinate', () => {
     const schools = [
       { id: 'one', latitude: 24.7, longitude: 46.6 },

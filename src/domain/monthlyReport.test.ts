@@ -29,4 +29,12 @@ describe('monthly progress report', () => {
     expect(ranked.mostCompliant[0]).toMatchObject({ id: 's1', reportPercent: 50 });
     expect(ranked.mostOverdue.some((row) => row.id === 's2')).toBe(false);
   });
+
+  it('keeps free-text supervisors in the grouping instead of dropping them', () => {
+    const ranked = rankSupervisorProgress([
+      { ...rows[0], id: 'free', supervisorId: null, supervisorName: 'هاني' },
+      { ...rows[1], id: 'free-variant', supervisorId: null, supervisorName: ' هاني  ' },
+    ], '2026-10-10');
+    expect(ranked.mostOverdue[0]).toMatchObject({ name: 'هاني', total: 2 });
+  });
 });

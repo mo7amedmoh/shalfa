@@ -1,42 +1,84 @@
-import { useMemo } from 'react';
-import { divIcon } from 'leaflet';
-import { Marker, Popup, Tooltip } from 'react-leaflet';
-import type { SchoolRecord } from './schoolTypes';
-import { SchoolDetails } from './SchoolDetails';
+import { useEffect } from 'react';
+import L, { type LayerGroup } from 'leaflet';
+import { useMap } from 'react-leaflet';
+import 'leaflet.markercluster';
+import type { SlimMapSchool } from '../../domain/schoolMap';
 
-const schoolIcon = divIcon({
-  className: 'school-marker-icon',
-  html: '<span class="school-map-marker" aria-hidden="true"></span>',
-  iconSize: [24, 24],
-  iconAnchor: [12, 12],
-});
+type ClusterMap = typeof L & {
+  markerClusterGroup: (options?: {
+    chunkedLoading?: boolean;
+    removeOutsideVisibleBounds?: boolean;
+    showCoverageOnHover?: boolean;
+    iconCreateFunction?: (cluster: { getChildCount: () => number }) => L.DivIcon;
+  }) => LayerGroup;
+};
+
+const leafletWithClusters = L as ClusterMap;
+
+function markerColour(size: SlimMapSchool['size']): string {
+  return size === 'large' ? '#c43d4d' : size === 'medium' ? '#d79527' : '#2877b8';
+}
 
 export function SchoolMapMarkers({
   schools,
-  zoom,
   onSelect,
 }: {
-  schools: readonly SchoolRecord[];
-  zoom: number;
-  onSelect: (school: SchoolRecord) => void;
+  schools: readonly SlimMapSchool[];
+  onSelect: (schoolId: string) => void;
 }) {
-  const markers = useMemo(() => schools.filter((school) =>
-    school.latitude !== null && school.longitude !== null,
-  ), [schools]);
-  return markers.map((school) => (
-    <Marker
-      key={school.id}
-      position={[school.latitude!, school.longitude!]}
-      icon={schoolIcon}
-      eventHandlers={{ click: () => onSelect(school) }}
-    >
-      <Tooltip direction="top" offset={[0, -12]} permanent={zoom >= 14} sticky={zoom < 14}>
-        {school.school_name}
-      </Tooltip>
-      <Popup>
-        <h3 className="mb-2 font-bold">{school.school_name}</h3>
-        <SchoolDetails school={school} />
-      </Popup>
-    </Marker>
-  ));
+  const map = useMap();
+
+  useEffect(() => {
+    const cluster = leafletWithClusters.markerClusterGroup({
+      chunkedLoading: true,
+      removeOutsideVisibleBounds: true,
+      showCoverageOnHover: false,
+      iconCreateFunction: (group) => L.divIcon({
+        className: 'school-cluster-icon',
+        html: `<span>${group.getChildCount()}</span>`,
+        iconSize: [36, 36],
+      }),
+    });
+    const markers = new Map<string, L.CircleMarker>();
+    const refreshLabels = () => {
+      const bounds = map.getBounds();
+      const labelled = map.getZoom() >= 15
+        ? new Set(schools
+          .filter((school) => school.latitude !== null && school.longitude !== null
+            && bounds.contains([school.latitude, school.longitude]))
+          .slice(0, 40)
+          .map((school) => school.id))
+        : new Set<string>();
+      markers.forEach((marker, id) => {
+        if (labelled.has(id)) marker.openTooltip();
+        else marker.closeTooltip();
+      });
+    };
+
+    for (const school of schools) {
+      if (school.latitude === null || school.longitude === null) continue;
+      const marker = L.circleMarker([school.latitude, school.longitude], {
+        radius: school.size === 'large' ? 8 : school.size === 'medium' ? 7 : 6,
+        color: markerColour(school.size),
+        fillColor: markerColour(school.size),
+        fillOpacity: 0.85,
+        weight: 1,
+      });
+      marker.bindTooltip(school.name, { direction: 'top', sticky: true });
+      marker.on('click', () => onSelect(school.id));
+      markers.set(school.id, marker);
+      cluster.addLayer(marker);
+    }
+
+    cluster.addTo(map);
+    refreshLabels();
+    map.on('moveend', refreshLabels);
+    return () => {
+      map.off('moveend', refreshLabels);
+      cluster.removeFrom(map);
+      cluster.clearLayers();
+    };
+  }, [map, onSelect, schools]);
+
+  return null;
 }

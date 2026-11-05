@@ -27,6 +27,9 @@ const MonthlyPlanPage = lazy(() =>
 const MonthlyReportPage = lazy(() =>
   import('../features/plans/MonthlyReportPage').then((module) => ({ default: module.MonthlyReportPage })),
 );
+const DevReportFixture = import.meta.env.DEV ? lazy(() =>
+  import('../features/plans/DevReportFixture').then((module) => ({ default: module.DevReportFixture })),
+) : null;
 const AccountPage = lazy(() =>
   import('../features/account/AccountPage').then((module) => ({ default: module.AccountPage })),
 );
@@ -50,6 +53,9 @@ const AdminUsersPage = lazy(() =>
 );
 const AuditLogPage = lazy(() =>
   import('../features/admin/AuditLogPage').then((module) => ({ default: module.AuditLogPage })),
+);
+const PlanNameLinkingPage = lazy(() =>
+  import('../features/admin/PlanNameLinkingPage').then((module) => ({ default: module.PlanNameLinkingPage })),
 );
 const monthlyPlanTypes: readonly PlanType[] = ['maintenance', 'cleaning', 'security_safety', 'elevators'];
 
@@ -98,6 +104,7 @@ const navigation = [
       ['تسكين العمالة', '/placement/cleaners'],
       ['تسكين البوابين', '/placement/gatekeepers'],
       ['مكافأة الفنيين', '/rewards'],
+      ['ربط الأسماء بالموظفين', '/admin/plan-name-linking'],
     ],
   },
   {
@@ -277,6 +284,7 @@ function AppShell({
         <main className="content-wrap">
           <Suspense fallback={<div role="status" className="card p-8 text-center text-slate-500">جارٍ تحميل الصفحة…</div>}>
             <Routes>
+              {import.meta.env.DEV && DevReportFixture && <Route path="/__dev/report-fixture" element={<DevReportFixture />} />}
               <Route path="/" element={<DashboardPage />} />
               <Route path="/schools" element={<SchoolsPage profile={profile} />} />
               <Route path="/plans/report" element={<MonthlyReportPage />} />
@@ -290,6 +298,7 @@ function AppShell({
               <Route path="/account" element={<AccountPage profile={profile} />} />
               <Route path="/admin/users" element={isAdmin ? <AdminUsersPage /> : <Navigate to="/" replace />} />
               <Route path="/admin/audit" element={isAdmin ? <AuditLogPage /> : <Navigate to="/" replace />} />
+              <Route path="/admin/plan-name-linking" element={<PlanNameLinkingPage profile={profile} />} />
               <Route path="/admin/settings" element={isAdmin ? <ModulePage section="admin" type="settings" /> : <Navigate to="/" replace />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
@@ -367,6 +376,9 @@ export function App() {
     if (error) console.error('تعذر تسجيل الخروج.', error);
   }
 
+  if (import.meta.env.DEV && window.location.pathname === '/__dev/report-fixture' && DevReportFixture) {
+    return <DevReportFixture />;
+  }
   if (!supabase) {
     const missingVariables = [
       ['VITE_SUPABASE_URL', import.meta.env.VITE_SUPABASE_URL],

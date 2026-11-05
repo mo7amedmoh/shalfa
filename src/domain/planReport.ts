@@ -1,4 +1,5 @@
 import type { PlanType } from './types';
+import { normalizeImportName } from './imports';
 
 export type ReportAxis = 'maintenance' | 'cleaning' | 'elevators' | 'security_safety';
 export type ReportAxisFilter = ReportAxis | 'all';
@@ -369,7 +370,7 @@ function supervisorMetrics(rows: readonly ReportPlanRow[], month: string, asOf: 
   const eligible = rows.filter((row) => row.planType === 'maintenance' || row.planType === 'cleaning');
   const groups = new Map<string, ReportPlanRow[]>();
   for (const row of eligible) {
-    const id = row.supervisorId ?? '__unassigned__';
+    const id = row.supervisorId ?? `name:${normalizeImportName(row.supervisorName) || 'unassigned'}`;
     const items = groups.get(id) ?? [];
     items.push(row);
     groups.set(id, items);

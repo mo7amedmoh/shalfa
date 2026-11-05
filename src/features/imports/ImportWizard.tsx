@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Download, FileSpreadsheet, Upload, X } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { z } from 'zod';
-import { autoDetectImportColumns, matchImportEmployees, normalizeImportName, normalizeMinistryNumber, normalizePhone, parseImportDate, parseMonthlyPlanRows } from '../../domain/imports';
+import { autoDetectImportColumns, matchImportEmployees, normalizeImportName, normalizeMinistryNumber, normalizePhone, parseImportDate, parseMonthlyPlanRows, resolvePlanPerson, schoolPersonDefault } from '../../domain/imports';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import type { GeneralPlanType, PlanType } from '../../domain/types';
 import type { UserProfile } from '../../lib/auth';
@@ -111,6 +111,8 @@ function fieldsFor(target: ImportTarget): Field[] {
       { key: 'ministry', label: 'الرقم الوزاري', aliases: ['الرقم الوزاري'], required: true },
       ...(special.date ? [{ key: 'buildingType', label: 'تصنيف الوحدة', aliases: ['تصنيف الوحدة', 'نوع المبنى'] }] : []),
       { key: 'plannedDate', label: special.date ?? 'التاريخ المخطط', aliases: [special.date ?? 'التاريخ المخطط', 'التاريخ', 'تاريخ التنفيذ'], required: true },
+      { key: 'engineer', label: 'اسم المهندس', aliases: ['اسم المهندس', 'اسم مهندس المرافق'] },
+      { key: 'supervisor', label: 'اسم المشرف', aliases: ['اسم المشرف', 'مشرف الخطة'] },
       ...(special.notes ? [{ key: 'notes', label: special.notes, aliases: [special.notes] }] : [{ key: 'notes', label: 'ملاحظات', aliases: ['ملاحظات'] }]),
     ];
   }
@@ -403,7 +405,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
       .filter((employee) => !category || employee.category === category);
   }
 
-  function rowState(row: ImportRow, index: number): { status: 'ready' | 'skipped' | 'attention'; notes: string[]; school: SchoolRef | null; engineer: EmployeeRef | null; supervisor: EmployeeRef | null; employee: EmployeeRef | null } {
+  function rowState(row: ImportRow, index: number): { status: 'ready' | 'skipped' | 'attention'; notes: string[]; school: SchoolRef | null; engineer: EmployeeRef | null; supervisor: EmployeeRef | null; engineerName: string; supervisorName: string; employee: EmployeeRef | null } {
     const notes: string[] = [];
     const schoolMatches = schoolCandidates(row);
     const school = row.schoolId ? references?.schools.find((item) => item.id === row.schoolId) ?? null : schoolMatches.length === 1 ? schoolMatches[0] : null;
@@ -418,7 +420,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
       })
       : false;
     if (school && !school.plan_scope) {
-      return { status: 'skipped', notes: ['المدرسة خارج نطاق الأهلية المعتمدة للخطة أو التسكين.'], school, engineer: null, supervisor: null, employee: null };
+      return { status: 'skipped', notes: ['المدرسة خارج نطاق الأهلية المعتمدة للخطة أو التسكين.'], school, engineer: null, supervisor: null, engineerName: '', supervisorName: '', employee: null };
     }
     if ((target.kind === 'monthly' || target.kind === 'general') && school) {
       if (!references?.eligibility) {
@@ -439,34 +441,38 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
           references.eligibility,
         ).length > 0;
         if (!storedEligible || !importedEligible) {
-          return { status: 'skipped', notes: ['تصنيف الوحدة غير مؤهل؛ تم استبعاد مشترك ملحق وأي تصنيف آخر.'], school, engineer: null, supervisor: null, employee: null };
+          return { status: 'skipped', notes: ['تصنيف الوحدة غير مؤهل؛ تم استبعاد مشترك ملحق وأي تصنيف آخر.'], school, engineer: null, supervisor: null, engineerName: '', supervisorName: '', employee: null };
         }
       }
     }
     const date = parseImportDate(row.values.plannedDate);
     if ((target.kind === 'monthly' || target.kind === 'general') && !date) {
-      return { status: 'skipped', notes: ['لا يوجد تاريخ صالح لهذا النوع من الخطة.'], school, engineer: null, supervisor: null, employee: null };
+      return { status: 'skipped', notes: ['لا يوجد تاريخ صالح لهذا النوع من الخطة.'], school, engineer: null, supervisor: null, engineerName: '', supervisorName: '', employee: null };
     }
     if (date && selectedMonth && date.slice(0, 7) !== selectedMonth) {
-      return { status: 'skipped', notes: [`التاريخ خارج الشهر المحدد ${selectedMonth}.`], school, engineer: null, supervisor: null, employee: null };
+      return { status: 'skipped', notes: [`التاريخ خارج الشهر المحدد ${selectedMonth}.`], school, engineer: null, supervisor: null, engineerName: '', supervisorName: '', employee: null };
     }
     if (target.kind === 'monthly' && target.planType === 'elevators'
       && normalizeImportName(row.values.assignment) === normalizeImportName('لا ينطبق')) {
-      return { status: 'skipped', notes: ['قيمة المصاعد «لا ينطبق»؛ لا يُنشأ صف للخطة.'], school, engineer: null, supervisor: null, employee: null };
+      return { status: 'skipped', notes: ['قيمة المصاعد «لا ينطبق»؛ لا يُنشأ صف للخطة.'], school, engineer: null, supervisor: null, engineerName: '', supervisorName: '', employee: null };
     }
     if (!String(row.values.ministry ?? '').trim()) notes.push('الرقم الوزاري مطلوب.');
     if (!school) notes.push(schoolMatches.length > 1 ? 'وجدت عدة مدارس بهذا الرقم؛ اختر المدرسة يدوياً.' : 'لم توجد مدرسة بهذا الرقم؛ اختر المدرسة يدوياً بالاسم.');
     if (duplicateTargetSchool) notes.push('تكررت المدرسة نفسها في الملف؛ اختر المدرسة المقصودة لكل صف ولا تستورد تكرار المفتاح.');
     if (target.kind === 'monthly') {
-      const engineerMatches = matchEmployee(row.values.engineer, 'engineer');
       const supervisorField = target.planType === 'maintenance' || target.planType === 'cleaning';
-      const supervisorMatches = supervisorField ? matchEmployee(row.values.assignment, 'supervisor') : [];
-      const engineer = row.engineerId ? references?.employees.find((item) => item.id === row.engineerId) ?? null : engineerMatches.length === 1 ? engineerMatches[0] : null;
-      const supervisor = row.supervisorId ? references?.employees.find((item) => item.id === row.supervisorId) ?? null : supervisorMatches.length === 1 ? supervisorMatches[0] : null;
-      if (!String(row.values.engineer ?? '').trim()) notes.push('اسم المهندس مطلوب لهذه الخطة.');
-      else if (!engineer) notes.push('اختر المهندس يدوياً أو عالج الاسم.');
-      if (!String(row.values.assignment ?? '').trim()) notes.push('المشرف أو اسم الشركة مطلوب لهذه الخطة.');
-      if (supervisorField && String(row.values.assignment ?? '').trim() && !supervisor) notes.push('اختر المشرف يدوياً أو عالج الاسم.');
+      const engineerResolution = resolvePlanPerson(row.values.engineer, references?.employees ?? [], references?.aliases ?? [], school ? schoolPersonDefault(school, 'engineer', target.planType) : '');
+      const supervisorResolution = supervisorField
+        ? resolvePlanPerson(row.values.assignment, references?.employees ?? [], references?.aliases ?? [], school ? schoolPersonDefault(school, 'supervisor', target.planType) : '')
+        : { employee: null, name: '', source: 'empty' as const };
+      const engineer = row.engineerId ? references?.employees.find((item) => item.id === row.engineerId) ?? null : engineerResolution.employee;
+      const supervisor = row.supervisorId ? references?.employees.find((item) => item.id === row.supervisorId) ?? null : supervisorResolution.employee;
+      if (!engineerResolution.name) notes.push('اسم المهندس فارغ؛ سيُحفظ الصف دون اسم.');
+      else if (engineerResolution.source === 'school') notes.push('مأخوذ من قاعدة المباني: اسم المهندس.');
+      else if (!engineer) notes.push('اسم نصي (غير مسجل): المهندس.');
+      if (supervisorField && !supervisorResolution.name) notes.push('اسم المشرف فارغ؛ سيُحفظ الصف دون اسم.');
+      else if (supervisorResolution.source === 'school') notes.push('مأخوذ من قاعدة المباني: اسم المشرف.');
+      else if (supervisorField && !supervisor) notes.push('اسم نصي (غير مسجل): المشرف.');
       if (target.planType === 'maintenance') {
         const acDate = parseImportDate(row.values.acDate);
         const maintenanceSupervisor = normalizeImportName(row.values.assignment);
@@ -476,10 +482,16 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
           notes.push('تحذير: بيانات التكييف تختلف عن الصيانة؛ ستُستورد بيانات الصيانة فقط.');
         }
       }
-      return { status: notes.some((note) => !note.startsWith('تحذير:')) ? 'attention' : 'ready', notes, school, engineer, supervisor, employee: null };
+      return { status: 'ready', notes, school, engineer, supervisor, engineerName: engineerResolution.name, supervisorName: supervisorResolution.name, employee: null };
     }
     if (target.kind === 'general') {
-      return { status: notes.length ? 'attention' : 'ready', notes, school, engineer: null, supervisor: null, employee: null };
+      const engineerResolution = resolvePlanPerson(row.values.engineer, references?.employees ?? [], references?.aliases ?? [], school ? schoolPersonDefault(school, 'engineer', target.planType) : '');
+      const supervisorResolution = resolvePlanPerson(row.values.supervisor, references?.employees ?? [], references?.aliases ?? [], school ? schoolPersonDefault(school, 'supervisor', target.planType) : '');
+      if (engineerResolution.source === 'school') notes.push('مأخوذ من قاعدة المباني: اسم المهندس.');
+      if (supervisorResolution.source === 'school') notes.push('مأخوذ من قاعدة المباني: اسم المشرف.');
+      if (engineerResolution.name && !engineerResolution.employee) notes.push('اسم نصي (غير مسجل): المهندس.');
+      if (supervisorResolution.name && !supervisorResolution.employee) notes.push('اسم نصي (غير مسجل): المشرف.');
+      return { status: notes.some((note) => !note.startsWith('تحذير:') && !note.startsWith('مأخوذ') && !note.startsWith('اسم نصي')) ? 'attention' : 'ready', notes, school, engineer: engineerResolution.employee, supervisor: supervisorResolution.employee, engineerName: engineerResolution.name, supervisorName: supervisorResolution.name, employee: null };
     }
 
     if (!String(row.values.fullName ?? '').trim()) notes.push('اسم العامل مطلوب.');
@@ -499,7 +511,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
       const employeeNo = String(row.values.employeeNo ?? '').trim();
       const byNo = employeeNo ? references?.employees.filter((employee) => employee.employee_no === employeeNo && employee.category === 'cleaner') ?? [] : [];
       if (byNo.length > 1) notes.push('الرقم الوظيفي يطابق أكثر من عامل؛ راجع السجل.');
-      return { status: notes.some((note) => !note.startsWith('تحذير:')) ? 'attention' : 'ready', notes, school, engineer: null, supervisor: null, employee: null };
+      return { status: notes.some((note) => !note.startsWith('تحذير:')) ? 'attention' : 'ready', notes, school, engineer: null, supervisor: null, engineerName: '', supervisorName: '', employee: null };
     }
     const employeeNo = String(row.values.employeeNo ?? '').trim();
     const employeeNumberMatches = employeeNo
@@ -516,7 +528,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
     if (employee && employeeNo && employee.employee_no !== employeeNo) {
       notes.push('تحذير: الرقم الوظيفي المستورد لا يطابق سجل الموظف المختار؛ سيُحفظ الرقم كما ورد في بيانات البواب.');
     }
-    return { status: notes.some((note) => !note.startsWith('تحذير:')) ? 'attention' : 'ready', notes, school, engineer: null, supervisor: null, employee };
+    return { status: notes.some((note) => !note.startsWith('تحذير:')) ? 'attention' : 'ready', notes, school, engineer: null, supervisor: null, engineerName: '', supervisorName: '', employee };
   }
 
   async function writeImport() {
@@ -555,7 +567,9 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
           school_id: state.school!.id,
           planned_date: parseImportDate(row.values.plannedDate),
           engineer_id: state.engineer?.id ?? null,
+          engineer_name: state.engineerName || null,
           supervisor_id: state.supervisor?.id ?? null,
+          supervisor_name: state.supervisorName || null,
           contractor_name: target.planType === 'security_safety' || target.planType === 'elevators'
             ? String(row.values.assignment ?? '').trim() || null
             : null,
@@ -585,6 +599,9 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
           school_id: state.school!.id,
           planned_date: parseImportDate(row.values.plannedDate),
           ...(row.values.notes ? { notes: String(row.values.notes) } : {}),
+          supervisor_id: state.supervisor?.id ?? null,
+          supervisor_name: state.supervisorName || null,
+          engineer_name: state.engineerName || null,
         }));
         const result = await supabase.rpc('import_general_plan_rows', { p_plan_id: plan.id, p_rows: payload });
         if (result.error) {
@@ -595,6 +612,14 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
             note: result.error.message,
           }));
           continue;
+        }
+        for (const { state } of batch) {
+          const { error: peopleError } = await supabase.from('general_plan_rows').update({
+            supervisor_id: state.supervisor?.id ?? null,
+            supervisor_name: state.supervisorName || null,
+            engineer_name: state.engineerName || null,
+          }).eq('plan_id', plan.id).eq('school_id', state.school!.id);
+          if (peopleError) throw peopleError;
         }
         const operations = z.array(z.object({ source_line: z.number().int(), operation: z.enum(['created', 'updated']) })).parse(result.data);
         const operationByLine = new Map(operations.map((item) => [item.source_line, item.operation]));

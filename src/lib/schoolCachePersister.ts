@@ -3,6 +3,10 @@ import type { PersistedClient, Persister } from '@tanstack/react-query-persist-c
 const databaseName = 'shalfa-offline-cache';
 const storeName = 'query-cache';
 const cacheKey = 'schools';
+const persistThrottleMs = 5_000;
+let pendingClient: PersistedClient | null = null;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistInFlight: Promise<void> | null = null;
 
 function openDatabase(): Promise<IDBDatabase> {
   if (!globalThis.indexedDB) return Promise.reject(new Error('IndexedDB غير متاح لحفظ بيانات المدارس دون اتصال.'));
@@ -15,16 +19,36 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
+async function persistClientNow(client: PersistedClient) {
+  const database = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(storeName, 'readwrite');
+    transaction.objectStore(storeName).put(client, cacheKey);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error('تعذر حفظ بيانات المدارس محلياً.'));
+    transaction.onabort = () => reject(transaction.error ?? new Error('أُلغيت عملية حفظ بيانات المدارس.'));
+  }).finally(() => database.close());
+}
+
+function schedulePendingPersist() {
+  if (persistTimer || persistInFlight || !pendingClient) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    const next = pendingClient;
+    pendingClient = null;
+    if (next) {
+      persistInFlight = persistClientNow(next).finally(() => {
+        persistInFlight = null;
+        schedulePendingPersist();
+      });
+    }
+  }, persistThrottleMs);
+}
+
 export const schoolCachePersister: Persister = {
-  async persistClient(client: PersistedClient) {
-    const database = await openDatabase();
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(storeName, 'readwrite');
-      transaction.objectStore(storeName).put(client, cacheKey);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error ?? new Error('تعذر حفظ بيانات المدارس محلياً.'));
-      transaction.onabort = () => reject(transaction.error ?? new Error('أُلغيت عملية حفظ بيانات المدارس.'));
-    }).finally(() => database.close());
+  persistClient(client: PersistedClient) {
+    pendingClient = client;
+    schedulePendingPersist();
   },
   async restoreClient() {
     const database = await openDatabase();
@@ -41,6 +65,9 @@ export const schoolCachePersister: Persister = {
     });
   },
   async removeClient() {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = null;
+    pendingClient = null;
     const database = await openDatabase();
     await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(storeName, 'readwrite');

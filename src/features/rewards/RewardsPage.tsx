@@ -13,7 +13,12 @@ const poolSchema = z.object({
   amount: z.coerce.number().nonnegative(),
   status: z.enum(['open', 'approved']),
 });
-const engineerSchema = z.object({ id: z.string().uuid(), display_name: z.string().nullable() });
+const engineerSchema = z.object({
+  profile_id: z.string().uuid(),
+  display_name: z.string().nullable(),
+  job_title: z.string().nullable(),
+  employee_id: z.string().uuid().nullable(),
+});
 const employeeSchema = z.object({ id: z.string().uuid(), full_name: z.string(), job_title: z.string().nullable() });
 const distributionSchema = z.object({
   id: z.string().uuid(),
@@ -32,9 +37,16 @@ async function loadPools(month: string) {
 
 async function loadEngineers() {
   if (!supabase) return [];
-  const { data, error } = await supabase.from('profiles').select(APP_SCHEMA_SELECT.profileEngineer).eq('role', 'area_engineer').not('employee_id', 'is', null).order('full_name');
+  const { data, error } = await supabase.from('profiles').select(APP_SCHEMA_SELECT.areaEngineers).eq('role', 'area_engineer').order('full_name');
   if (error) throw error;
   return z.array(engineerSchema).parse(data);
+}
+
+async function loadEngineerEmployees() {
+  if (!supabase) return [];
+  const { data, error } = await supabase.from('employees').select(APP_SCHEMA_SELECT.engineerEmployees).eq('category', 'engineer').order('full_name');
+  if (error) throw error;
+  return z.array(employeeSchema).parse(data);
 }
 
 async function loadEmployees() {
@@ -68,14 +80,19 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
   const [note, setNote] = useState('');
   const [poolAmount, setPoolAmount] = useState('');
   const [message, setMessage] = useState('');
+  const [linkEmployeeIds, setLinkEmployeeIds] = useState<Record<string, string>>({});
   const privileged = profile?.role === 'admin' || profile?.role === 'project_manager';
   const pools = useQuery({ queryKey: ['reward-pools', month], queryFn: () => loadPools(month), enabled: Boolean(profile) });
   const engineers = useQuery({ queryKey: ['area-engineers'], queryFn: loadEngineers, enabled: Boolean(profile && privileged) });
+  const engineerEmployees = useQuery({ queryKey: ['engineer-employees'], queryFn: loadEngineerEmployees, enabled: Boolean(profile && privileged) });
   const employees = useQuery({ queryKey: ['reward-employees'], queryFn: loadEmployees, enabled: Boolean(profile) });
 
   useEffect(() => {
     if (profile?.role === 'area_engineer') setEngineerId(profile.employee_id ?? '');
-    else if (privileged && engineers.data?.length && !engineerId) setEngineerId(engineers.data[0].id);
+    else if (privileged && engineers.data?.length && !engineerId) {
+      const firstLinked = engineers.data.find((engineer) => engineer.employee_id);
+      if (firstLinked?.employee_id) setEngineerId(firstLinked.employee_id);
+    }
   }, [profile, privileged, engineers.data, engineerId]);
 
   const pool = pools.data?.find((item) => item.engineer_id === engineerId);
@@ -161,21 +178,58 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
     onError: (error: Error) => setMessage(`تعذر حفظ التوزيع: ${error.message}`),
   });
 
+  const linkEngineer = useMutation({
+    mutationFn: async ({ profileId, employeeId }: { profileId: string; employeeId?: string }) => {
+      if (!supabase || !privileged) throw new Error('لا تملك صلاحية ربط المهندسين.');
+      const { error } = await supabase.rpc('link_area_engineer_profile', {
+        p_profile_id: profileId,
+        p_employee_id: employeeId || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: async () => {
+      setMessage('تم ربط المهندس بسجل الموظف.');
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['area-engineers'] }),
+        client.invalidateQueries({ queryKey: ['engineer-employees'] }),
+      ]);
+    },
+    onError: (error: Error) => setMessage(`تعذر ربط المهندس: ${error.message}`),
+  });
+
   useEffect(() => {
     if (pool) setPoolAmount(String(pool.amount));
     else setPoolAmount('');
   }, [pool]);
 
-  const engineerNames = new Map((engineers.data ?? []).map((item) => [item.id, item.display_name]));
+  const engineerNames = new Map((engineers.data ?? [])
+    .filter((item): item is typeof item & { employee_id: string } => Boolean(item.employee_id))
+    .map((item) => [item.employee_id, item.display_name]));
+  const unlinkedEngineers = (engineers.data ?? []).filter((engineer) => !engineer.employee_id);
   return (
     <div className="grid gap-5">
       <section><p className="text-sm text-slate-500">مخصص شهري وتوزيع موثق</p><h2 className="mt-1 text-2xl font-bold text-brand-900">مكافأة الفنيين</h2></section>
-      {(pools.error || engineers.error || employees.error || distributionsQuery.error) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات المكافآت.</div>}
+      {(pools.error || engineers.error || engineerEmployees.error || employees.error || distributionsQuery.error) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات المكافآت.</div>}
       <section className="card grid gap-4 p-5">
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1 text-sm font-semibold">الشهر<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
-          {privileged && <label className="grid gap-1 text-sm font-semibold">مهندس المنطقة<select value={engineerId} onChange={(event) => setEngineerId(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2"><option value="">اختر المهندس</option>{(engineers.data ?? []).map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></label>}
+          {privileged && <label className="grid gap-1 text-sm font-semibold">مهندس المنطقة<select value={engineerId} onChange={(event) => setEngineerId(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2"><option value="">اختر المهندس</option>{(engineers.data ?? []).map((item) => <option key={item.profile_id} value={item.employee_id ?? ''} disabled={!item.employee_id}>{item.display_name ?? item.profile_id}{item.employee_id ? '' : ' — غير مربوط بسجل موظف'}</option>)}</select></label>}
         </div>
+        {privileged && unlinkedEngineers.length > 0 && <div className="grid gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+          <p className="font-bold text-amber-900">مهندسون غير مربوطين بسجل موظف</p>
+          {unlinkedEngineers.map((engineer) => <div key={engineer.profile_id} className="flex flex-wrap items-center gap-2">
+            <span className="min-w-48 text-amber-900">{engineer.display_name ?? engineer.profile_id} — غير مربوط بسجل موظف</span>
+            <select
+              value={linkEmployeeIds[engineer.profile_id] ?? ''}
+              onChange={(event) => setLinkEmployeeIds((current) => ({ ...current, [engineer.profile_id]: event.target.value }))}
+              className="rounded-lg border border-amber-300 bg-white px-3 py-2"
+            >
+              <option value="">إنشاء سجل من الملف</option>
+              {engineerEmployees.data?.map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name} · {employee.job_title ?? '—'}</option>)}
+            </select>
+            <button type="button" onClick={() => linkEngineer.mutate({ profileId: engineer.profile_id, employeeId: linkEmployeeIds[engineer.profile_id] })} disabled={linkEngineer.isPending} className="rounded-lg bg-brand-700 px-3 py-2 font-bold text-white disabled:opacity-50">ربط الآن</button>
+          </div>)}
+        </div>}
         {canEditPool && <div className="flex flex-wrap items-end gap-3">
           <label className="grid gap-1 text-sm font-semibold">المبلغ الإجمالي المتاح<input inputMode="decimal" type="number" min="0" step="0.01" value={poolAmount} onChange={(event) => setPoolAmount(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
           <button type="button" onClick={() => savePool.mutate()} disabled={savePool.isPending || !engineerId || pool?.status === 'approved'} className="rounded-lg border border-brand-700 px-4 py-2 text-sm font-bold text-brand-800 disabled:opacity-50">حفظ المخصص</button>

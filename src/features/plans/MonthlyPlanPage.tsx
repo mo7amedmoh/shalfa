@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { z } from 'zod';
-import * as XLSX from 'xlsx';
+import { loadXlsx } from '../../lib/xlsx';
 import { distributePlanDates, isPlanRowOverdue } from '../../domain/plans';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import type { PlanType } from '../../domain/types';
@@ -227,6 +227,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
       const reports = currentRows.filter((row) => row.report_completed_at).length;
       const answer = window.prompt(`سيتم حذف ${currentRows.length} صفاً، ${visited} زيارة، ${reports} تقريراً. اكتب حذف للتأكيد.`);
       if (answer !== 'حذف') throw new Error('لم يتم تأكيد الحذف.');
+      const XLSX = await loadXlsx();
       const book = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(currentRows), 'نسخة احتياطية');
       XLSX.writeFile(book, `نسخة-خطة-${planType}-${activePlan.plan_month.slice(0, 7)}.xlsx`);

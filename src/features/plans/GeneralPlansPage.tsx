@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { z } from 'zod';
-import * as XLSX from 'xlsx';
+import { loadXlsx } from '../../lib/xlsx';
 import { summarizeGeneralPlanProgress } from '../../domain/generalPlans';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import type { GeneralPlanType } from '../../domain/types';
@@ -181,6 +181,7 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
       const visited = currentRows.filter((row) => row.execution_date).length;
       const answer = window.prompt(`سيتم حذف ${currentRows.length} صفاً، ${visited} زيارة، ${visited} تقريراً. اكتب حذف للتأكيد.`);
       if (answer !== 'حذف') throw new Error('لم يتم تأكيد الحذف.');
+      const XLSX = await loadXlsx();
       const book = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(currentRows), 'نسخة احتياطية');
       XLSX.writeFile(book, `نسخة-خطة-${planType}.xlsx`);

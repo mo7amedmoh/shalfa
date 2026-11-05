@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Download, Printer } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { loadXlsx } from '../../lib/xlsx';
 import { z } from 'zod';
 import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer,
@@ -70,7 +70,8 @@ async function loadReport(month: string): Promise<LoadedReport> {
   const [current, previous] = await Promise.all([fetchMonthRows(month), fetchMonthRows(previousMonth(month))]);
   return { current, previous };
 }
-function exportWorkbook(view: ReportView) {
+async function exportWorkbook(view: ReportView) {
+  const XLSX = await loadXlsx();
   const book = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
     ['المؤشر', 'القيمة'], ...view.cards.map((c) => [c.label, c.value]),

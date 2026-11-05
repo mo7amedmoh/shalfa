@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import { loadXlsx } from './xlsx';
 import { z } from 'zod';
 import { parseClassCount } from '../domain/staffing';
 import { mapSchoolContactColumns, schoolContactsExtraKey } from '../domain/schoolContacts';
@@ -114,10 +114,11 @@ function sourceFieldsFromColumns(headers: readonly string[], values: readonly st
   return sourceFields;
 }
 
-export function parseSchoolWorkbook(
+export async function parseSchoolWorkbook(
   workbookData: ArrayBuffer,
   tabName: string,
-): { headers: string[]; rows: string[][] } {
+): Promise<{ headers: string[]; rows: string[][] }> {
+  const XLSX = await loadXlsx();
   const workbook = XLSX.read(workbookData, { type: 'array' });
   const sheet = workbook.Sheets[tabName];
   if (!sheet) throw new Error(`تعذر العثور على تبويب المدارس في ملف المصدر: ${tabName}`);
@@ -253,7 +254,7 @@ export async function syncSchools(configInput: SchoolSyncConfig): Promise<School
   endpoint.searchParams.set('cacheBust', String(Date.now()));
   const response = await fetch(endpoint, { cache: 'no-store' });
   if (!response.ok) throw new Error(`تعذر جلب ملف المدارس بصيغة Excel (HTTP ${response.status}).`);
-  const { headers, rows: parsedSourceRows } = parseSchoolWorkbook(await response.arrayBuffer(), config.tabName);
+  const { headers, rows: parsedSourceRows } = await parseSchoolWorkbook(await response.arrayBuffer(), config.tabName);
   for (const header of [config.ministryNumberHeader, config.schoolNameHeader]) {
     if (!headers.includes(header)) throw new Error(`عنوان العمود غير موجود في الورقة: ${header}`);
   }

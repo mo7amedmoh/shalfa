@@ -72,9 +72,9 @@ export function SchoolMapMarkers({
 
     cluster.addTo(map);
     refreshLabels();
-    map.on('moveend', refreshLabels);
+    map.on('moveend zoomend', refreshLabels);
     return () => {
-      map.off('moveend', refreshLabels);
+      map.off('moveend zoomend', refreshLabels);
       cluster.removeFrom(map);
       cluster.clearLayers();
     };

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Download, FileSpreadsheet, Upload, X } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import type * as XLSX from 'xlsx';
+import { loadXlsx } from '../../lib/xlsx';
 import { z } from 'zod';
 import { autoDetectImportColumns, matchImportEmployees, normalizeImportName, normalizeMinistryNumber, normalizePhone, parseImportDate, parseMonthlyPlanRows, resolvePlanPerson, schoolPersonDefault } from '../../domain/imports';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
@@ -140,7 +141,8 @@ function templateHeaders(target: ImportTarget): string[] {
   return fieldsFor(target).map(({ label }) => label);
 }
 
-function downloadWorkbook(name: string, rows: unknown[][]) {
+async function downloadWorkbook(name: string, rows: unknown[][]) {
+  const XLSX = await loadXlsx();
   const sheet = XLSX.utils.aoa_to_sheet(rows);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, sheet, 'نموذج');
@@ -270,13 +272,14 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
       return;
     }
     try {
+      const XLSX = await loadXlsx();
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
       if (!workbook.SheetNames.length) throw new Error('لا توجد أوراق عمل في الملف.');
       setWorkbook(workbook);
       setFileName(file.name);
       setSheets(workbook.SheetNames);
       setSheetName(workbook.SheetNames[0]);
-      readSheet(workbook, workbook.SheetNames[0]);
+      await readSheet(workbook, workbook.SheetNames[0]);
       setStep('map');
       try {
         setReferences(await loadReferences());
@@ -289,7 +292,8 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
     }
   }
 
-  function readSheet(workbook: XLSX.WorkBook, selected: string) {
+  async function readSheet(workbook: XLSX.WorkBook, selected: string) {
+    const XLSX = await loadXlsx();
     const matrix = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[selected], { header: 1, raw: true, defval: '' });
     const formattedMatrix = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[selected], { header: 1, raw: false, defval: '' });
     const [headerRow = [], ...dataRows] = matrix;
@@ -316,7 +320,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
     if (!fileName || !workbook) return;
     try {
       setSheetName(value);
-      readSheet(workbook, value);
+      void readSheet(workbook, value);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'تعذر قراءة الورقة.');
     }

@@ -166,7 +166,7 @@ describe('prepareSchoolRows', () => {
   });
 
   describe('parseSchoolWorkbook', () => {
-    it('preserves mixed text and numeric ministry numbers and blank physical rows', () => {
+    it('preserves mixed text and numeric ministry numbers and blank physical rows', async () => {
       const workbook = XLSX.utils.book_new();
       const sheet = XLSX.utils.aoa_to_sheet([
         ['الرقم الوزاري', 'اسم المدرسة'],
@@ -178,7 +178,7 @@ describe('prepareSchoolRows', () => {
       XLSX.utils.book_append_sheet(workbook, sheet, 'قاعدة بيانات المدارس');
       const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
 
-      const parsed = parseSchoolWorkbook(bytes, 'قاعدة بيانات المدارس');
+      const parsed = await parseSchoolWorkbook(bytes, 'قاعدة بيانات المدارس');
       expect(parsed.headers).toEqual(['الرقم الوزاري', 'اسم المدرسة']);
       expect(parsed.rows).toEqual([
         ['195866', 'الابتدائية'],
@@ -188,12 +188,12 @@ describe('prepareSchoolRows', () => {
       ]);
     });
 
-    it('reports an error when the requested sheet is not present', () => {
+    it('reports an error when the requested sheet is not present', async () => {
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['header']]), 'Other');
       const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
-      expect(() => parseSchoolWorkbook(bytes, 'قاعدة بيانات المدارس'))
-        .toThrow('تعذر العثور على تبويب المدارس في ملف المصدر');
+      await expect(parseSchoolWorkbook(bytes, 'قاعدة بيانات المدارس'))
+        .rejects.toThrow('تعذر العثور على تبويب المدارس في ملف المصدر');
     });
   });
 

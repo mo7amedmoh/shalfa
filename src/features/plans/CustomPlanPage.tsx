@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { z } from 'zod';
-import * as XLSX from 'xlsx';
+import { loadXlsx } from '../../lib/xlsx';
 import { eligibleCustomSchoolIds, customPlanTypeSchema, type CustomPlanType } from '../../domain/customPlans';
 import type { PlanEligibilityConfig } from '../../domain/planEligibility';
 import type { UserProfile } from '../../lib/auth';
@@ -106,6 +106,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
       const answer = window.prompt('اكتب حذف للتأكيد:');
       if (answer !== 'حذف') throw new Error('لم يتم تأكيد الحذف.');
       const backupRows = rowId ? (rows.data ?? []).filter((row) => row.id === rowId) : (rows.data ?? []);
+      const XLSX = await loadXlsx();
       const book = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(backupRows), 'نسخة احتياطية');
       XLSX.writeFile(book, `نسخة-احتياطية-${type?.name ?? 'خطة'}.xlsx`);
@@ -120,6 +121,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
     mutationFn: async () => {
       if (!supabase || !canManage(profile) || !planId) throw new Error('لا تملك صلاحية الحذف.');
       if (window.prompt('اكتب حذف للتأكيد على حذف فترة الخطة:') !== 'حذف') throw new Error('لم يتم تأكيد الحذف.');
+      const XLSX = await loadXlsx();
       const book = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(rows.data ?? []), 'نسخة احتياطية');
       XLSX.writeFile(book, `نسخة-فترة-${type?.name ?? 'خطة'}.xlsx`);
@@ -139,6 +141,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
         if (error) throw error;
       } else {
         const backup = [...(plans.data ?? []), ...(rows.data ?? [])];
+        const XLSX = await loadXlsx();
         const book = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(backup), 'نسخة احتياطية');
         XLSX.writeFile(book, `نسخة-خطة-${type.name}.xlsx`);
@@ -149,13 +152,15 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
     onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['custom-plan-types'] }); navigate('/'); },
     onError: (error: Error) => setMessage(error.message),
   });
-  const exportRows = () => {
+  const exportRows = async () => {
+    const XLSX = await loadXlsx();
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(rows.data ?? []), 'الخطة');
     XLSX.writeFile(book, `خطة-${type?.name ?? 'مخصصة'}.xlsx`);
   };
   const importRows = async (file: File) => {
     if (!supabase || !planId || !canManage(profile)) return;
+    const XLSX = await loadXlsx();
     const workbook = XLSX.read(await file.arrayBuffer());
     const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[workbook.SheetNames[0]]);
     const byMinistry = new Map((candidates.data?.schools ?? []).map((school) => [school.ministry_no, school.id]));
@@ -169,7 +174,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
   const currentPlans = plans.data ?? [];
   return <div className="grid gap-5">
     <section className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm text-slate-500">خطة مخصصة</p><h2 className="mt-1 text-2xl font-bold text-brand-900">{type.name}</h2></div><div className="flex flex-wrap gap-2">
-      {canManage(profile) && <><label className="cursor-pointer rounded-lg border border-slate-300 px-3 py-2 text-sm">استيراد Excel<input className="hidden" type="file" accept=".xlsx,.xls" onChange={(event) => event.target.files?.[0] && importRows(event.target.files[0])} /></label><button type="button" onClick={() => { const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['الرقم الوزاري', 'التاريخ المخطط', 'اسم المشرف', 'اسم المهندس']]), 'قالب'); XLSX.writeFile(book, `قالب-${type.name}.xlsx`); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">تنزيل قالب Excel</button><button type="button" onClick={exportRows} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">تصدير Excel</button></>}
+      {canManage(profile) && <><label className="cursor-pointer rounded-lg border border-slate-300 px-3 py-2 text-sm">استيراد Excel<input className="hidden" type="file" accept=".xlsx,.xls" onChange={(event) => event.target.files?.[0] && importRows(event.target.files[0])} /></label><button type="button" onClick={async () => { const XLSX = await loadXlsx(); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['الرقم الوزاري', 'التاريخ المخطط', 'اسم المشرف', 'اسم المهندس']]), 'قالب'); XLSX.writeFile(book, `قالب-${type.name}.xlsx`); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">تنزيل قالب Excel</button><button type="button" onClick={exportRows} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">تصدير Excel</button></>}
       {canTypeManage(profile) && <><button type="button" onClick={() => deleteType.mutate('hide')} className="rounded-lg border border-amber-300 px-3 py-2 text-sm text-amber-800">إخفاء من القائمة</button><button type="button" onClick={() => deleteType.mutate('delete')} className="rounded-lg bg-rose-700 px-3 py-2 text-sm text-white">حذف الخطة من القائمة</button></>}</div></section>
     <section className="card grid gap-4 p-5"><div className="grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-sm font-semibold">{type.cadence === 'monthly' ? 'الشهر' : 'السنة'}<input type={type.cadence === 'monthly' ? 'month' : 'number'} value={period} onChange={(event) => setPeriod(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" /></label><label className="grid gap-1 text-sm font-semibold">الفترة المنشأة<select value={planId} onChange={(event) => setPlanId(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2"><option value="">اختر فترة</option>{currentPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.period}</option>)}</select></label></div>
       {type.scope === 'manual' && <div className="max-h-48 overflow-y-auto rounded-lg border border-slate-200 p-3">{(candidates.data?.schools ?? []).filter((school) => eligibleIds.includes(school.id)).map((school) => <label key={school.id} className="flex gap-2 py-1 text-sm"><input type="checkbox" checked={selectedIds.includes(school.id)} onChange={(event) => setSelectedIds((ids) => event.target.checked ? [...ids, school.id] : ids.filter((id) => id !== school.id))} />{school.name} <span className="text-slate-400">{school.ministry_no}</span></label>)}</div>}

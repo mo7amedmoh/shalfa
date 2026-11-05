@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, ExternalLink, Paperclip, Upload, X } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { loadXlsx } from '../../lib/xlsx';
 import { z } from 'zod';
 import { isDeliverableLate, resolveDeliverableDueDate, summarizeDeliverables, type DeliverableDueDates, type DeliverableStatus } from '../../domain/deliverables';
 import type { UserProfile } from '../../lib/auth';
@@ -231,7 +231,8 @@ export function DeliverablesPage({ profile }: { profile: UserProfile | null }) {
     setMessage(`تم إنشاء رابط مؤقت لملف ${attachment.file_name}.`);
   }
 
-  function exportExcel() {
+  async function exportExcel() {
+    const XLSX = await loadXlsx();
     const workbook = XLSX.utils.book_new();
     const rows = visibleItems.map((item) => {
       const due = resolveDeliverableDueDate(toDueRecord(item), dates);

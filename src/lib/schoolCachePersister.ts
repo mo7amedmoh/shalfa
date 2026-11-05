@@ -51,6 +51,7 @@ export const schoolCachePersister: Persister = {
     schedulePendingPersist();
   },
   async restoreClient() {
+    if (!globalThis.location?.pathname.startsWith('/schools')) return undefined;
     const database = await openDatabase();
     return new Promise<PersistedClient | undefined>((resolve, reject) => {
       const transaction = database.transaction(storeName, 'readonly');

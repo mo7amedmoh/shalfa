@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import type { InputHTMLAttributes } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
-import * as XLSX from 'xlsx';
+import { loadXlsx } from '../../lib/xlsx';
 import { z } from 'zod';
 import { FileDown, Eye, EyeOff, Search, Upload } from 'lucide-react';
 import type { UserProfile } from '../../lib/auth';
@@ -174,6 +174,7 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
     if (file.size > 5 * 1024 * 1024) return setMessage('الحد الأقصى لحجم الملف 5 ميجابايت.');
     if (!/\.(xlsx|xls|csv)$/i.test(file.name)) return setMessage('الصيغ المسموحة: XLSX وXLS وCSV.');
     try {
+      const XLSX = await loadXlsx();
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
       const firstSheet = workbook.SheetNames[0];
       if (!firstSheet) throw new Error('الملف لا يحتوي على ورقة بيانات.');
@@ -246,6 +247,7 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
 
   async function exportEmployees() {
     if (!visibleEmployees.length) return setMessage('لا توجد سجلات مطابقة للتصدير.');
+    const XLSX = await loadXlsx();
     const records = visibleEmployees.map((employee) => ({
         الاسم: employee.full_name,
         'الرقم الوظيفي': employee.employee_number,

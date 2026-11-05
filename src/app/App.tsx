@@ -10,7 +10,6 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { supabase } from '../lib/supabase';
 import { getUserProfile, signInWithEmail, type UserProfile } from '../lib/auth';
-import { runThrottledSchoolSync } from '../lib/schoolSync';
 import { defaultPreferences, loadUserPreferences } from '../lib/preferences';
 import { PreferencesProvider } from './PreferencesProvider';
 import type { PlanType } from '../domain/types';
@@ -31,6 +30,9 @@ const MonthlyReportPage = lazy(() =>
 );
 const DevReportFixture = import.meta.env.DEV ? lazy(() =>
   import('../features/plans/DevReportFixture').then((module) => ({ default: module.DevReportFixture })),
+) : null;
+const DevMapFixture = import.meta.env.DEV ? lazy(() =>
+  import('../features/schools/DevMapFixture').then((module) => ({ default: module.DevMapFixture })),
 ) : null;
 const AccountPage = lazy(() =>
   import('../features/account/AccountPage').then((module) => ({ default: module.AccountPage })),
@@ -319,6 +321,7 @@ function AppShell({
           <Suspense fallback={<div role="status" className="card p-8 text-center text-slate-500">جارٍ تحميل الصفحة…</div>}>
             <Routes>
               {import.meta.env.DEV && DevReportFixture && <Route path="/__dev/report-fixture" element={<DevReportFixture />} />}
+              {import.meta.env.DEV && DevMapFixture && <Route path="/__dev/map-fixture" element={<DevMapFixture />} />}
               <Route path="/" element={<DashboardPage />} />
               <Route path="/schools" element={<SchoolsPage profile={profile} />} />
               <Route path="/plans/report" element={<MonthlyReportPage />} />
@@ -388,7 +391,7 @@ export function App() {
   useEffect(() => {
     if (profile?.role !== 'admin') return;
     let active = true;
-    void runThrottledSchoolSync()
+    void import('../lib/schoolSync').then(({ runThrottledSchoolSync }) => runThrottledSchoolSync())
       .then((result) => {
         if (active && result !== null) {
           void queryClient.invalidateQueries({ queryKey: ['schools'] });
@@ -413,6 +416,9 @@ export function App() {
 
   if (import.meta.env.DEV && window.location.pathname === '/__dev/report-fixture' && DevReportFixture) {
     return <DevReportFixture />;
+  }
+  if (import.meta.env.DEV && window.location.pathname === '/__dev/map-fixture' && DevMapFixture) {
+    return <DevMapFixture />;
   }
   if (!supabase) {
     const missingVariables = [

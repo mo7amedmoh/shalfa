@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, Eye, EyeOff, X } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { loadXlsx } from '../../lib/xlsx';
 import { z } from 'zod';
 import type { UserProfile } from '../../lib/auth';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
@@ -189,7 +189,8 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
     setRevealed((current) => ({ ...current, [gatekeeper.id]: parsed.data[0].residence_no ?? '' }));
   }
 
-  function exportRows() {
+  async function exportRows() {
+    const XLSX = await loadXlsx();
     const worksheet = XLSX.utils.aoa_to_sheet([
       ['المدرسة', 'الرقم الوزاري', 'الحي', 'اسم البواب', 'الرقم الوظيفي', 'رقم الجوال', 'رقم الإقامة', 'ملاحظات'],
       ...rows.map(({ school, gatekeeper }) => [

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { MapContainer, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, useMap } from 'react-leaflet';
 import { Download, List, Map as MapIcon, Search, SlidersHorizontal } from 'lucide-react';
 import { z } from 'zod';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
@@ -13,6 +13,9 @@ import { DuplicateSchoolWarning } from './SchoolSyncWarnings';
 import { SchoolDetails } from './SchoolDetails';
 import { SchoolMapMarkers } from './SchoolMapMarkers';
 import type { SchoolRecord } from './schoolTypes';
+import 'leaflet/dist/leaflet.css';
+import 'leaflet.markercluster/dist/MarkerCluster.css';
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 
 const sourceColumnSchema = z.object({ header: z.string(), value: z.unknown() });
 const schoolSchema = z.object({
@@ -74,17 +77,11 @@ function csvCell(value: string): string {
 function MapViewport({
   schools,
   target,
-  onZoom,
 }: {
   schools: readonly SchoolRecord[];
   target: SchoolRecord | null;
-  onZoom: (zoom: number) => void;
 }) {
   const map = useMap();
-  useMapEvents({ zoomend: () => onZoom(map.getZoom()) });
-  useEffect(() => {
-    onZoom(map.getZoom());
-  }, [map, onZoom]);
   useEffect(() => {
     if (target?.latitude !== null && target?.longitude !== null && target) {
       map.flyTo([target.latitude, target.longitude], Math.max(map.getZoom(), 15), { duration: 0.6 });
@@ -105,7 +102,6 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [visibleColumns, setVisibleColumns] = useState<number[]>([]);
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
-  const [, setZoom] = useState(10);
   const [mapTargetId, setMapTargetId] = useState('');
   const [mapSearch, setMapSearch] = useState('');
   const [selectedSchoolId, setSelectedSchoolId] = useState('');
@@ -312,9 +308,9 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
               </datalist>
             </label>
             <div className="card min-w-0 overflow-hidden p-3">
-              <MapContainer center={[24.7136, 46.6753]} zoom={10} scrollWheelZoom className="map-frame" aria-label="خريطة المدارس">
+              <MapContainer center={[24.7136, 46.6753]} zoom={10} scrollWheelZoom preferCanvas className="map-frame" aria-label="خريطة المدارس">
                 <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                <MapViewport schools={mappableSchools} target={mapTarget} onZoom={setZoom} />
+                <MapViewport schools={mappableSchools} target={mapTarget} />
                 <SchoolMapMarkers schools={slimMapSchools} onSelect={setSelectedSchoolId} />
               </MapContainer>
               <div className="flex flex-wrap gap-3 px-2 pt-3 text-xs text-slate-600" aria-label="دليل أحجام المدارس">

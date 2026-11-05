@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Eye, EyeOff } from 'lucide-react';
 import { z } from 'zod';
-import * as XLSX from 'xlsx';
+import { loadXlsx } from '../../lib/xlsx';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import { calculateStaffing, parseClassCount, type StaffingResult } from '../../domain/staffing';
 import type { UserProfile } from '../../lib/auth';
@@ -225,7 +225,8 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
     setRevealed((current) => ({ ...current, [employeeId]: residenceNumber }));
   }
 
-  function exportSummary() {
+  async function exportSummary() {
+    const XLSX = await loadXlsx();
     const rows = filtered.map(({ school, staffing, neighborhood }) => ({
       'الرقم الوزاري': school.ministry_number,
       'اسم المدرسة': school.school_name,

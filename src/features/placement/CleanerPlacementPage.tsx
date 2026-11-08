@@ -76,6 +76,9 @@ async function loadPlacementData(): Promise<SchoolData> {
       exception: exceptions.get(item.school_id) ?? null,
     });
   }
+  for (const [schoolId, exception] of exceptions) {
+    if (!overrides.has(schoolId)) overrides.set(schoolId, { correctedSize: null, exception });
+  }
   return {
     schools: z.array(schoolSchema).parse(schoolsResult.data),
     employees: z.array(employeeSchema).parse(employeeResult.data),

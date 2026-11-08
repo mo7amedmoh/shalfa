@@ -1,4 +1,5 @@
 import { loadXlsx } from './xlsx';
+import { normalizeEligibilityValue } from '../domain/planEligibility';
 import { z } from 'zod';
 import { parseClassCount } from '../domain/staffing';
 import { mapSchoolContactColumns, schoolContactsExtraKey } from '../domain/schoolContacts';
@@ -219,7 +220,7 @@ export function prepareSchoolRows(
       source_row: sourceRow,
       source_columns: sourceColumns,
       building_type: buildingType || null,
-      plan_scope: ['مستقل', 'مشترك اساسي'].includes(normalizedText(buildingType)),
+      plan_scope: ['مستقل', 'مشترك اساسي'].map(normalizeEligibilityValue).includes(normalizeEligibilityValue(buildingType)),
       has_elevator_contractor: Boolean(normalizedText(elevatorContractor) && normalizedText(elevatorContractor) !== normalizedText('لا ينطبق')),
       name: schoolName,
       extra,

@@ -11,7 +11,6 @@ import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
-import { CustomPlanTypeDialog } from './CustomPlanTypeDialog';
 
 const sourceSchoolSchema = z.object({
   id: z.string().uuid(),
@@ -114,7 +113,6 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const [activePlanId, setActivePlanId] = useState('');
   const [actualDates, setActualDates] = useState<Record<string, { visited: string; report: string }>>({});
   const [message, setMessage] = useState('');
-  const [showCustomDialog, setShowCustomDialog] = useState(false);
   const candidates = useQuery({ queryKey: ['monthly-plan-candidates'], queryFn: loadCandidates });
   const plans = useQuery({ queryKey: ['monthly-plans', planType], queryFn: () => loadPlans(planType) });
   const eligibleIds = useMemo(() => {
@@ -275,14 +273,13 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const completedReports = rows.data?.filter((row) => row.report_completed_at).length ?? 0;
 
   return (
-    <div className="grid gap-5">
+    <div className="monthly-plan-page grid gap-5">
       <section className="flex flex-wrap items-end justify-between gap-3">
         <div><p className="text-sm text-slate-500">الخطط الشهرية · متابعة المدارس والإنجاز</p>
         <h2 className="mt-1 text-2xl font-bold text-brand-900">خطة {planTitles[planType]}</h2></div>
-        <div className="flex flex-wrap gap-2">{profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role) && <button type="button" onClick={() => setShowCustomDialog(true)} className="rounded-lg border border-brand-200 px-3 py-2 text-sm font-semibold text-brand-800">+ إضافة خطة</button>}<ImportWizardLauncher target={{ kind: 'monthly', planType }} profile={profile} />
+        <div className="flex flex-wrap gap-2"><ImportWizardLauncher target={{ kind: 'monthly', planType }} profile={profile} />
           {activePlan && canCreate && <><button type="button" onClick={() => deletePlan.mutate({ rowsOnly: true })} className="rounded-lg border border-rose-300 px-3 py-2 text-sm text-rose-800">مسح صفوف الخطة</button><button type="button" onClick={() => deletePlan.mutate({ rowsOnly: false })} className="rounded-lg bg-rose-700 px-3 py-2 text-sm text-white">حذف الخطة</button></>}</div>
       </section>
-      {showCustomDialog && profile && <CustomPlanTypeDialog profile={profile} group="monthly" onClose={() => setShowCustomDialog(false)} />}
       {(candidates.error || plans.error || rows.error) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات الخطط أو المدارس. تحقق من اتصال Supabase وسياسات الوصول.</div>}
 
       <section className="card grid gap-4 p-5">
@@ -341,8 +338,8 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                 <QualityBadge label="تقارير مرفوعة دون زيارة" count={(rows.data ?? []).filter((row) => Boolean(row.report_completed_at) && !row.visited_at).length} />
               </div>
             </details>
-            <div className="table-scroll">
-              <table>
+            <div className="table-scroll monthly-plan-table-scroll">
+              <table className="monthly-plan-table">
                 <thead><tr><th>المدرسة</th><th>الموعد المخطط</th>{planType === 'security_safety' || planType === 'elevators' ? <th>الشركة</th> : null}<th>تاريخ الزيارة</th><th>تاريخ إنجاز التقرير</th><th>الحالة</th></tr></thead>
                 <tbody>{(rows.data ?? []).map((row) => {
                   const dates = actualDates[row.id] ?? { visited: row.visited_at ?? '', report: row.report_completed_at ?? '' };

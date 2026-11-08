@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { PlanEligibilityConfig, SchoolSourceRecord } from './planEligibility';
-import { eligibleSchoolIds } from './planEligibility';
+import { eligibleSchoolIds, normalizeEligibilityValue } from './planEligibility';
 
 export const customPlanTypeSchema = z.object({
   id: z.string().uuid(),
@@ -23,6 +23,15 @@ export const customPlanCreateSchema = z.object({
 
 export type CustomPlanType = z.infer<typeof customPlanTypeSchema>;
 export type CustomPlanCreate = z.infer<typeof customPlanCreateSchema>;
+
+export function describeDatabaseError(error: unknown): string {
+  const reason = error as { code?: string; message?: string };
+  if (reason.code === '42703' || reason.code === 'PGRST204') return 'مخطط قاعدة البيانات قديم؛ طبّق ترحيل الخطط المخصصة 202611060005_custom_plan_group_and_audit.sql.';
+  if (reason.code === '42501') return 'ليس لديك صلاحية تنفيذ هذه العملية وفق سياسات الوصول.';
+  if (reason.code === '23505') return 'يوجد اسم خطة أو فترة خطة مكررة.';
+  if (reason.code === '23514') return 'قيمة في الطلب تخالف قيد قاعدة البيانات.';
+  return reason.message ?? 'تعذر تنفيذ العملية.';
+}
 
 export function normalisePlanName(value: string): string {
   return value.trim().normalize('NFKC').replace(/[أإآٱىةـ]/g, (char) => ({
@@ -53,7 +62,7 @@ export function eligibleCustomSchoolIds(
   if (scope === 'all_in_scope') {
     return schools
       .filter((school) => school.sourceFields.plan_scope !== false)
-      .filter((school) => String(school.sourceFields[config.buildingTypeHeader] ?? '').trim() !== 'مشترك ملحق')
+      .filter((school) => normalizeEligibilityValue(school.sourceFields[config.buildingTypeHeader]) !== normalizeEligibilityValue('مشترك ملحق'))
       .map((school) => school.id);
   }
   return eligibleSchoolIds(schools, 'maintenance', config);

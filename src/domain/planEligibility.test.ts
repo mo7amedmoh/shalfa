@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { eligibleSchoolIds, type PlanEligibilityConfig } from './planEligibility';
+import { eligibleSchoolIds, normalizeEligibilityValue, type PlanEligibilityConfig } from './planEligibility';
 import type { GeneralPlanType, PlanType } from './types';
 
 const config: PlanEligibilityConfig = {
@@ -18,6 +18,13 @@ const schools = [
 ];
 
 describe('configurable school plan eligibility', () => {
+  it('treats hamza and unhamza shared-primary values as the same category', () => {
+    expect(normalizeEligibilityValue('مشترك أساسي')).toBe(normalizeEligibilityValue('مشترك اساسي'));
+    expect(eligibleSchoolIds([
+      { id: 'shared-hamza', sourceFields: { 'نوع المبنى': 'مشترك أساسي', 'مقاول المصاعد': '' } },
+    ], 'maintenance', config)).toEqual(['shared-hamza']);
+  });
+
   it('uses configured independent and primary shared values', () => {
     expect(eligibleSchoolIds(schools, 'maintenance', config)).toEqual(['independent', 'shared', 'missing']);
   });

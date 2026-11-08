@@ -5,7 +5,9 @@ export function normalizeMinistryNumber(value: unknown): string {
     .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
     .trim()
     .replace(/\s+/g, '')
-    .toLocaleLowerCase();
+    .toLocaleLowerCase()
+    .replace(/^m(?=\d)/, '')
+    .replace(/^0+(?=\d)/, '');
 }
 
 export function normalizeImportName(value: unknown): string {
@@ -108,28 +110,43 @@ export function parseImportInteger(value: unknown): number | null {
 }
 
 export function parseImportDate(value: unknown): string | null {
-  if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString().slice(0, 10);
+  if (value instanceof Date && Number.isFinite(value.getTime())) {
+    return formatCalendarDate(value.getFullYear(), value.getMonth() + 1, value.getDate());
+  }
   if (typeof value === 'number' && Number.isFinite(value)) {
-    const date = new Date(Date.UTC(1899, 11, 30) + Math.floor(value) * 86_400_000);
-    return date.toISOString().slice(0, 10);
+    const serial = Math.floor(value);
+    if (serial < 1 || serial > 2958465) return null;
+    const date = new Date(Date.UTC(1899, 11, 30) + serial * 86_400_000);
+    return formatCalendarDate(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
   }
   if (typeof value !== 'string' || !value.trim()) return null;
   const normalized = value.trim().replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
     .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0));
   const iso = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(normalized);
-  const dmy = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(normalized);
+  const dmy = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})$/.exec(normalized);
+  const named = /^(\d{1,2})[-\s](Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)[-\s](\d{2}|\d{4})$/i.exec(normalized);
   const parts = iso
     ? [Number(iso[1]), Number(iso[2]), Number(iso[3])]
-    : dmy ? [Number(dmy[3]), Number(dmy[2]), Number(dmy[1])] : null;
-  if (parts) {
-    const [year, month, day] = parts;
-    const date = new Date(Date.UTC(year, month - 1, day));
-    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
-      ? `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-      : null;
-  }
-  const parsed = new Date(normalized);
-  return Number.isFinite(parsed.getTime()) ? parsed.toISOString().slice(0, 10) : null;
+    : dmy ? [expandTwoDigitYear(Number(dmy[3])), Number(dmy[2]), Number(dmy[1])]
+      : named ? [expandTwoDigitYear(Number(named[3])), monthNameToNumber(named[2]), Number(named[1])] : null;
+  return parts ? formatCalendarDate(parts[0], parts[1], parts[2]) : null;
+}
+
+function expandTwoDigitYear(year: number): number {
+  return year < 100 ? 2000 + year : year;
+}
+
+function monthNameToNumber(value: string): number {
+  return ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+    .findIndex((month) => value.toLocaleLowerCase().startsWith(month)) + 1;
+}
+
+function formatCalendarDate(year: number, month: number, day: number): string | null {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day) || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+    ? `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    : null;
 }
 
 export type MonthlyImportRow = {

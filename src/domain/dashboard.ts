@@ -86,3 +86,62 @@ export function summarizeDashboardStaffing(rows: readonly DashboardStaffingRow[]
     missingClassCount: summary.missingClassCount + Number(row.requiredCleaners === null),
   }), { schools: 0, required: 0, assigned: 0, shortage: 0, surplus: 0, missingClassCount: 0 });
 }
+
+export interface WorkforceSummary {
+  gatekeepers: {
+    required: number;
+    assigned: number;
+    shortage: number;
+    surplus: number;
+  };
+  cleaners: ReturnType<typeof summarizeDashboardStaffing> & {
+    bySize: Record<'small' | 'medium' | 'large', { required: number; assigned: number; shortage: number; surplus: number }>;
+  };
+  total: {
+    required: number;
+    assigned: number;
+    shortage: number;
+    surplus: number;
+  };
+}
+
+export function summarizeWorkforce(
+  cleanerRows: readonly (DashboardStaffingRow & { size?: 'small' | 'medium' | 'large' | null })[],
+  gatekeepersRequired: number,
+  gatekeepersAssigned: number,
+): WorkforceSummary {
+  if (!Number.isInteger(gatekeepersRequired) || gatekeepersRequired < 0 ||
+      !Number.isInteger(gatekeepersAssigned) || gatekeepersAssigned < 0) {
+    throw new RangeError('Gatekeeper counts must be non-negative integers.');
+  }
+  const cleaners = {
+    ...summarizeDashboardStaffing(cleanerRows),
+    bySize: (['small', 'medium', 'large'] as const).reduce((result, size) => {
+      result[size] = cleanerRows
+        .filter((row) => row.size === size)
+        .reduce((summary, row) => ({
+          required: summary.required + (row.requiredCleaners ?? 0),
+          assigned: summary.assigned + row.assignedCleaners,
+          shortage: summary.shortage + row.shortage,
+          surplus: summary.surplus + row.surplus,
+        }), { required: 0, assigned: 0, shortage: 0, surplus: 0 });
+      return result;
+    }, {} as Record<'small' | 'medium' | 'large', { required: number; assigned: number; shortage: number; surplus: number }>),
+  };
+  const gatekeepers = {
+    required: gatekeepersRequired,
+    assigned: gatekeepersAssigned,
+    shortage: Math.max(0, gatekeepersRequired - gatekeepersAssigned),
+    surplus: Math.max(0, gatekeepersAssigned - gatekeepersRequired),
+  };
+  return {
+    gatekeepers,
+    cleaners,
+    total: {
+      required: gatekeepers.required + cleaners.required,
+      assigned: gatekeepers.assigned + cleaners.assigned,
+      shortage: gatekeepers.shortage + cleaners.shortage,
+      surplus: gatekeepers.surplus + cleaners.surplus,
+    },
+  };
+}

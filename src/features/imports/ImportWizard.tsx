@@ -218,6 +218,11 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
   const [rememberAliases, setRememberAliases] = useState<Record<string, boolean>>({});
 
   const months = useMemo(() => [...new Set(rows.map((row) => parseImportDate(row.values.plannedDate)).filter((date): date is string => Boolean(date)).map((date) => date.slice(0, 7)))].sort(), [rows]);
+  const invalidDateCount = useMemo(() => rows.filter((row) => String(row.values.plannedDate ?? '').trim() && !parseImportDate(row.values.plannedDate)).length, [rows]);
+  const outsideMonthCount = useMemo(() => rows.filter((row) => {
+    const date = parseImportDate(row.values.plannedDate);
+    return Boolean(date && selectedMonth && date.slice(0, 7) !== selectedMonth);
+  }).length, [rows, selectedMonth]);
 
   async function loadReferences(): Promise<ImportReferences> {
     if (!supabase) throw new Error('يلزم إعداد الاتصال بقاعدة البيانات.');
@@ -273,7 +278,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
     }
     try {
       const XLSX = await loadXlsx();
-      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: false });
       if (!workbook.SheetNames.length) throw new Error('لا توجد أوراق عمل في الملف.');
       setWorkbook(workbook);
       setFileName(file.name);
@@ -387,8 +392,13 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
       }));
     }
     setRows(parsed);
-    const dates = [...new Set(parsed.map((row) => parseImportDate(row.values.plannedDate)).filter((date): date is string => Boolean(date)).map((date) => date.slice(0, 7)))].sort();
-    setSelectedMonth(dates[0] ?? '');
+    const dateCounts = new Map<string, number>();
+    parsed.forEach((row) => {
+      const month = parseImportDate(row.values.plannedDate)?.slice(0, 7);
+      if (month) dateCounts.set(month, (dateCounts.get(month) ?? 0) + 1);
+    });
+    const detectedMonth = [...dateCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? '';
+    setSelectedMonth(detectedMonth);
     setStep('preview');
     setMessage('');
   }
@@ -463,6 +473,10 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
     if (!String(row.values.ministry ?? '').trim()) notes.push('الرقم الوزاري مطلوب.');
     if (!school) notes.push(schoolMatches.length > 1 ? 'وجدت عدة مدارس بهذا الرقم؛ اختر المدرسة يدوياً.' : 'لم توجد مدرسة بهذا الرقم؛ اختر المدرسة يدوياً بالاسم.');
     if (duplicateTargetSchool) notes.push('تكررت المدرسة نفسها في الملف؛ اختر المدرسة المقصودة لكل صف ولا تستورد تكرار المفتاح.');
+    if ((target.kind === 'monthly' || target.kind === 'general')
+      && (!school || duplicateTargetSchool || notes.some((note) => !note.startsWith('تحذير:')))) {
+      return { status: 'attention', notes, school, engineer: null, supervisor: null, engineerName: '', supervisorName: '', employee: null };
+    }
     if (target.kind === 'monthly') {
       const supervisorField = target.planType === 'maintenance' || target.planType === 'cleaning';
       const engineerResolution = resolvePlanPerson(row.values.engineer, references?.employees ?? [], references?.aliases ?? [], school ? schoolPersonDefault(school, 'engineer', target.planType) : '');
@@ -539,13 +553,17 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
     if (!supabase || !profile || !roleCanImport(profile) || !references) throw new Error('لا تملك صلاحية الاستيراد.');
     const evaluated = rows.map((row, index) => ({ row, state: rowState(row, index) }));
     const reports: ReportRow[] = [];
-    const writable = evaluated.filter(({ state }) => state.status !== 'skipped' && state.status !== 'attention');
-    for (const { row, state } of evaluated.filter(({ state }) => state.status === 'skipped' || state.status === 'attention')) {
+    const writable = evaluated.filter(({ state }) =>
+      state.status !== 'skipped' && state.status !== 'attention' && state.school !== null,
+    );
+    for (const { row, state } of evaluated.filter(({ state }) =>
+      state.status === 'skipped' || state.status === 'attention' || state.school === null,
+    )) {
       reports.push({
         line: row.line,
         ministryNumber: String(row.values.ministry ?? ''),
         status: state.status === 'skipped' ? 'skipped' : 'needs_attention',
-        note: state.notes.join(' '),
+        note: state.notes.join(' ') || 'لم يتم العثور على مدرسة مطابقة؛ اختر المدرسة يدوياً.',
       });
     }
     if (!writable.length) {
@@ -828,12 +846,14 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
             <div className="grid gap-4">
               {referenceError && <p role="alert" className="text-rose-700">{referenceError}</p>}
               {months.length > 0 && (
-                <label className="grid max-w-sm gap-1 text-sm font-semibold">شهر الخطة المستنتج من التواريخ — أكّد الشهر قبل الاستيراد
+                <label className="grid max-w-sm gap-1 text-sm font-semibold">الشهر المكتشف: {selectedMonth ? new Intl.DateTimeFormat('ar-SA', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${selectedMonth}-01T00:00:00Z`)) : 'غير محدد'}
                   <select value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2">
                     {months.map((month) => <option key={month} value={month}>{month}</option>)}
                   </select>
                 </label>
               )}
+              {invalidDateCount > 0 && <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">تحذير: تعذر تفسير {invalidDateCount} تاريخاً. استخدم يوم-شهر-سنة أو سنة-شهر-يوم؛ لن يتم التخمين.</p>}
+              {outsideMonthCount > 0 && <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">تحذير: {outsideMonthCount} تاريخاً خارج الشهر المحدد وسيتم استبعادها من الاستيراد.</p>}
               {referenceError && <button type="button" onClick={() => void loadReferences().then((value) => { setReferences(value); setReferenceError(''); }).catch((error: Error) => setReferenceError(error.message))} className="justify-self-start rounded border px-3 py-2 text-sm">إعادة تحميل بيانات المطابقة</button>}
               <div className="max-h-[55vh] overflow-auto rounded-lg border border-slate-200">
                 <table className="min-w-full text-start text-xs">

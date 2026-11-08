@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
-import { assertUniqueActiveName, customPlanCreateSchema } from '../../domain/customPlans';
+import { assertUniqueActiveName, customPlanCreateSchema, describeDatabaseError } from '../../domain/customPlans';
 import { supabase } from '../../lib/supabase';
 import type { UserProfile } from '../../lib/auth';
 
@@ -20,7 +20,10 @@ export function CustomPlanTypeDialog({ profile, group, onClose }: { profile: Use
       if (insertError) throw insertError;
     },
     onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['custom-plan-types'] }); onClose(); },
-    onError: (reason: unknown) => setError(reason instanceof z.ZodError ? reason.issues[0]?.message ?? 'تحقق من البيانات.' : reason instanceof Error ? reason.message : 'تعذر إنشاء الخطة.'),
+    onError: (reason: unknown) => {
+      console.error('Custom plan creation failed', reason);
+      setError(reason instanceof z.ZodError ? reason.issues[0]?.message ?? 'تحقق من البيانات.' : describeDatabaseError(reason));
+    },
   });
   return <div className="fixed inset-0 z-30 grid place-items-center bg-slate-950/30 p-4" role="dialog" aria-modal="true" aria-labelledby="custom-plan-title">
     <form className="card w-full max-w-lg grid gap-4 p-6" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>

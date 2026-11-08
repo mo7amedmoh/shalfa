@@ -6,6 +6,7 @@ export const preferencesSchema = z.object({
   numerals: z.enum(['latin', 'arabic_indic']),
   date_format: z.enum(['dd/mm/yyyy', 'yyyy/mm/dd']),
   rows_per_page: z.number().int().min(10).max(100),
+  report_layout: z.array(z.object({ id: z.string(), visible: z.boolean() })).optional(),
 });
 
 const persistedPreferencesSchema = z.object({
@@ -31,7 +32,10 @@ export function normalizePreferences(value: unknown): UserPreferences {
     numerals: persisted.numerals ?? defaultPreferences.numerals,
     date_format: dateFormat,
     rows_per_page: persisted.rows_per_page ?? persisted.page_size ?? defaultPreferences.rows_per_page,
-  });
+      report_layout: Array.isArray((persisted as { report_layout?: unknown }).report_layout)
+        ? z.array(z.object({ id: z.string(), visible: z.boolean() })).parse((persisted as { report_layout: unknown }).report_layout)
+        : undefined,
+    });
 }
 
 export async function loadUserPreferences(userId: string): Promise<UserPreferences> {

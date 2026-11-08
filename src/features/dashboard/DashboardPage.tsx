@@ -3,8 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowUpLeft, ArrowUpRight, CalendarCheck, ChartNoAxesCombined, ExternalLink, UsersRound } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { z } from 'zod';
-import { staffingRowsForEligibleSchools, summarizeDashboardPlans, summarizeDashboardStaffing, summarizeDashboardVisits } from '../../domain/dashboard';
-import type { PlanEligibilityConfig } from '../../domain/planEligibility';
+import { staffingRowsForEligibleSchools, summarizeDashboardPlans, summarizeDashboardVisits, summarizeWorkforce } from '../../domain/dashboard';
+import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
@@ -20,6 +20,7 @@ const sourceSchoolSchema = z.object({
   size_source: z.enum(['small', 'medium', 'large']).nullable(),
 });
 const assignmentSchema = z.object({ school_id: z.string().uuid() });
+const gatekeeperSchema = z.object({ school_id: z.string().uuid() });
 const sizeCorrectionSchema = z.object({ school_id: z.string().uuid(), corrected_size: z.string() });
 const exceptionSchemaRow = z.object({ school_id: z.string().uuid(), required_count: z.number().int(), reason: z.string() });
 const eligibilitySchema = z.object({
@@ -36,6 +37,7 @@ type EligibilitySettings = PlanEligibilityConfig & { classCountHeader: string; s
 type SchoolData = {
   schools: z.infer<typeof sourceSchoolSchema>[];
   assignmentCounts: Map<string, number>;
+  gatekeeperSchoolIds: Set<string>;
   overrides: Map<string, { correctedSize: string | null; exception: z.infer<typeof exceptionSchema> | null }>;
   config: EligibilitySettings | null;
 };
@@ -61,15 +63,16 @@ async function loadCurrentPlanRows() {
 }
 
 async function loadStaffingSchools(): Promise<SchoolData> {
-  if (!supabase) return { schools: [], assignmentCounts: new Map(), overrides: new Map(), config: null };
-  const [schoolsResult, assignmentsResult, overridesResult, exceptionsResult, configResult] = await Promise.all([
+  if (!supabase) return { schools: [], assignmentCounts: new Map(), gatekeeperSchoolIds: new Set(), overrides: new Map(), config: null };
+  const [schoolsResult, assignmentsResult, gatekeepersResult, overridesResult, exceptionsResult, configResult] = await Promise.all([
     supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsDashboard),
     supabase.from('cleaner_assignments').select(APP_SCHEMA_SELECT.cleanerAssignmentSchool),
+    supabase.from('gatekeepers').select('school_id'),
     supabase.from('school_size_corrections').select(APP_SCHEMA_SELECT.schoolSizeCorrection),
     supabase.from('staffing_exceptions').select(APP_SCHEMA_SELECT.staffingException),
     supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
   ]);
-  for (const result of [schoolsResult, assignmentsResult, overridesResult, exceptionsResult, configResult]) {
+  for (const result of [schoolsResult, assignmentsResult, gatekeepersResult, overridesResult, exceptionsResult, configResult]) {
     if (result.error) throw result.error;
   }
   const assignmentCounts = new Map<string, number>();
@@ -88,6 +91,7 @@ async function loadStaffingSchools(): Promise<SchoolData> {
   return {
     schools: z.array(sourceSchoolSchema).parse(schoolsResult.data),
     assignmentCounts,
+    gatekeeperSchoolIds: new Set(z.array(gatekeeperSchema).parse(gatekeepersResult.data).map((row) => row.school_id)),
     overrides,
     config: configResult.data ? eligibilitySchema.parse(configResult.data.value) : null,
   };
@@ -111,7 +115,11 @@ export function DashboardPage() {
         exception: override?.exception,
       };
     });
-    return summarizeDashboardStaffing(staffingRowsForEligibleSchools(dashboardSchools, data.config));
+    const cleanerRows = staffingRowsForEligibleSchools(dashboardSchools, data.config);
+    const eligibleIds = new Set(eligibleSchoolIds(dashboardSchools, 'maintenance', data.config));
+    const gatekeepersRequired = eligibleIds.size;
+    const gatekeepersAssigned = [...data.gatekeeperSchoolIds].filter((id) => eligibleIds.has(id)).length;
+    return summarizeWorkforce(cleanerRows, gatekeepersRequired, gatekeepersAssigned);
   }, [staffingData.data]);
   const visitSummary = summarizeDashboardVisits(planProgress);
   const lastKpiScore = '—';
@@ -129,7 +137,7 @@ export function DashboardPage() {
 
       <section aria-label="ملخص المشروع" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <article className="card p-5"><MetricHead title="إنجاز الخطط الشهرية" value={plans.error ? 'تعذر التحميل' : plans.isLoading ? '…' : `${formatNumber(visitSummary.visited)} / ${formatNumber(visitSummary.total)}`} icon={CalendarCheck} /><p className="mt-4 text-xs text-slate-500">الزيارات المسجلة للشهر الحالي</p></article>
-        <article className="card p-5"><MetricHead title="العجز في القوى العاملة" value={staffingData.error ? 'تعذر التحميل' : staffingData.isLoading ? '…' : staffing ? formatNumber(staffing.shortage) : '—'} icon={UsersRound} /><p className="mt-4 text-xs text-slate-500">{staffing ? `المطلوب ${formatNumber(staffing.required)} · المسند ${formatNumber(staffing.assigned)}${staffing.missingClassCount ? ` · مدارس بلا عدد فصول ${formatNumber(staffing.missingClassCount)}` : ''}` : staffingData.data?.config ? 'لا توجد مدارس مؤهلة' : 'اضبط مطابقة أهلية المدارس وأعداد الفصول'}</p></article>
+        <article className="card p-5"><MetricHead title="العجز في القوى العاملة" value={staffingData.error ? 'تعذر التحميل' : staffingData.isLoading ? '…' : staffing ? formatNumber(staffing.total.shortage) : '—'} icon={UsersRound} /><p className="mt-4 text-xs text-slate-500">{staffing ? `المطلوب ${formatNumber(staffing.total.required)} · المسند ${formatNumber(staffing.total.assigned)} · الفائض ${formatNumber(staffing.total.surplus)}` : staffingData.data?.config ? 'لا توجد مدارس مؤهلة' : 'اضبط مطابقة أهلية المدارس وأعداد الفصول'}</p></article>
         <article className="card p-5"><MetricHead title="آخر نتيجة أداء" value={lastKpiScore} icon={ChartNoAxesCombined} /><p className="mt-4 text-xs text-slate-500">تتطلب اعتماد نتائج المصنف الرسمي</p></article>
       </section>
 
@@ -140,7 +148,7 @@ export function DashboardPage() {
           <div className="flex items-center justify-between gap-3"><div><h2 className="font-bold text-slate-900">تقدم الخطط الحالية</h2><p className="mt-1 text-sm text-slate-500">نسبة الزيارات المسجلة من إجمالي المدارس في الخطة.</p></div><Link to="/plans/report" aria-label="عرض التقرير العام" className="rounded-lg p-2 text-brand-700 hover:bg-brand-50"><ArrowUpLeft size={20} /></Link></div>
           <div className="mt-6 grid gap-4">{planProgress.map((progress) => <div key={progress.planType} className="grid grid-cols-[96px_1fr_48px] items-center gap-3 text-sm"><span>{planLabels[progress.planType]}</span><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-brand-600" style={{ width: `${progress.visitPercent}%` }} /></div><span className="text-xs text-slate-500">{formatNumber(progress.visitPercent.toFixed(0))}%</span></div>)}</div>
         </article>
-        <article className="card flex flex-col justify-between p-5"><div><h2 className="font-bold text-slate-900">ملخص القوى العاملة</h2><p className="mt-1 text-sm text-slate-500">الاحتياج وفق قواعد الفصول للمدارس المؤهلة.</p><div className="mt-6 rounded-xl bg-slate-50 p-5 text-center"><p className="text-sm text-slate-500">إجمالي العجز المسجل</p><p className="mt-2 text-3xl font-bold text-brand-900">{staffing ? formatNumber(staffing.shortage) : '—'}</p></div></div><Link to="/placement/cleaners" className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-brand-700 hover:text-brand-900">عرض تسكين العمالة <ArrowUpRight size={17} /></Link></article>
+        <article className="card flex flex-col justify-between p-5"><div><h2 className="font-bold text-slate-900">ملخص القوى العاملة</h2><p className="mt-1 text-sm text-slate-500">البوابون: {staffing ? `${formatNumber(staffing.gatekeepers.required)} مطلوب / ${formatNumber(staffing.gatekeepers.assigned)} مسند` : '—'}</p><p className="mt-1 text-sm text-slate-500">العمال: {staffing ? `${formatNumber(staffing.cleaners.required)} مطلوب / ${formatNumber(staffing.cleaners.assigned)} مسند` : '—'}</p>{staffing && <p className="mt-2 text-xs text-slate-500">كبير {formatNumber(staffing.cleaners.bySize.large.required)}/{formatNumber(staffing.cleaners.bySize.large.assigned)} · متوسط {formatNumber(staffing.cleaners.bySize.medium.required)}/{formatNumber(staffing.cleaners.bySize.medium.assigned)} · صغير {formatNumber(staffing.cleaners.bySize.small.required)}/{formatNumber(staffing.cleaners.bySize.small.assigned)}</p>}<div className="mt-6 rounded-xl bg-slate-50 p-5 text-center"><p className="text-sm text-slate-500">الإجمالي المطلوب · المسند · العجز · الفائض</p><p className="mt-2 text-3xl font-bold text-brand-900">{staffing ? `${formatNumber(staffing.total.required)} · ${formatNumber(staffing.total.assigned)} · ${formatNumber(staffing.total.shortage)} · ${formatNumber(staffing.total.surplus)}` : '—'}</p></div></div><Link to="/placement/cleaners" className="mt-5 inline-flex items-center gap-2 text-sm font-bold text-brand-700 hover:text-brand-900">عرض تسكين العمالة <ArrowUpRight size={17} /></Link></article>
       </section>
     </div>
   );

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { MapContainer, TileLayer, useMap } from 'react-leaflet';
-import { Download, List, Map as MapIcon, Search, SlidersHorizontal } from 'lucide-react';
+import { Download, List, Map as MapIcon, Pencil, Search, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { z } from 'zod';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { duplicateMinistryRows, schoolsWithMapCoordinates, toSlimMapSchool } from '../../domain/schoolMap';
@@ -12,10 +12,9 @@ import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { DuplicateSchoolWarning } from './SchoolSyncWarnings';
 import { SchoolDetails } from './SchoolDetails';
 import { SchoolMapMarkers } from './SchoolMapMarkers';
+import { selectSchoolOnMap } from './schoolMapView';
 import type { SchoolRecord } from './schoolTypes';
 import 'leaflet/dist/leaflet.css';
-import 'leaflet.markercluster/dist/MarkerCluster.css';
-import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 
 const sourceColumnSchema = z.object({ header: z.string(), value: z.unknown() });
 const schoolSchema = z.object({
@@ -58,20 +57,79 @@ function displayValue(value: unknown): string {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
 }
 
+function isPhoneHeader(header: string): boolean {
+  return /رقم\s*(الاتصال|التواصل|الجوال|الهاتف)|هاتف|جوال|فاكس|اتصال|تواصل/.test(header);
+}
+
+function expandScientificNumber(value: string): string {
+  const match = value.trim().match(/^([+-]?)(\d+)(?:\.(\d+))?e([+-]?\d+)$/i);
+  if (!match) return value;
+  const [, sign, integerPart, fractionPart = '', exponentText] = match;
+  const digits = `${integerPart}${fractionPart}`;
+  const decimalIndex = integerPart.length + Number(exponentText);
+  if (decimalIndex <= 0) return `${sign}0.${'0'.repeat(-decimalIndex)}${digits}`;
+  if (decimalIndex >= digits.length) return `${sign}${digits}${'0'.repeat(decimalIndex - digits.length)}`;
+  return `${sign}${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`;
+}
+
+function formatPhoneValue(value: unknown, header: string): string {
+  const displayed = typeof value === 'number' && Number.isFinite(value)
+    ? Math.trunc(value).toString()
+    : displayValue(value);
+  if (!displayed || !isPhoneHeader(header)) return displayed;
+
+  const expanded = expandScientificNumber(displayed).split('.')[0];
+  const digits = expanded
+    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+    .replace(/[^\d+]/g, '');
+  if (!digits) return displayed;
+
+  const internationalDigits = digits.startsWith('+966')
+    ? digits.slice(1)
+    : digits.startsWith('966') && digits.length === 12
+      ? digits
+      : '';
+  if (/^966(?:5\d{8}|1\d{8})$/.test(internationalDigits)) return `+${internationalDigits}`;
+
+  const localDigits = digits.startsWith('+966')
+    ? `0${digits.slice(4)}`
+    : digits.startsWith('966') && digits.length === 12
+      ? `0${digits.slice(3)}`
+      : digits;
+  if (/^5\d{8}$/.test(localDigits)) return `0${localDigits}`;
+  if (/^1\d{8}$/.test(localDigits)) return `0${localDigits}`;
+  if (/^0(?:5\d{8}|1\d{8})$/.test(localDigits)) return localDigits;
+  return displayed;
+}
+
 function columnWidth(header: string): number {
-  if (header === 'م') return 72;
-  if (header === 'الرقم الوزاري') return 132;
-  if (header === 'اسم المدرسة' || header === 'المبني') return 230;
-  if (header === 'العنوان') return 280;
-  if (header.startsWith('رقم ') || header.startsWith('هاتف')) return 140;
-  if (header === 'الحي' || header === 'المرحلة' || header === 'الملكية') return 132;
-  if (header.includes('مقاول') || header.includes('مشرف') || header.includes('مهندس')) return 190;
-  return 158;
+  if (header === 'م') return 58;
+  if (header === 'الرقم الوزاري') return 112;
+  if (header === 'اسم المدرسة' || header === 'المبني') return 196;
+  if (header === 'العنوان') return 240;
+  if (header.startsWith('رقم ') || header.startsWith('هاتف')) return 122;
+  if (header === 'الحي' || header === 'المرحلة' || header === 'الملكية') return 116;
+  if (header.includes('مقاول') || header.includes('مشرف') || header.includes('مهندس')) return 164;
+  return 138;
 }
 
 function csvCell(value: string): string {
   const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
   return `"${safe.replaceAll('"', '""')}"`;
+}
+
+function normalizedSchoolValue(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/\s+/g, '');
+}
+
+function isSchoolSize(value: string, size: 'large' | 'medium' | 'small'): boolean {
+  const normalized = normalizedSchoolValue(value);
+  const values = {
+    large: ['كبير', 'كبيرة', 'large'],
+    medium: ['متوسط', 'متوسطة', 'medium'],
+    small: ['صغير', 'صغيرة', 'small'],
+  }[size];
+  return values.some((item) => normalized.includes(item));
 }
 
 function MapViewport({
@@ -82,17 +140,38 @@ function MapViewport({
   target: SchoolRecord | null;
 }) {
   const map = useMap();
+  const hasFittedInitialView = useRef(false);
+  const previousTargetId = useRef('');
+
   useEffect(() => {
-    if (target?.latitude !== null && target?.longitude !== null && target) {
-      map.flyTo([target.latitude, target.longitude], Math.max(map.getZoom(), 15), { duration: 0.6 });
-      return;
-    }
+    if (hasFittedInitialView.current) return;
     if (schools.length) {
       map.fitBounds(schools.map((school) => [school.latitude!, school.longitude!] as [number, number]), { padding: [28, 28], maxZoom: 14 });
     } else {
       map.setView([24.7136, 46.6753], 10);
     }
-  }, [map, schools, target]);
+    hasFittedInitialView.current = true;
+  }, [map, schools]);
+
+  useEffect(() => {
+    if (!target || target.id === previousTargetId.current) return;
+    previousTargetId.current = target.id;
+    if (target.latitude !== null && target.longitude !== null) {
+      map.flyTo([target.latitude, target.longitude], Math.max(map.getZoom(), 15), { duration: 0.6 });
+    }
+  }, [map, target]);
+  return null;
+}
+
+function MapSelectionViewport({ school }: { school: SchoolRecord | null }) {
+  const map = useMap();
+  const previousSchoolId = useRef('');
+
+  useEffect(() => {
+    if (!school || school.id === previousSchoolId.current) return;
+    previousSchoolId.current = school.id;
+    selectSchoolOnMap(map, school);
+  }, [map, school]);
   return null;
 }
 
@@ -105,6 +184,10 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
   const [mapTargetId, setMapTargetId] = useState('');
   const [mapSearch, setMapSearch] = useState('');
   const [selectedSchoolId, setSelectedSchoolId] = useState('');
+  const [mapSelectionId, setMapSelectionId] = useState('');
+  const [editingSchool, setEditingSchool] = useState<SchoolRecord | null>(null);
+  const [editName, setEditName] = useState('');
+  const [actionError, setActionError] = useState('');
   const { formatNumber, formatDateTime } = useDisplayFormat();
   const { data: schools = [], isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['schools'],
@@ -149,10 +232,41 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
   const duplicates = useMemo(() => duplicateMinistryRows(schools), [schools]);
   const missingSchools = useMemo(() => schools.filter((school) => school.missing_from_sheet_at !== null), [schools]);
   const lastSynced = schools.map((school) => school.synced_at).filter((value): value is string => Boolean(value)).sort().at(-1);
+  const schoolSummary = useMemo(() => {
+    const buildingKeys = new Set(
+      filtered.map((school) => {
+        const buildingNumber = cellValue(school, 'م').trim();
+        const buildingName = resolvedBuildingNames.get(school.id)?.trim() ?? '';
+        return buildingNumber || buildingName || school.id;
+      }),
+    );
+    const countType = (type: 'boys' | 'girls') => filtered.filter((school) => {
+      const value = normalizedSchoolValue(cellValue(school, 'النوع'));
+      return type === 'boys' ? value.includes('بنين') || value.includes('boys') : value.includes('بنات') || value.includes('girls');
+    }).length;
+    const countSize = (size: 'large' | 'medium' | 'small') => filtered.filter((school) => (
+      isSchoolSize(school.size_calc ?? school.size_source ?? cellValue(school, 'حجم المدرسة'), size)
+    )).length;
+    return {
+      schools: filtered.length,
+      buildings: buildingKeys.size,
+      boys: countType('boys'),
+      girls: countType('girls'),
+      large: countSize('large'),
+      medium: countSize('medium'),
+      small: countSize('small'),
+    };
+  }, [filtered, resolvedBuildingNames]);
   const selectedSchool = schools.find((school) => school.id === selectedSchoolId) ?? null;
+  const mapSelection = schools.find((school) => school.id === mapSelectionId) ?? null;
   const mapTarget = mappableSchools.find((school) => school.id === mapTargetId) ?? null;
   const canSync = profile?.role === 'admin';
+  const canManageSchools = profile?.role === 'admin' || profile?.role === 'project_manager';
   const visible = new Set(visibleColumns);
+  const handleMapMarkerSelect = useCallback((schoolId: string) => {
+    setSelectedSchoolId(schoolId);
+    setMapSelectionId(schoolId);
+  }, []);
 
   function styleForColumn(index: number, header: string, isHeader: boolean) {
     const ministryIndex = columns.find(({ header: item }) => item === 'الرقم الوزاري')?.index;
@@ -171,7 +285,44 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
       width: `${width}px`,
       maxWidth: `${width}px`,
       zIndex: isHeader ? 5 : 2,
+      background: isHeader ? '#24304d' : '#fff',
+      boxShadow: '2px 0 4px rgba(15, 23, 42, 0.08)',
     };
+  }
+
+  function openEdit(school: SchoolRecord) {
+    setActionError('');
+    setEditingSchool(school);
+    setEditName(school.school_name);
+  }
+
+  async function saveEdit() {
+    if (!supabase || !editingSchool || !editName.trim()) return;
+    const sourceColumns = editingSchool.source_columns.map((column) => (
+      column.header === 'اسم المدرسة' ? { ...column, value: editName.trim() } : column
+    ));
+    const { error: updateError } = await supabase
+      .from('schools')
+      .update({ name: editName.trim(), source_columns: sourceColumns })
+      .eq('id', editingSchool.id);
+    if (updateError) {
+      setActionError(`تعذر حفظ التعديل: ${updateError.message}`);
+      return;
+    }
+    setEditingSchool(null);
+    await refetch();
+  }
+
+  async function deleteSchool(school: SchoolRecord) {
+    if (!supabase || !window.confirm(`هل تريد حذف سجل «${school.school_name}»؟`)) return;
+    setActionError('');
+    const { error: deleteError } = await supabase.from('schools').delete().eq('id', school.id);
+    if (deleteError) {
+      setActionError(`تعذر حذف السجل: ${deleteError.message}`);
+      return;
+    }
+    if (selectedSchoolId === school.id) setSelectedSchoolId('');
+    await refetch();
   }
 
   function exportCsv() {
@@ -220,41 +371,65 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
         </section>
       )}
 
-      <section className="grid gap-3 sm:grid-cols-3">
-        <article className="card p-4"><p className="text-sm text-slate-500">المدارس المعروضة</p><p className="mt-2 text-2xl font-bold text-brand-900">{isLoading ? '…' : formatNumber(schools.length)}</p></article>
-        <article className="card p-4"><p className="text-sm text-slate-500">بلا إحداثيات صالحة</p><p className="mt-2 text-2xl font-bold text-brand-900">{formatNumber(coordinateIssues.length)}</p></article>
-        <article className="card p-4"><p className="text-sm text-slate-500">آخر مزامنة مسجلة</p><p className="mt-2 text-sm font-bold text-brand-900">{lastSynced ? formatDateTime(lastSynced) : 'لا توجد مزامنة مسجلة'}</p></article>
+      <section className="schools-summary-grid" aria-label="ملخص المدارس">
+        <article className="schools-summary-card">
+          <p>إجمالي المدارس والمباني</p>
+          <div className="schools-summary-values">
+            <strong>{isLoading ? '…' : formatNumber(schoolSummary.schools)}</strong>
+            <span>مدرسة</span>
+            <i>/</i>
+            <strong>{isLoading ? '…' : formatNumber(schoolSummary.buildings)}</strong>
+            <span>مبنى</span>
+          </div>
+        </article>
+        <article className="schools-summary-card">
+          <p>حسب النوع</p>
+          <div className="schools-summary-split">
+            <span><strong>{formatNumber(schoolSummary.boys)}</strong> بنين</span>
+            <span><strong>{formatNumber(schoolSummary.girls)}</strong> بنات</span>
+          </div>
+        </article>
+        <article className="schools-summary-card">
+          <p>حسب حجم المدرسة</p>
+          <div className="schools-summary-split schools-summary-sizes">
+            <span><strong>{formatNumber(schoolSummary.large)}</strong> كبيرة</span>
+            <span><strong>{formatNumber(schoolSummary.medium)}</strong> متوسطة</span>
+            <span><strong>{formatNumber(schoolSummary.small)}</strong> صغيرة</span>
+          </div>
+        </article>
       </section>
 
-      <section className="card grid gap-3 p-4">
-        <div className="flex flex-col gap-3 lg:flex-row">
-          <label className="relative min-w-0 flex-1">
+      <section className="schools-toolbar card p-3">
+        <div className="schools-search-row">
+          <label className="schools-search">
             <Search size={18} className="absolute inset-inline-start-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ابحث في جميع أعمدة الورقة" className="w-full rounded-lg border border-slate-300 py-2.5 pe-3 ps-10" />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ابحث في جميع أعمدة الورقة" aria-label="البحث في المدارس" />
           </label>
-          <div className="flex rounded-lg border border-slate-200 p-1" role="group" aria-label="طريقة عرض المدارس">
-            <button type="button" onClick={() => setDisplayMode('table')} aria-pressed={displayMode === 'table'} className={`inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm ${displayMode === 'table' ? 'bg-brand-50 text-brand-800' : 'text-slate-600'}`}><List size={17} /> جدول</button>
-            <button type="button" onClick={() => setDisplayMode('map')} aria-pressed={displayMode === 'map'} className={`inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm ${displayMode === 'map' ? 'bg-brand-50 text-brand-800' : 'text-slate-600'}`}><MapIcon size={17} /> خريطة</button>
-          </div>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="schools-toolbar-row">
+          <div className="schools-filter-group">
           {filterHeaders.map((header) => {
             const values = [...new Set(schools.map((school) => cellValue(school, header)).filter(Boolean))].sort();
             return (
-              <label key={header} className="grid gap-1 text-xs font-semibold text-slate-600">
-                {header}
-                <select value={filters[header] ?? ''} onChange={(event) => setFilters((current) => ({ ...current, [header]: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal">
+              <label key={header} className="schools-filter">
+                <span className="whitespace-nowrap">{header}</span>
+                <select value={filters[header] ?? ''} onChange={(event) => setFilters((current) => ({ ...current, [header]: event.target.value }))}>
                   <option value="">الكل</option>
                   {values.map((value) => <option key={value} value={value}>{value}</option>)}
                 </select>
               </label>
             );
           })}
-        </div>
-        {displayMode === 'table' && (
-          <div className="flex flex-wrap items-center gap-2">
+          </div>
+          <div className="schools-view-tools">
+            <div className="schools-view-toggle" role="group" aria-label="طريقة عرض المدارس">
+              <button type="button" onClick={() => setDisplayMode('table')} aria-pressed={displayMode === 'table'} className={displayMode === 'table' ? 'is-active' : ''}><List size={17} /> جدول</button>
+              <button type="button" onClick={() => setDisplayMode('map')} aria-pressed={displayMode === 'map'} className={displayMode === 'map' ? 'is-active' : ''}><MapIcon size={17} /> خريطة</button>
+            </div>
+            {displayMode === 'table' && (
+              <>
             <details className="relative">
-              <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm"><SlidersHorizontal size={16} /> الأعمدة</summary>
+              <summary className="schools-tool-button"><SlidersHorizontal size={16} /> الأعمدة</summary>
               <div className="absolute inset-inline-start-0 z-10 mt-2 max-h-80 w-72 overflow-auto rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
                 {columns.map(({ index, header }) => (
                   <label key={index} className="flex items-center gap-2 border-b border-slate-100 py-1.5 text-sm">
@@ -264,10 +439,12 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
                 ))}
               </div>
             </details>
-            <button type="button" onClick={exportCsv} disabled={!filtered.length || !visible.size} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-50"><Download size={16} /> تصدير CSV</button>
-            <span className="text-xs text-slate-500">المعروض {formatNumber(filtered.length)} صفاً</span>
+              <button type="button" onClick={exportCsv} disabled={!filtered.length || !visible.size} className="schools-tool-button disabled:opacity-50"><Download size={16} /> تصدير CSV</button>
+                </>
+              )}
+              <span className="schools-results-count">المعروض {formatNumber(filtered.length)} صفاً</span>
+            </div>
           </div>
-        )}
       </section>
 
       {error && isOnline && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل المدارس. تحقق من اتصال Supabase وسياسات الوصول.</div>}
@@ -282,8 +459,8 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
       ) : displayMode === 'map' ? (
         <section className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
           <div className="grid min-w-0 gap-3">
-            <label className="grid gap-1 text-sm font-semibold">
-              ابحث للانتقال إلى مدرسة
+            <label className="flex min-h-12 flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white p-2 text-sm font-semibold">
+              <span className="whitespace-nowrap">انتقال إلى مدرسة</span>
               <input
                 list="map-school-options"
                 value={mapSearch}
@@ -301,24 +478,25 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
                   }
                 }}
                 placeholder="اسم المدرسة أو رقمها الوزاري"
-                className="rounded-lg border border-slate-300 px-3 py-2"
+                className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 px-3"
               />
               <datalist id="map-school-options">
                 {mappableSchools.map((school) => <option key={school.id} value={`${school.school_name} · ${school.ministry_number}`} />)}
               </datalist>
             </label>
             <div className="card min-w-0 overflow-hidden p-3">
-              <MapContainer center={[24.7136, 46.6753]} zoom={10} scrollWheelZoom preferCanvas className="map-frame" aria-label="خريطة المدارس">
-                <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+              <MapContainer center={[24.7136, 46.6753]} zoom={10} scrollWheelZoom preferCanvas zoomAnimation={false} markerZoomAnimation={false} fadeAnimation={false} className="map-frame" aria-label="خريطة المدارس">
+                <TileLayer updateWhenZooming={false} keepBuffer={2} attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                 <MapViewport schools={mappableSchools} target={mapTarget} />
-                <SchoolMapMarkers schools={slimMapSchools} onSelect={setSelectedSchoolId} />
+                <MapSelectionViewport school={mapSelection} />
+                <SchoolMapMarkers schools={slimMapSchools} onSelect={handleMapMarkerSelect} />
               </MapContainer>
               <div className="flex flex-wrap gap-3 px-2 pt-3 text-xs text-slate-600" aria-label="دليل أحجام المدارس">
                 <span><i className="school-map-legend-dot school-map-legend-small" /> صغيرة</span>
                 <span><i className="school-map-legend-dot school-map-legend-medium" /> متوسطة</span>
                 <span><i className="school-map-legend-dot school-map-legend-large" /> كبيرة</span>
               </div>
-              <p className="px-2 pt-3 text-xs text-slate-500">تجميع العلامات يعرض عدد المدارس في كل مجموعة. أسماء المدارس تظهر عند التحويم، وتبقى ظاهرة قرب مقياس تفصيلي.</p>
+              <p className="px-2 pt-3 text-xs text-slate-500">تظهر أسماء المدارس عند التحويم فقط. انقر على علامة لعرض التفاصيل.</p>
             </div>
           </div>
           <aside className="grid content-start gap-3">
@@ -346,7 +524,7 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
           <table dir="rtl" className="schools-source-table">
             <thead><tr>{columns.filter(({ index }) => visible.has(index)).map(({ index, header }) => (
               <th key={index} style={styleForColumn(index, header, true)}>{header}</th>
-            ))}</tr></thead>
+            ))}{canManageSchools && <th className="school-actions-cell">إجراءات</th>}</tr></thead>
             <tbody>{filtered.map((school, rowIndex) => (
               <tr key={school.id} className={school.missing_from_sheet_at ? 'school-row-missing' : ''}>
                 {columns.filter(({ index }) => visible.has(index)).map(({ index, header }) => (
@@ -375,16 +553,38 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
                       </td>
                     );
                   })() : (
-                    <td key={index} style={styleForColumn(index, header, false)} title={displayValue(school.source_columns[index]?.value)}>
-                      {displayValue(school.source_columns[index]?.value)}
+                    <td key={index} style={styleForColumn(index, header, false)} title={formatPhoneValue(school.source_columns[index]?.value, header)}>
+                      {formatPhoneValue(school.source_columns[index]?.value, header)}
                     </td>
                   )
                 ))}
+                {canManageSchools && (
+                  <td className="school-actions-cell">
+                    <button type="button" onClick={() => openEdit(school)} aria-label={`تعديل ${school.school_name}`} title="تعديل" className="school-action-button school-action-edit"><Pencil size={15} /></button>
+                    <button type="button" onClick={() => void deleteSchool(school)} aria-label={`حذف ${school.school_name}`} title="حذف" className="school-action-button school-action-delete"><Trash2 size={15} /></button>
+                  </td>
+                )}
               </tr>
             ))}</tbody>
           </table>
           {!filtered.length && <p className="p-8 text-center text-sm text-slate-500">لا توجد نتائج مطابقة للفلاتر.</p>}
         </section>
+      )}
+      {actionError && <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{actionError}</div>}
+      {editingSchool && (
+        <div className="school-edit-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setEditingSchool(null); }}>
+          <section className="school-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="school-edit-title">
+            <h3 id="school-edit-title" className="text-lg font-bold text-brand-900">تعديل بيانات المدرسة</h3>
+            <label className="grid gap-1 text-sm font-semibold">
+              اسم المدرسة
+              <input value={editName} onChange={(event) => setEditName(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" autoFocus />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setEditingSchool(null)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm">إلغاء</button>
+              <button type="button" onClick={() => void saveEdit()} disabled={!editName.trim()} className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">حفظ</button>
+            </div>
+          </section>
+        </div>
       )}
       {canSync && <p className="text-xs text-slate-500">المزامنة متاحة لمدير النظام، وتُحفظ الصفوف المكررة وسجلات المدارس الغائبة دون حذف.</p>}
     </div>

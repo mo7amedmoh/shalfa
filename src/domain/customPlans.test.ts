@@ -18,6 +18,16 @@ describe('custom plans', () => {
     })).toThrow();
   });
 
+  it('accepts the yearly all-in-scope rainy-season plan payload', () => {
+    expect(customPlanCreateSchema.parse({
+      name: 'استعدادات موسم الامطار',
+      cadence: 'yearly',
+      scope: 'all_in_scope',
+      track_visit_report: true,
+      group_key: 'general',
+    })).toMatchObject({ cadence: 'yearly', scope: 'all_in_scope', track_visit_report: true });
+  });
+
   it('rejects duplicate active names but allows hidden duplicates', () => {
     expect(() => assertUniqueActiveName(' خطة صيانة ', [type('1', 'خطة صيانة', '2026-01-01')])).toThrow();
     expect(() => assertUniqueActiveName(' خطة صيانة ', [{ ...type('1', 'خطة صيانة', '2026-01-01'), is_active: false }])).not.toThrow();

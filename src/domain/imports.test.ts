@@ -15,6 +15,8 @@ import {
 describe('import value normalization', () => {
   it('normalizes Arabic-Indic ministry numbers', () => {
     expect(normalizeMinistryNumber(' ٩٥١ ٨٣ ')).toBe('95183');
+    expect(normalizeMinistryNumber('M010801')).toBe('10801');
+    expect(normalizeMinistryNumber('00010801')).toBe('10801');
     expect(normalizeMinistryNumber('')).toBe('');
   });
 
@@ -70,7 +72,9 @@ describe('import value normalization', () => {
 describe('import date parsing', () => {
   it('parses Excel serial dates and common text formats', () => {
     expect(parseImportDate(46300)).toBe('2026-10-05');
+    expect(parseImportDate(46327)).toBe('2026-11-01');
     expect(parseImportDate('٥/١١/٢٠٢٦')).toBe('2026-11-05');
+    expect(parseImportDate('1-Nov-26')).toBe('2026-11-01');
     expect(parseImportDate('2026-11-05')).toBe('2026-11-05');
     expect(parseImportDate('31/02/2026')).toBeNull();
     expect(parseImportDate('')).toBeNull();
@@ -99,17 +103,17 @@ describe('monthly plan workbook parser', () => {
       'ملاحظات النزح',
     ];
     const rows = parseMonthlyPlanRows(headers, [[
-      '000123', 'مستقل', 'مهندس مجهول', 46300, 'مشرف تجريبي', 46300, 'مشرف تجريبي',
-      '', '', '', 'شركة تجريبية', '', 'لا ينطبق', 46300, 'ملاحظة', '', '',
+      '000123', 'مستقل', 'مهندس مجهول', 46327, 'مشرف تجريبي', 46327, 'مشرف تجريبي',
+      '', '', '', 'شركة تجريبية', '', 'لا ينطبق', 46327, 'ملاحظة', '', '',
     ]], 'تاريخ الصيانة', 'مشرف الصيانة');
 
     expect(rows[0]).toMatchObject({
       ministryNumber: '000123',
       buildingType: 'مستقل',
       engineerName: 'مهندس مجهول',
-      plannedDate: '2026-10-05',
+      plannedDate: '2026-11-01',
       supervisorName: 'مشرف تجريبي',
-      acDate: '2026-10-05',
+      acDate: '2026-11-01',
       acSupervisor: 'مشرف تجريبي',
     });
     expect(autoDetectImportColumns(headers, {

@@ -22,6 +22,7 @@ export type ReportPlanRow = {
   ministryNumber: string;
   neighbourhood: string;
   hasCleaner: boolean;
+  updatedAt?: string | null;
 };
 
 export type ReportFilters = {

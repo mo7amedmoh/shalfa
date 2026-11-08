@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { z } from 'zod';
 import { loadXlsx } from '../../lib/xlsx';
-import { eligibleCustomSchoolIds, customPlanTypeSchema, type CustomPlanType } from '../../domain/customPlans';
+import { describeDatabaseError, eligibleCustomSchoolIds, customPlanTypeSchema, type CustomPlanType } from '../../domain/customPlans';
+import { parseImportDate } from '../../domain/imports';
 import type { PlanEligibilityConfig } from '../../domain/planEligibility';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
@@ -48,7 +49,8 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
   const queryClient = useQueryClient();
   const typeQuery = useQuery({ queryKey: ['custom-plan-type', typeId], queryFn: () => loadType(typeId), enabled: Boolean(typeId) });
   const candidates = useQuery({ queryKey: ['custom-plan-candidates'], queryFn: loadCandidates });
-  const [period, setPeriod] = useState(new Date().toISOString().slice(0, 7));
+  const now = new Date();
+  const [period, setPeriod] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [planId, setPlanId] = useState('');
   const [message, setMessage] = useState('');
@@ -89,7 +91,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
       }
     },
     onSuccess: async () => { setMessage('تم إنشاء الفترة وإضافة المدارس المحددة.'); await queryClient.invalidateQueries({ queryKey: ['custom-plans', typeId] }); await queryClient.invalidateQueries({ queryKey: ['custom-plan-rows', planId] }); },
-    onError: (error: Error) => setMessage(error.message),
+    onError: (error: unknown) => { console.error('Custom plan creation failed', error); setMessage(describeDatabaseError(error)); },
   });
   const updateRow = useMutation({
     mutationFn: async ({ id, field, value }: { id: string; field: string; value: unknown }) => {
@@ -164,7 +166,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
     const workbook = XLSX.read(await file.arrayBuffer());
     const records = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[workbook.SheetNames[0]]);
     const byMinistry = new Map((candidates.data?.schools ?? []).map((school) => [school.ministry_no, school.id]));
-    const payload = records.map((record) => ({ plan_id: planId, school_id: byMinistry.get(String(record['الرقم الوزاري'] ?? '').trim()), planned_date: String(record['التاريخ المخطط'] ?? '').trim() || null, supervisor_name: String(record['اسم المشرف'] ?? '').trim() || null, engineer_name: String(record['اسم المهندس'] ?? '').trim() || null, status: 'planned' })).filter((row) => row.school_id && eligibleIds.includes(row.school_id));
+    const payload = records.map((record) => ({ plan_id: planId, school_id: byMinistry.get(String(record['الرقم الوزاري'] ?? '').trim()), planned_date: parseImportDate(record['التاريخ المخطط']), supervisor_name: String(record['اسم المشرف'] ?? '').trim() || null, engineer_name: String(record['اسم المهندس'] ?? '').trim() || null, status: 'planned' })).filter((row) => row.school_id && eligibleIds.includes(row.school_id));
     const { error } = await supabase.from('custom_plan_rows').upsert(payload, { onConflict: 'plan_id,school_id' });
     if (error) setMessage(error.message); else { setMessage(`تم استيراد ${payload.length} صفاً.`); await queryClient.invalidateQueries({ queryKey: ['custom-plan-rows', planId] }); }
   };

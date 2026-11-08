@@ -220,6 +220,12 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
       </section>
       {data.error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات البوابين: {data.error.message}</div>}
       <section className="card grid gap-4 p-5">
+        <div className="grid gap-3 sm:grid-cols-4">
+          <Metric label="البوابون المطلوبون" value={totalCount} />
+          <Metric label="البوابون المسندون" value={withGatekeeperCount} />
+          <Metric label="العجز" value={withoutGatekeeperCount} />
+          <Metric label="الفائض" value={Math.max(0, withGatekeeperCount - totalCount)} />
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">مدارس لديها بواب: {withGatekeeperCount}</p>
           <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-800">مدارس بلا بواب: {withoutGatekeeperCount}</p>
@@ -340,4 +346,8 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
       )}
     </div>
   );
+}
+
+function Metric({ label, value }: { label: string; value: number }) {
+  return <article className="rounded-xl bg-slate-50 p-4"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-2xl font-bold text-brand-900">{value}</p></article>;
 }

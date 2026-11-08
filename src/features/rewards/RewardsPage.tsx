@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Download } from 'lucide-react';
 import { z } from 'zod';
 import { calculateRewardBalance, canAllocateReward } from '../../domain/rewards';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
+import { loadXlsx } from '../../lib/xlsx';
 
 const poolSchema = z.object({
   id: z.string().uuid(),
-  reward_month: z.string(),
+  month: z.string(),
   engineer_id: z.string().uuid(),
   amount: z.coerce.number().nonnegative(),
   status: z.enum(['open', 'approved']),
@@ -19,7 +21,12 @@ const engineerSchema = z.object({
   job_title: z.string().nullable(),
   employee_id: z.string().uuid().nullable(),
 });
-const employeeSchema = z.object({ id: z.string().uuid(), full_name: z.string(), job_title: z.string().nullable() });
+const employeeSchema = z.object({
+  id: z.string().uuid(),
+  full_name: z.string(),
+  employee_no: z.string().nullable().optional(),
+  job_title: z.string().nullable(),
+});
 const distributionSchema = z.object({
   id: z.string().uuid(),
   employee_id: z.string().uuid(),
@@ -51,7 +58,7 @@ async function loadEngineerEmployees() {
 
 async function loadEmployees() {
   if (!supabase) return [];
-  const { data, error } = await supabase.from('employees').select(APP_SCHEMA_SELECT.employeesForRewards).in('category', ['technician', 'supervisor']).order('full_name');
+  const { data, error } = await supabase.from('employees').select(APP_SCHEMA_SELECT.employeesForRewards).in('category', ['cleaner', 'technician', 'supervisor']).order('full_name');
   if (error) throw error;
   return z.array(employeeSchema).parse(data);
 }
@@ -110,6 +117,30 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
     : balance?.remainingAmount;
   const canEditPool = Boolean(privileged && profile);
   const canDistribute = profile?.role === 'area_engineer' && Boolean(pool && pool.status === 'open');
+  const rewardEmployeesById = useMemo(() => new Map((employees.data ?? []).map((employee) => [employee.id, employee])), [employees.data]);
+
+  async function exportRewardAllocations() {
+    if (!privileged) return;
+    if (!distributions.length) {
+      setMessage('لا توجد توزيعات مكافآت جاهزة للتصدير.');
+      return;
+    }
+    const XLSX = await loadXlsx();
+    const records = distributions.map((distribution) => {
+      const employee = rewardEmployeesById.get(distribution.employee_id);
+      return {
+        'اسم الموظف': distribution.employee?.full_name ?? employee?.full_name ?? '',
+        'الرقم الوظيفي': employee?.employee_no ?? '',
+        المهنة: employee?.job_title ?? '',
+        المشروع: 'SAFARY-RIYADH',
+        'قيمة المكافأة': distribution.amount,
+      };
+    });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(records), 'مكافآت الموظفين');
+    XLSX.writeFile(workbook, `مكافآت-${month}.xlsx`);
+    setMessage('تم تصدير قائمة المكافآت بصيغة Excel.');
+  }
 
   const savePool = useMutation({
     mutationFn: async () => {
@@ -209,7 +240,12 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
   return (
     <div className="grid gap-5">
       <section><p className="text-sm text-slate-500">مخصص شهري وتوزيع موثق</p><h2 className="mt-1 text-2xl font-bold text-brand-900">مكافأة الفنيين</h2></section>
-      {(pools.error || engineers.error || engineerEmployees.error || employees.error || distributionsQuery.error) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات المكافآت.</div>}
+      {(pools.error || engineers.error || engineerEmployees.error || employees.error || distributionsQuery.error) && (
+        <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+          تعذر تحميل بيانات المكافآت.
+          <span className="mt-1 block text-xs">{(pools.error || engineers.error || engineerEmployees.error || employees.error || distributionsQuery.error)?.message}</span>
+        </div>
+      )}
       <section className="card grid gap-4 p-5">
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1 text-sm font-semibold">الشهر<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
@@ -241,6 +277,7 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
           <Metric label="الرصيد المتبقي" amount={balance?.remainingAmount ?? 0} />
         </div>}
         {pool?.status === 'approved' && <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">تم اعتماد المخصص وإقفال هذا الشهر.</p>}
+        {privileged && pool && <button type="button" onClick={() => void exportRewardAllocations()} disabled={distributionsQuery.isLoading || !distributions.length} className="inline-flex w-fit items-center gap-2 rounded-lg border border-brand-700 px-4 py-2 text-sm font-bold text-brand-800 disabled:opacity-50"><Download size={16} /> تصدير قائمة المكافآت Excel</button>}
         {!pool && <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{privileged ? 'لم يُحدد مخصص لهذا المهندس والشهر.' : 'لم يُحدد مخصص متاح لحسابك لهذا الشهر.'}</p>}
       </section>
 

@@ -15,7 +15,7 @@ export function PlanNameLinkingPage({ profile }: { profile: UserProfile | null }
     if (!supabase || !canManage) return;
     const [monthly, general, staff] = await Promise.all([
       supabase.from('monthly_plan_rows').select('supervisor_id,supervisor_name').is('supervisor_id', null).not('supervisor_name', 'is', null),
-      supabase.from('general_plan_rows').select('supervisor_id,supervisor_name').is('supervisor_id', null).not('supervisor_name', 'is', null),
+      supabase.from('general_plan_rows').select('supervisor_name').not('supervisor_name', 'is', null),
       supabase.from('employees').select('id,full_name').order('full_name'),
     ]);
     if (monthly.error || general.error || staff.error) throw monthly.error ?? general.error ?? staff.error;

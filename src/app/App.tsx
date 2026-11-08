@@ -43,9 +43,6 @@ const GeneralPlansPage = lazy(() =>
 const CustomPlanPage = lazy(() =>
   import('../features/plans/CustomPlanPage').then((module) => ({ default: module.CustomPlanPage })),
 );
-const CustomPlanTypeDialog = lazy(() =>
-  import('../features/plans/CustomPlanTypeDialog').then((module) => ({ default: module.CustomPlanTypeDialog })),
-);
 const WorkforcePage = lazy(() =>
   import('../features/workforce/WorkforcePage').then((module) => ({ default: module.WorkforcePage })),
 );
@@ -60,6 +57,9 @@ const GatekeeperPlacementPage = lazy(() =>
 );
 const AdminUsersPage = lazy(() =>
   import('../features/admin/AdminUsersPage').then((module) => ({ default: module.AdminUsersPage })),
+);
+const PlanManagementPage = lazy(() =>
+  import('../features/admin/PlanManagementPage').then((module) => ({ default: module.PlanManagementPage })),
 );
 const AuditLogPage = lazy(() =>
   import('../features/admin/AuditLogPage').then((module) => ({ default: module.AuditLogPage })),
@@ -191,10 +191,10 @@ function AppShell({
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
-  const [dialogGroup, setDialogGroup] = useState<'monthly' | 'general' | null>(null);
   const location = useLocation();
   const isAdmin = profile?.role === 'admin';
   const canCreateCustom = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
+  const canManagePlanNames = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
   const customTypes = useQuery({
     queryKey: ['custom-plan-types'],
     queryFn: async () => {
@@ -208,11 +208,14 @@ function AppShell({
   });
   const visibleNavigation = useMemo(() => navigation.map((item) => {
     if (!('children' in item)) return item;
+    if (item.label === 'أعمال إدارية' && !canManagePlanNames) {
+      return { ...item, children: item.children?.filter(([, path]) => path !== '/admin/plan-name-linking') };
+    }
     const group = item.label === 'الخطط الشهرية' ? 'monthly' : item.label === 'الخطط العامة' ? 'general' : null;
     if (!group) return item;
     const custom = buildCustomMenu(customTypes.data ?? [], group).map(({ label, path }) => [label, path] as [string, string]);
     return { ...item, children: [...(item.children ?? []), ...custom] };
-  }), [customTypes.data]);
+  }), [canManagePlanNames, customTypes.data]);
   const preferences = useQuery({
     queryKey: ['user-preferences', profile?.id],
     queryFn: () => loadUserPreferences(profile!.id),
@@ -285,16 +288,12 @@ function AppShell({
               </section>
             );
           })}
-          {canCreateCustom && <div className="mt-3 grid gap-2 border-t border-slate-100 pt-3">
-            <button type="button" onClick={() => setDialogGroup('monthly')} className="rounded-lg border border-brand-200 px-3 py-2 text-sm font-semibold text-brand-800">+ إضافة خطة شهرية</button>
-            <button type="button" onClick={() => setDialogGroup('general')} className="rounded-lg border border-brand-200 px-3 py-2 text-sm font-semibold text-brand-800">+ إضافة خطة عامة</button>
-            {(customTypes.data ?? []).some((type) => !type.is_active) && <details className="rounded-lg border border-slate-200 p-2 text-sm"><summary className="cursor-pointer font-semibold">خطط مخفية</summary><div className="mt-2 grid gap-2">{(customTypes.data ?? []).filter((type) => !type.is_active).map((type) => <button key={type.id} type="button" onClick={async () => { if (!supabase) return; await supabase.from('custom_plan_types').update({ is_active: true }).eq('id', type.id); await customTypes.refetch(); }} className="text-start text-brand-700">{type.name} · استعادة</button>)}</div></details>}
-          </div>}
-          {isAdmin && <div className="mt-3 border-t border-slate-100 pt-3">
-            {adminNavigation.map(({ label, path, icon: Icon }) => (
+          {isAdmin || canCreateCustom ? <div className="mt-3 border-t border-slate-100 pt-3">
+            {isAdmin && adminNavigation.map(({ label, path, icon: Icon }) => (
               <NavLink key={path} to={path} className="nav-link"><Icon size={19} /><span>{label}</span></NavLink>
             ))}
-          </div>}
+            {canCreateCustom && <NavLink to="/settings/plans" className="nav-link"><Settings2 size={19} /><span>إدارة الخطط</span></NavLink>}
+          </div> : null}
         </nav>
         <div className="mt-6 border-t border-slate-100 pt-4">
           {profile ? (
@@ -312,7 +311,6 @@ function AppShell({
             <p className="text-xs text-slate-500">شركة شلفا لإدارة المرافق</p>
             <h1 className="font-bold text-brand-900">{pageTitle}</h1>
           </div>
-          {dialogGroup && profile && <Suspense fallback={null}><CustomPlanTypeDialog profile={profile} group={dialogGroup} onClose={() => setDialogGroup(null)} /></Suspense>}
           {profile && <span className="hidden rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-800 sm:inline">{profile.role === 'admin' ? 'مدير النظام' : profile.role === 'project_manager' ? 'مدير المشروع' : 'مستخدم'}</span>}
         </header>
         {syncNotice && <div role="status" className="bg-emerald-50 px-4 py-2 text-center text-sm text-emerald-900">{syncNotice}</div>}
@@ -336,8 +334,9 @@ function AppShell({
               <Route path="/account" element={<AccountPage profile={profile} />} />
               <Route path="/admin/users" element={isAdmin ? <AdminUsersPage /> : <Navigate to="/" replace />} />
               <Route path="/admin/audit" element={isAdmin ? <AuditLogPage /> : <Navigate to="/" replace />} />
-              <Route path="/admin/plan-name-linking" element={<PlanNameLinkingPage profile={profile} />} />
+              <Route path="/admin/plan-name-linking" element={canManagePlanNames ? <PlanNameLinkingPage profile={profile} /> : <Navigate to="/" replace />} />
               <Route path="/admin/settings" element={isAdmin ? <ModulePage section="admin" type="settings" /> : <Navigate to="/" replace />} />
+              <Route path="/settings/plans" element={canCreateCustom && profile ? <PlanManagementPage profile={profile} /> : <Navigate to="/" replace />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>

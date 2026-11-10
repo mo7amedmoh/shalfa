@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useContext, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Eye, EyeOff } from 'lucide-react';
 import { z } from 'zod';
@@ -9,6 +9,7 @@ import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
+import { preferencesContext } from '../../app/preferencesContext';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
 
 const configSchema = z.object({
@@ -91,6 +92,8 @@ async function loadPlacementData(): Promise<SchoolData> {
 export function CleanerPlacementPage({ profile }: { profile: UserProfile | null }) {
   const client = useQueryClient();
   const { formatNumber } = useDisplayFormat();
+  const preferences = useContext(preferencesContext);
+  const [viewMode, setViewMode] = useState(preferences.cleaner_placement_view);
   const [search, setSearch] = useState('');
   const [newCleaner, setNewCleaner] = useState<Record<string, string>>({});
   const [labourSource, setLabourSource] = useState<Record<string, string>>({});
@@ -100,6 +103,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   const data = useQuery({ queryKey: ['cleaner-placement-data'], queryFn: loadPlacementData, enabled: Boolean(profile) });
   const canManage = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
   const canManageStaffingRules = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
+  useEffect(() => setViewMode(preferences.cleaner_placement_view), [preferences.cleaner_placement_view]);
   const eligibleIds = useMemo(() => {
     if (!data.data?.config) return [];
     return eligibleSchoolIds(data.data.schools.map((school) => ({ id: school.id, sourceFields: school.source_fields })), 'maintenance', data.data.config);
@@ -262,6 +266,22 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   }), { required: 0, assigned: 0, shortage: 0, surplus: 0 });
   const groupedBySize = groupTotal(filtered, (row) => row.staffing.size ?? 'غير محدد');
   const groupedByNeighborhood = groupTotal(filtered, (row) => row.neighborhood);
+  const saveViewMode = useMutation({
+    mutationFn: async (next: 'editable' | 'compact') => {
+      if (!supabase || !profile) throw new Error('يلزم تسجيل الدخول لحفظ تفضيل العرض.');
+      const { error } = await supabase.from('profiles').update({
+        prefs: { ...preferences, cleaner_placement_view: next },
+      }).eq('id', profile.id);
+      if (error) throw error;
+    },
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: ['user-preferences', profile?.id] });
+    },
+    onError: (error: Error) => {
+      setMessage(`تعذر حفظ طريقة العرض: ${error.message}`);
+      setViewMode(preferences.cleaner_placement_view);
+    },
+  });
 
   return (
     <div className="grid gap-5">
@@ -277,10 +297,47 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
       <section className="card grid gap-4 p-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <label className="min-w-60 flex-1 text-sm font-semibold">بحث باسم المدرسة أو الرقم الوزاري أو الحي<input value={search} onChange={(event) => setSearch(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
-          <button type="button" onClick={exportSummary} disabled={!filtered.length} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold disabled:opacity-50">تصدير Excel</button>
+          <div className="flex flex-wrap gap-2">
+            <label className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              <span>طريقة العرض</span>
+              <select value={viewMode} disabled={saveViewMode.isPending} onChange={(event) => {
+                const next = event.target.value === 'compact' ? 'compact' : 'editable';
+                setViewMode(next);
+                saveViewMode.mutate(next);
+              }} className="rounded border border-slate-300 px-2 py-1">
+                <option value="editable">تفصيلي قابل للتعديل</option>
+                <option value="compact">مختصر</option>
+              </select>
+            </label>
+            <button type="button" onClick={exportSummary} disabled={!filtered.length} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold disabled:opacity-50">تصدير Excel</button>
+          </div>
         </div>
         {data.isLoading ? <p role="status">جارٍ تحميل السجلات…</p> : filtered.length === 0 ? <p className="rounded-lg bg-slate-50 p-5 text-center text-sm text-slate-500">لا توجد مدارس مؤهلة أو سجلات مطابقة.</p> : (
-          <div className="grid gap-3">
+          viewMode === 'compact' ? (
+            <div className="table-scroll">
+              <table className="min-w-full text-start text-sm">
+                <thead><tr><th>الرقم الوزاري</th><th>المدرسة</th><th>الحجم</th><th>مطلوب / مسند</th><th>أسماء العمال</th><th>الحالة</th></tr></thead>
+                <tbody>{filtered.map(({ school, staffing }) => {
+                  const assignments = data.data?.assignments.filter((item) => item.school_id === school.id) ?? [];
+                  const balance = staffing.requiredCleaners === null
+                    ? { label: 'الاحتياج غير محدد', style: 'bg-slate-100 text-slate-700' }
+                    : staffing.shortage > 0
+                      ? { label: `عجز ${staffing.shortage}`, style: 'bg-rose-50 text-rose-800' }
+                      : staffing.surplus > 0
+                        ? { label: `فائض ${staffing.surplus}`, style: 'bg-amber-50 text-amber-900' }
+                        : { label: 'مكتمل', style: 'bg-emerald-50 text-emerald-800' };
+                  return <tr key={school.id} className="border-t border-slate-100">
+                    <td dir="ltr">{school.ministry_number}</td>
+                    <td>{school.school_name}</td>
+                    <td>{sizeLabel(staffing.size)}</td>
+                    <td>{staffing.requiredCleaners ?? '—'} / {staffing.assignedCleaners}</td>
+                    <td className="min-w-56">{assignments.map((item) => item.employee?.full_name ?? item.employee_id).join('، ') || '—'}</td>
+                    <td><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${balance.style}`}>{balance.label}</span></td>
+                  </tr>;
+                })}</tbody>
+              </table>
+            </div>
+          ) : <div className="grid gap-3">
             {filtered.map(({ school, staffing, neighborhood, exception }) => <article key={school.id} className="rounded-xl border border-slate-200 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div><h3 className="font-bold">{school.school_name}</h3><p className="mt-1 text-xs text-slate-500">الرقم الوزاري: {school.ministry_number} · الحي: {neighborhood}</p></div>

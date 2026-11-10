@@ -19,7 +19,17 @@ describe('normalizePreferences', () => {
       numerals: 'arabic_indic',
       date_format: 'yyyy/mm/dd',
       rows_per_page: 50,
+      cleaner_placement_view: 'editable',
     });
+  });
+
+  it('preserves the per-user cleaner placement view', () => {
+    expect(normalizePreferences({
+      numerals: 'latin',
+      date_format: 'dd/mm/yyyy',
+      rows_per_page: 25,
+      cleaner_placement_view: 'compact',
+    })).toMatchObject({ cleaner_placement_view: 'compact' });
   });
 
   it('rejects invalid persisted page sizes', () => {

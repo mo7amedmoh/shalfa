@@ -45,6 +45,19 @@ describe('monthly report presentation data', () => {
     expect(data.chart.yTicks).toHaveLength(5);
   });
 
+  it('uses maintenance rows only for the maintenance cumulative chart', () => {
+    const data = reportData([
+      row('maintenance', { plannedDate: '2026-11-05', visited: true, visitedDate: '2026-11-05' }),
+      ...Array.from({ length: 3 }, (_, index) => row(`cleaning-${index}`, {
+        planType: 'cleaning',
+        plannedDate: '2026-11-05',
+      })),
+    ]);
+
+    expect(data.chart.max).toBe(1);
+    expect(data.chart.points[4]).toMatchObject({ yPlanned: 60, yActual: 60 });
+  });
+
   it('classifies service progress against expected-to-date and keeps unplanned services neutral', () => {
     const rows = [
       ...Array.from({ length: 10 }, (_, index) => row(`on-${index}`, {
@@ -99,5 +112,18 @@ describe('monthly report presentation data', () => {
       { id: 'security_safety', uploaded: 0, planned: 0 },
       { id: 'elevators', uploaded: 0, planned: 0 },
     ]);
+  });
+
+  it('marks a service far behind when visits are due but nothing is complete', () => {
+    const data = reportData([
+      row('cleaning-due', { planType: 'cleaning', plannedDate: '2026-11-05' }),
+      row('cleaning-future', { planType: 'cleaning', plannedDate: '2026-11-20' }),
+    ]);
+
+    expect(data.services.find(({ id }) => id === 'cleaning')).toMatchObject({
+      visited: 0,
+      expectedVisits: 1,
+      pillTone: 'far-behind',
+    });
   });
 });

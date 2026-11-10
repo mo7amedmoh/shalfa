@@ -86,6 +86,51 @@ a {
   box-shadow: 0 10px 30px rgba(27, 44, 88, 0.05);
 }
 
+.workforce-employee-form-actions {
+  display: flex;
+  justify-content: flex-start;
+  grid-column: 1 / -1;
+}
+
+.workforce-save-employee-button {
+  display: inline-flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #304574;
+  border-radius: 10px;
+  padding: 0 24px;
+  background: #304574;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 700;
+  box-shadow: 0 2px 5px rgb(33 54 106 / 14%);
+  transition: background-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+
+.workforce-save-employee-button:hover:not(:disabled) {
+  background: #21366a;
+  box-shadow: 0 4px 10px rgb(33 54 106 / 20%);
+  transform: translateY(-1px);
+}
+
+.workforce-save-employee-button:focus-visible {
+  outline: 3px solid rgb(48 69 116 / 28%);
+  outline-offset: 2px;
+}
+
+.workforce-save-employee-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+@media (max-width: 639px) {
+  .workforce-employee-form-actions,
+  .workforce-save-employee-button {
+    width: 100%;
+  }
+}
+
 .table-scroll {
   overflow-x: auto;
   min-width: 0;

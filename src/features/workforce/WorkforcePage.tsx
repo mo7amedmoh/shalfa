@@ -281,7 +281,11 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
           <label className="grid gap-1 text-sm font-semibold">المسؤول المباشر
             <select {...register('manager_id', { setValueAs: (value) => value || null })} className="rounded-lg border border-slate-300 px-3 py-2 font-normal"><option value="">بدون مسؤول محدد</option>{(employees.data ?? []).map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name} · {employee.job_title}</option>)}</select>
           </label>
-          <button type="submit" disabled={isSubmitting} className="w-fit rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">حفظ الموظف</button>
+          <div className="workforce-employee-form-actions">
+            <button type="submit" disabled={isSubmitting} className="workforce-save-employee-button">
+              {isSubmitting ? 'جارٍ الحفظ…' : 'حفظ الموظف'}
+            </button>
+          </div>
         </form>
         <div className="flex flex-wrap items-center gap-3">
           <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold"><Upload size={16} /> استيراد Excel أو CSV<input type="file" accept=".xlsx,.xls,.csv" className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importWorkbook(file); event.currentTarget.value = ''; }} /></label>

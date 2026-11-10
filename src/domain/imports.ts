@@ -5,8 +5,8 @@ export function normalizeMinistryNumber(value: unknown): string {
     .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
     .trim()
     .replace(/\s+/g, '')
-    .toLocaleLowerCase()
-    .replace(/^m(?=\d)/, '')
+    .toUpperCase()
+    .replace(/^M(?=\d)/, '')
     .replace(/^0+(?=\d)/, '');
 }
 

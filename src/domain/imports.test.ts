@@ -16,6 +16,9 @@ describe('import value normalization', () => {
   it('normalizes Arabic-Indic ministry numbers', () => {
     expect(normalizeMinistryNumber(' ٩٥١ ٨٣ ')).toBe('95183');
     expect(normalizeMinistryNumber('M010801')).toBe('10801');
+    expect(normalizeMinistryNumber('10801')).toBe('10801');
+    expect(normalizeMinistryNumber('010801')).toBe('10801');
+    expect(normalizeMinistryNumber('m10801')).toBe('10801');
     expect(normalizeMinistryNumber('00010801')).toBe('10801');
     expect(normalizeMinistryNumber('')).toBe('');
   });

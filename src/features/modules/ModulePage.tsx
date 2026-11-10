@@ -1,4 +1,4 @@
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { SyncSettingsPage } from '../admin/SyncSettingsPage';
 import { PlanEligibilitySettingsPage } from '../admin/PlanEligibilitySettingsPage';
 import { ScorecardsPage } from '../kpi/ScorecardsPage';
@@ -12,7 +12,11 @@ const labels: Record<ModuleSection, Record<string, string>> = {
     scorecards: 'بطاقات الأداء الشهرية',
     deliverables: 'المخرجات التعاقدية',
   },
-  admin: { settings: 'المزامنة والإعدادات' },
+  admin: {
+    settings: 'الإعدادات',
+    sync: 'مزامنة المدارس',
+    eligibility: 'أهلية الخطط',
+  },
 };
 
 const descriptions: Record<ModuleSection, string> = {
@@ -25,8 +29,15 @@ export function ModulePage({ section, profile = null, type: fixedType }: { secti
   const type = fixedType ?? routeType;
   const title = labels[section][type] ?? 'الوحدة المطلوبة';
 
+  if (section === 'admin' && type === 'sync') return <SyncSettingsPage />;
+  if (section === 'admin' && type === 'eligibility') return <PlanEligibilitySettingsPage />;
   if (section === 'admin' && type === 'settings') {
-    return <div className="grid gap-5"><PageHeading title={title} description={descriptions.admin} /><SyncSettingsPage /><PlanEligibilitySettingsPage /></div>;
+    return <div className="grid gap-5">
+      <PageHeading title={title} description={descriptions.admin} />
+      <Link to="/admin/school-cleanup" className="card inline-flex w-fit items-center rounded-lg px-4 py-3 text-sm font-bold text-brand-800">تنظيف المدارس المتروكة</Link>
+      <SyncSettingsPage />
+      <PlanEligibilitySettingsPage />
+    </div>;
   }
   if (section === 'kpi' && type in labels.kpi) {
     if (type === 'scorecards') return <ScorecardsPage profile={profile} />;

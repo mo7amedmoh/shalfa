@@ -3,7 +3,7 @@ import { normalizeEligibilityValue } from '../domain/planEligibility';
 import { z } from 'zod';
 import { parseClassCount } from '../domain/staffing';
 import { mapSchoolContactColumns, schoolContactsExtraKey } from '../domain/schoolContacts';
-import { normalizeMinistryNumber } from '../domain/imports';
+import { normalizeImportName, normalizeMinistryNumber } from '../domain/imports';
 import { supabase } from './supabase';
 import { APP_SCHEMA_SELECT } from './schemaColumns';
 
@@ -157,7 +157,7 @@ export function prepareSchoolRows(
   const buildingTypeIndex = headers.findIndex((header) => normalizedText(header) === normalizedText('نوع المبنى'));
   const elevatorContractorIndex = headers.findIndex((header) => normalizedText(header) === normalizedText('مقاول المصاعد'));
   const occurrences = new Map<string, number>();
-  const duplicateRows = new Map<string, number[]>();
+  const duplicateRows = new Map<string, Set<number>>();
   const rows: SyncedSchool[] = [];
   let invalidCoordinates = 0;
   let processedSourceRows = 0;
@@ -199,10 +199,10 @@ export function prepareSchoolRows(
     const occurrence = (occurrences.get(normalizedMinistryNumber) ?? 0) + 1;
     occurrences.set(normalizedMinistryNumber, occurrence);
     if (occurrence > 1) {
-      const duplicate = duplicateRows.get(normalizedMinistryNumber) ?? [
-        rows.find((candidate) => candidate.source_key === `${normalizedMinistryNumber}#1`)!.source_row,
-      ];
-      duplicate.push(sourceRow);
+      const duplicate = duplicateRows.get(normalizedMinistryNumber) ?? new Set<number>([
+        rows.find((candidate) => candidate.source_key === `${normalizedMinistryNumber.toLowerCase()}#1`)!.source_row,
+      ]);
+      duplicate.add(sourceRow);
       duplicateRows.set(normalizedMinistryNumber, duplicate);
     }
     const sourceColumns = headers.map((header, index) => ({ header, value: values[index] ?? '' }));
@@ -216,7 +216,7 @@ export function prepareSchoolRows(
     const elevatorContractor = values[elevatorContractorIndex];
     rows.push({
       ministry_no: ministryNumber,
-      source_key: `${normalizedMinistryNumber}#${occurrence}`,
+      source_key: `${normalizedMinistryNumber.toLowerCase()}#${occurrence}`,
       source_row: sourceRow,
       source_columns: sourceColumns,
       building_type: buildingType || null,
@@ -232,8 +232,73 @@ export function prepareSchoolRows(
       missing_from_sheet_at: null,
     });
   }
-  const duplicateNumbers = [...duplicateRows.entries()].map(([ministryNumber, rows]) => ({ ministryNumber, rows }));
+  const duplicateNumbers = [...duplicateRows.entries()].map(([ministryNumber, rows]) => ({
+    ministryNumber,
+    rows: [...rows].sort((a, b) => a - b),
+  }));
   return { rows, duplicateNumbers, invalidCoordinates, sourceRows: processedSourceRows, skippedRows };
+}
+
+type ExistingSchoolSyncRow = {
+  id: string;
+  source_key: string;
+  ministry_no: string;
+  name: string;
+  source_row: number | null;
+  missing_from_sheet_at: string | null;
+};
+
+export function matchExistingSchoolSyncRows(
+  incoming: readonly SyncedSchool[],
+  existing: readonly ExistingSchoolSyncRow[],
+): {
+  matches: Array<{ incoming: SyncedSchool; existing: ExistingSchoolSyncRow }>;
+  ambiguous: Array<{ incoming: SyncedSchool; candidates: ExistingSchoolSyncRow[] }>;
+} {
+  const matches = new Map<number, ExistingSchoolSyncRow>();
+  const usedIds = new Set<string>();
+  const ambiguous = new Map<number, ExistingSchoolSyncRow[]>();
+  const existingByKey = new Map(existing.map((school) => [school.source_key, school]));
+  const matchByKey = (keyFor: (school: SyncedSchool) => string) => {
+    incoming.forEach((school, index) => {
+      if (matches.has(index)) return;
+      const candidate = existingByKey.get(keyFor(school));
+      if (candidate && !usedIds.has(candidate.id)) {
+        matches.set(index, candidate);
+        usedIds.add(candidate.id);
+      }
+    });
+  };
+
+  matchByKey((school) => school.source_key);
+  matchByKey((school) => {
+    const occurrence = school.source_key.slice(school.source_key.lastIndexOf('#') + 1);
+    const legacyMinistry = normalizeDigits(school.ministry_no).trim().replace(/\s+/g, ' ');
+    return `${legacyMinistry.toLocaleLowerCase()}#${occurrence}`;
+  });
+
+  const remainingExisting = existing.filter((school) => !usedIds.has(school.id));
+  incoming.forEach((school, index) => {
+    if (matches.has(index)) return;
+    const ministry = normalizeMinistryNumber(school.ministry_no);
+    const name = normalizeImportName(school.name);
+    const candidates = remainingExisting.filter((candidate) =>
+      !usedIds.has(candidate.id)
+      && normalizeMinistryNumber(candidate.ministry_no) === ministry
+      && normalizeImportName(candidate.name) === name,
+    );
+    if (candidates.length === 1) {
+      matches.set(index, candidates[0]);
+      usedIds.add(candidates[0].id);
+    } else if (candidates.length > 1) {
+      ambiguous.set(index, candidates);
+    }
+  });
+
+  return {
+    matches: [...matches.entries()].map(([index, school]) => ({ incoming: incoming[index], existing: school })),
+    ambiguous: [...ambiguous.entries()].map(([index, candidates]) => ({ incoming: incoming[index], candidates })),
+  };
 }
 
 export function getMissingMinistryNumbersError(
@@ -249,6 +314,7 @@ export function getMissingMinistryNumbersError(
 
 export async function syncSchools(configInput: SchoolSyncConfig): Promise<SchoolSyncResult> {
   if (!supabase) throw new Error('لم يتم إعداد الاتصال بقاعدة البيانات.');
+  const client = supabase;
   const config = schoolSyncConfigSchema.parse(configInput);
   const endpoint = new URL(`https://docs.google.com/spreadsheets/d/${sheetId}/export`);
   endpoint.searchParams.set('format', 'xlsx');
@@ -276,27 +342,44 @@ export async function syncSchools(configInput: SchoolSyncConfig): Promise<School
   }
   if (syncRows.length === 0) throw new Error('لم يعثر على صفوف مدارس صالحة للمزامنة.');
 
-  const existing: Array<{ id: string; source_key: string; missing_from_sheet_at: string | null }> = [];
+  const existing: ExistingSchoolSyncRow[] = [];
   for (let offset = 0; ; offset += 1000) {
     const { data, error } = await supabase.from('schools')
       .select(APP_SCHEMA_SELECT.schoolsSyncState)
+      .order('source_row')
       .range(offset, offset + 999);
     if (error) throw new Error(`تعذر قراءة مفاتيح المدارس قبل المزامنة: ${error.message}`);
     existing.push(...data);
     if (data.length < 1000) break;
   }
-  const existingByKey = new Map(existing.map((school) => [school.source_key, school]));
-  const currentKeys = new Set(syncRows.map((school) => school.source_key));
-  const inserted = syncRows.filter((school) => !existingByKey.has(school.source_key)).length;
-  const updated = syncRows.length - inserted;
+  const matchResult = matchExistingSchoolSyncRows(syncRows, existing);
+  if (matchResult.ambiguous.length) {
+    const details = matchResult.ambiguous
+      .map(({ incoming, candidates }) => `صف ${incoming.source_row} (${incoming.ministry_no}، ${incoming.name}): ${candidates.map(({ source_row }) => source_row ?? 'بلا صف').join('، ')}`)
+      .join('؛ ');
+    throw new Error(`أُوقفت المزامنة لتجنب إنشاء مدارس مكررة؛ تعذر تحديد السجل الحالي لهذه الصفوف: ${details}`);
+  }
+  const matches = matchResult.matches;
+  const matchedIds = new Set(matches.map(({ existing: school }) => school.id));
+  const matchedIncoming = new Set(matches.map(({ incoming: school }) => school));
+  const unmatchedRows = syncRows.filter((school) => !matchedIncoming.has(school));
+  const inserted = unmatchedRows.length;
+  const updated = matches.length;
 
-  for (let index = 0; index < syncRows.length; index += 500) {
-    const { error } = await supabase.from('schools').upsert(syncRows.slice(index, index + 500), {
+  for (let index = 0; index < matches.length; index += 25) {
+    const batch = matches.slice(index, index + 25);
+    await Promise.all(batch.map(async ({ incoming, existing: school }) => {
+      const { error } = await client.from('schools').update(incoming).eq('id', school.id);
+      if (error) throw new Error(`تعذر تحديث المدرسة في صف المصدر ${incoming.source_row}: ${error.message}`);
+    }));
+  }
+  for (let index = 0; index < unmatchedRows.length; index += 500) {
+    const { error } = await supabase.from('schools').upsert(unmatchedRows.slice(index, index + 500), {
       onConflict: 'source_key',
     });
     if (error) throw new Error(`تعذر حفظ دفعة المدارس ${Math.floor(index / 500) + 1}: ${error.message}`);
   }
-  const missingRows = existing.filter((school) => !currentKeys.has(school.source_key) && !school.missing_from_sheet_at);
+  const missingRows = existing.filter((school) => !matchedIds.has(school.id) && !school.missing_from_sheet_at);
   for (let index = 0; index < missingRows.length; index += 500) {
     const { error } = await supabase.from('schools')
       .update({ missing_from_sheet_at: synchronizedAt })

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { MapContainer, TileLayer, useMap } from 'react-leaflet';
-import { Download, List, Map as MapIcon, Pencil, Search, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { Download, List, Map as MapIcon, Pencil, Search, SlidersHorizontal } from 'lucide-react';
 import { z } from 'zod';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { duplicateMinistryRows, schoolsWithMapCoordinates, toSlimMapSchool } from '../../domain/schoolMap';
@@ -313,18 +313,6 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
     await refetch();
   }
 
-  async function deleteSchool(school: SchoolRecord) {
-    if (!supabase || !window.confirm(`هل تريد حذف سجل «${school.school_name}»؟`)) return;
-    setActionError('');
-    const { error: deleteError } = await supabase.from('schools').delete().eq('id', school.id);
-    if (deleteError) {
-      setActionError(`تعذر حذف السجل: ${deleteError.message}`);
-      return;
-    }
-    if (selectedSchoolId === school.id) setSelectedSchoolId('');
-    await refetch();
-  }
-
   function exportCsv() {
     const selected = columns.filter(({ index }) => visible.has(index));
     const content = [
@@ -561,7 +549,6 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
                 {canManageSchools && (
                   <td className="school-actions-cell">
                     <button type="button" onClick={() => openEdit(school)} aria-label={`تعديل ${school.school_name}`} title="تعديل" className="school-action-button school-action-edit"><Pencil size={15} /></button>
-                    <button type="button" onClick={() => void deleteSchool(school)} aria-label={`حذف ${school.school_name}`} title="حذف" className="school-action-button school-action-delete"><Trash2 size={15} /></button>
                   </td>
                 )}
               </tr>

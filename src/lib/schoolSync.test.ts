@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getMissingMinistryNumbersError,
+  matchExistingSchoolSyncRows,
   normalizeRiyadhCoordinates,
   normalizeSheetSchoolSize,
   parseSchoolWorkbook,
@@ -225,5 +226,59 @@ describe('prepareSchoolRows', () => {
     ], config, 'now');
     expect(prepared.rows.map(({ source_key }) => source_key)).toEqual(['95183#1', '95183#2']);
     expect(prepared.duplicateNumbers).toEqual([{ ministryNumber: '95183', rows: [2, 3] }]);
+  });
+
+  it('groups ministry numbers that differ only by M prefixes and leading zeroes', () => {
+    const prepared = prepareSchoolRows(headers, [
+      row('M010801', 'مدرسة'),
+      row('10801', 'مدرسة أخرى'),
+    ], config, 'now');
+
+    expect(prepared.rows.map(({ source_key }) => source_key)).toEqual(['10801#1', '10801#2']);
+    expect(prepared.duplicateNumbers).toEqual([{ ministryNumber: '10801', rows: [2, 3] }]);
+  });
+
+  it('adopts an existing row using its old-format M-prefixed key', () => {
+    const prepared = prepareSchoolRows(headers, [row('M010801', 'مدرسة تجريبية')], config, 'now');
+    const result = matchExistingSchoolSyncRows(prepared.rows, [{
+      id: 'existing-id',
+      source_key: 'm010801#1',
+      ministry_no: 'M010801',
+      name: 'مدرسة تجريبية',
+      source_row: 42,
+      missing_from_sheet_at: '2026-11-08T00:00:00.000Z',
+    }]);
+
+    expect(prepared.rows[0].source_key).toBe('10801#1');
+    expect(result.matches).toHaveLength(1);
+    expect(result.matches[0].existing.id).toBe('existing-id');
+    expect(result.ambiguous).toHaveLength(0);
+  });
+
+  it('does not silently insert a row when normalized identity matches multiple existing schools', () => {
+    const prepared = prepareSchoolRows(headers, [row('95183', 'مدرسة مكررة')], config, 'now');
+    const existing = ['one', 'two'].map((id) => ({
+      id,
+      source_key: `legacy-${id}`,
+      ministry_no: 'M095183',
+      name: 'مَدْرَسَة مكررة',
+      source_row: id === 'one' ? 117 : 118,
+      missing_from_sheet_at: '2026-11-08T00:00:00.000Z',
+    }));
+
+    const result = matchExistingSchoolSyncRows(prepared.rows, existing);
+    expect(result.matches).toHaveLength(0);
+    expect(result.ambiguous).toHaveLength(1);
+    expect(result.ambiguous[0].candidates.map(({ id }) => id)).toEqual(['one', 'two']);
+  });
+
+  it('keeps X0 as a literal ministry number for the attached-school row', () => {
+    const prepared = prepareSchoolRows(headers, [row('X0', 'الروضة الملحقة بالابتدائية 105', 'مشترك ملحق')], config, 'now');
+
+    expect(prepared.rows[0]).toMatchObject({
+      ministry_no: 'X0',
+      source_key: 'x0#1',
+      plan_scope: false,
+    });
   });
 });

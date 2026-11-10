@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { normalizeImportName } from '../../domain/imports';
+import { getUnlinkedPlanNames } from '../../domain/planNameLinking';
 import { supabase } from '../../lib/supabase';
 import type { UserProfile } from '../../lib/auth';
 
@@ -11,30 +12,32 @@ export function PlanNameLinkingPage({ profile }: { profile: UserProfile | null }
   const [employees, setEmployees] = useState<Person[]>([]);
   const [message, setMessage] = useState('');
   const canManage = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
-  async function load() {
+  const load = useCallback(async () => {
     if (!supabase || !canManage) return;
-    const [monthly, general, staff] = await Promise.all([
+    const [monthly, general, staff, aliases] = await Promise.all([
       supabase.from('monthly_plan_rows').select('supervisor_id,supervisor_name').is('supervisor_id', null).not('supervisor_name', 'is', null),
       supabase.from('general_plan_rows').select('supervisor_name').not('supervisor_name', 'is', null),
       supabase.from('employees').select('id,full_name').order('full_name'),
+      supabase.from('supervisor_aliases').select('alias_normalised'),
     ]);
-    if (monthly.error || general.error || staff.error) throw monthly.error ?? general.error ?? staff.error;
+    if (monthly.error || general.error || staff.error || aliases.error) throw monthly.error ?? general.error ?? staff.error ?? aliases.error;
     const names = [...(monthly.data ?? []), ...(general.data ?? [])]
       .map((row) => String(row.supervisor_name ?? '').trim())
       .filter(Boolean);
-    const unique = [...new Set(names.map(normalizeImportName))];
+    const uniqueNames = getUnlinkedPlanNames(names, (aliases.data ?? []).map((alias) => alias.alias_normalised));
     setEmployees(staff.data ?? []);
-    setItems(unique.map((key) => {
-      const name = names.find((candidate) => normalizeImportName(candidate) === key) ?? key;
+    setItems(uniqueNames.map((name) => {
+      const key = normalizeImportName(name);
       return { name, employee: (staff.data ?? []).find((candidate) => normalizeImportName(candidate.full_name) === key) ?? null };
     }));
-  }
-  useEffect(() => { void load().catch((error: Error) => setMessage(error.message)); }, [canManage]);
+  }, [canManage]);
+  useEffect(() => { void load().catch((error: Error) => setMessage(error.message)); }, [load]);
   async function link(item: Unlinked, employeeId: string) {
     if (!supabase || !canManage) return;
     const { error } = await supabase.from('supervisor_aliases').upsert({ alias_normalised: normalizeImportName(item.name), employee_id: employeeId });
     if (error) { setMessage(error.message); return; }
-    await supabase.rpc('relink_plan_names');
+    const { error: relinkError } = await supabase.rpc('relink_plan_names');
+    if (relinkError) { setMessage(`حُفظ الاسم لكن تعذرت إعادة ربط صفوف الخطط: ${relinkError.message}`); return; }
     setMessage('تم ربط الاسم وإعادة ربط صفوف الخطط.');
     await load();
   }

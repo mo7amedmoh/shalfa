@@ -17,7 +17,7 @@ type ImportTarget =
   | { kind: 'gatekeepers' };
 
 type Field = { key: string; label: string; aliases: string[]; required?: boolean; occurrence?: number };
-type SchoolRef = { id: string; ministry_no: string; name: string; plan_scope: boolean; source_fields: Record<string, unknown> };
+type SchoolRef = { id: string; ministry_no: string; ministry_key: string; name: string; plan_scope: boolean; source_fields: Record<string, unknown> };
 type EmployeeRef = { id: string; full_name: string; employee_no: string | null; category: string; job_title: string | null; phone: string | null };
 type AliasRef = { alias_normalised: string; employee_id: string };
 type ImportReferences = {
@@ -38,10 +38,30 @@ type ImportRow = {
   phone: string | null;
 };
 type ReportRow = { line: number; ministryNumber: string; status: 'created' | 'updated' | 'skipped' | 'needs_attention'; note: string };
+class ImportSchemaError extends Error {}
+
+function databaseErrorDetails(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const databaseError = error as { code?: unknown; message: unknown; details?: unknown };
+    const code = typeof databaseError.code === 'string' ? ` (${databaseError.code})` : '';
+    const message = String(databaseError.message);
+    const details = typeof databaseError.details === 'string' && databaseError.details ? ` — ${databaseError.details}` : '';
+    return `${message}${code}${details}`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+function referenceErrorDetails(error: unknown): string {
+  const details = databaseErrorDetails(error);
+  return /ministry_key/i.test(details)
+    ? `طبّق الترحيل 202611070001_ministry_key.sql. PostgreSQL: ${details}`
+    : details;
+}
 
 const schoolSchema = z.object({
   id: z.string().uuid(),
   ministry_no: z.string(),
+  ministry_key: z.string(),
   name: z.string(),
   plan_scope: z.boolean(),
   source_fields: z.record(z.string(), z.unknown()),
@@ -236,7 +256,9 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
         return data;
       }),
       loadAllPages(async (start, end) => {
-        const { data, error } = await client.from('employees').select(APP_SCHEMA_SELECT.employeesForImport).order('full_name').range(start, end);
+        let query = client.from('employees').select(APP_SCHEMA_SELECT.employeesForImport).order('full_name');
+        if (target.kind === 'gatekeepers') query = query.eq('category', 'gatekeeper');
+        const { data, error } = await query.range(start, end);
         if (error) throw error;
         return data;
       }),
@@ -290,10 +312,10 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
         setReferences(await loadReferences());
         setReferenceError('');
       } catch (error) {
-        setReferenceError(error instanceof Error ? error.message : 'تعذر تحميل بيانات المطابقة.');
+        setReferenceError(referenceErrorDetails(error));
       }
     } catch (error) {
-      setMessage(`تعذر قراءة الملف: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
+      setMessage(`تعذر قراءة الملف: ${databaseErrorDetails(error)}`);
     }
   }
 
@@ -410,7 +432,16 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
   function schoolCandidates(row: ImportRow): SchoolRef[] {
     if (!references) return [];
     const ministry = normalizeMinistryNumber(row.values.ministry);
-    return ministry ? references.schools.filter((school) => normalizeMinistryNumber(school.ministry_no) === ministry) : [];
+    return ministry ? references.schools.filter((school) => school.ministry_key === ministry) : [];
+  }
+
+  function resolveSchool(row: ImportRow): SchoolRef | null {
+    if (row.schoolId) return references?.schools.find((school) => school.id === row.schoolId) ?? null;
+    const allMatches = schoolCandidates(row);
+    const matches = allMatches.length > 1 ? allMatches.filter((school) => school.plan_scope) : allMatches;
+    if (matches.length <= 1) return matches[0] ?? null;
+    const inScope = matches.filter((school) => school.plan_scope);
+    return inScope.length === 1 ? inScope[0] : null;
   }
 
   function matchEmployee(name: unknown, category?: string): EmployeeRef[] {
@@ -422,17 +453,8 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
   function rowState(row: ImportRow, index: number): { status: 'ready' | 'skipped' | 'attention'; notes: string[]; school: SchoolRef | null; engineer: EmployeeRef | null; supervisor: EmployeeRef | null; engineerName: string; supervisorName: string; employee: EmployeeRef | null } {
     const notes: string[] = [];
     const schoolMatches = schoolCandidates(row);
-    const school = row.schoolId ? references?.schools.find((item) => item.id === row.schoolId) ?? null : schoolMatches.length === 1 ? schoolMatches[0] : null;
-    const uniqueSchoolTarget = target.kind === 'monthly' || target.kind === 'general' || target.kind === 'gatekeepers';
-    const duplicateTargetSchool = uniqueSchoolTarget && school
-      ? rows.some((other, otherIndex) => {
-        if (otherIndex === index) return false;
-        const otherSchool = other.schoolId
-          ? references?.schools.find((item) => item.id === other.schoolId)
-          : schoolCandidates(other).length === 1 ? schoolCandidates(other)[0] : null;
-        return otherSchool?.id === school.id;
-      })
-      : false;
+    const eligibleMatches = schoolMatches.length > 1 ? schoolMatches.filter((item) => item.plan_scope) : schoolMatches;
+    const school = resolveSchool(row);
     if (school && !school.plan_scope) {
       return { status: 'skipped', notes: ['المدرسة خارج نطاق الأهلية المعتمدة للخطة أو التسكين.'], school, engineer: null, supervisor: null, engineerName: '', supervisorName: '', employee: null };
     }
@@ -471,10 +493,9 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
       return { status: 'skipped', notes: ['قيمة المصاعد «لا ينطبق»؛ لا يُنشأ صف للخطة.'], school, engineer: null, supervisor: null, engineerName: '', supervisorName: '', employee: null };
     }
     if (!String(row.values.ministry ?? '').trim()) notes.push('الرقم الوزاري مطلوب.');
-    if (!school) notes.push(schoolMatches.length > 1 ? 'وجدت عدة مدارس بهذا الرقم؛ اختر المدرسة يدوياً.' : 'لم توجد مدرسة بهذا الرقم؛ اختر المدرسة يدوياً بالاسم.');
-    if (duplicateTargetSchool) notes.push('تكررت المدرسة نفسها في الملف؛ اختر المدرسة المقصودة لكل صف ولا تستورد تكرار المفتاح.');
+    if (!school) notes.push(eligibleMatches.length > 1 ? 'وجدت عدة مدارس مؤهلة بهذا الرقم؛ اختر المدرسة المقصودة.' : schoolMatches.length > 1 ? 'لم توجد مدرسة ضمن النطاق؛ اختر المدرسة يدوياً للمراجعة.' : 'لم توجد مدرسة بهذا الرقم؛ اختر المدرسة يدوياً بالاسم.');
     if ((target.kind === 'monthly' || target.kind === 'general')
-      && (!school || duplicateTargetSchool || notes.some((note) => !note.startsWith('تحذير:')))) {
+      && (!school || notes.some((note) => !note.startsWith('تحذير:')))) {
       return { status: 'attention', notes, school, engineer: null, supervisor: null, engineerName: '', supervisorName: '', employee: null };
     }
     if (target.kind === 'monthly') {
@@ -533,29 +554,104 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
     }
     const employeeNo = String(row.values.employeeNo ?? '').trim();
     const employeeNumberMatches = employeeNo
-      ? references?.employees.filter((employee) => employee.employee_no === employeeNo && employee.job_title === 'حارس مدرسة') ?? []
+      ? references?.employees.filter((employee) => employee.employee_no === employeeNo && employee.category === 'gatekeeper') ?? []
       : [];
     const employeeMatches = employeeNumberMatches.length
       ? employeeNumberMatches
-      : matchEmployee(row.values.fullName).filter((employee) => employee.job_title === 'حارس مدرسة');
+      : matchEmployee(row.values.fullName).filter((employee) => employee.category === 'gatekeeper');
     const employee = row.employeeId
-      ? references?.employees.find((item) => item.id === row.employeeId && item.job_title === 'حارس مدرسة') ?? null
+      ? references?.employees.find((item) => item.id === row.employeeId && item.category === 'gatekeeper') ?? null
       : employeeMatches.length === 1 ? employeeMatches[0] : null;
     if (employeeMatches.length > 1 && !employee) notes.push('الرقم الوظيفي أو الاسم يطابق أكثر من موظف؛ اختر الموظف يدوياً.');
-    if (!employee) notes.push('اختر البواب يدوياً من الموظفين ذوي المسمى «حارس مدرسة».');
     if (employee && employeeNo && employee.employee_no !== employeeNo) {
-      notes.push('تحذير: الرقم الوظيفي المستورد لا يطابق سجل الموظف المختار؛ سيُحفظ الرقم كما ورد في بيانات البواب.');
+      notes.push('الرقم الوظيفي لا يطابق الموظف المختار؛ صحّح الرقم أو اختر الموظف المطابق قبل الاستيراد.');
     }
     return { status: notes.some((note) => !note.startsWith('تحذير:')) ? 'attention' : 'ready', notes, school, engineer: null, supervisor: null, engineerName: '', supervisorName: '', employee };
   }
 
+  async function checkImportSchema() {
+    if (!supabase) throw new Error('يلزم إعداد الاتصال بقاعدة البيانات.');
+    const checks: Array<{ table: string; columns: string; migration: string }> = [
+      { table: 'schools', columns: 'id,ministry_key', migration: '202611070001_ministry_key.sql' },
+    ];
+    if (target.kind === 'monthly') {
+      checks.push(
+        { table: 'monthly_plans', columns: 'id,plan_type,month', migration: '202611040001_reconcile.sql' },
+        { table: 'monthly_plan_rows', columns: 'id,plan_id,school_id,planned_date,visited_date,report_done_date,engineer_id,engineer_name,supervisor_id,supervisor_name,contractor_name', migration: '202611050003_import_support.sql' },
+      );
+    } else if (target.kind === 'general') {
+      checks.push(
+        { table: 'general_plans', columns: 'id,plan_type,year', migration: '202611040001_reconcile.sql' },
+        { table: 'general_plan_rows', columns: 'id,plan_id,school_id,planned_date,supervisor_id,supervisor_name,engineer_name,notes', migration: '202611050003_import_support.sql' },
+      );
+      const { error } = await supabase.rpc('import_general_plan_rows', {
+        p_plan_id: '00000000-0000-0000-0000-000000000000',
+        p_rows: [],
+      });
+      if (error) throw new ImportSchemaError(`تحتاج قاعدة البيانات إلى الترحيل 202611050003_import_support.sql قبل الكتابة. PostgreSQL${error.code ? ` (${error.code})` : ''}: ${error.message}`);
+    } else if (target.kind === 'cleaners') {
+      checks.push(
+        { table: 'employees', columns: 'id,full_name,employee_no,category', migration: '202611050003_import_support.sql' },
+        { table: 'cleaner_assignments', columns: 'id,school_id,employee_id,labour_source', migration: '202611050003_import_support.sql' },
+      );
+      const { error } = await supabase.rpc('resolve_import_cleaner', {
+        p_school_id: '00000000-0000-0000-0000-000000000000',
+        p_full_name: '',
+        p_employee_no: null,
+        p_residence_no: null,
+        p_labour_source: 'org_structure',
+      });
+      if (error?.code === 'PGRST202') {
+        throw new ImportSchemaError(`تحتاج قاعدة البيانات إلى الترحيل 202611050003_import_support.sql قبل الكتابة. PostgreSQL (${error.code}): ${error.message}`);
+      }
+      if (error?.message !== 'اسم عامل النظافة مطلوب') {
+        throw new Error(error ? databaseErrorDetails(error) : 'لم يُرجع فحص مخطط استيراد العمال الخطأ المتوقع؛ لم يبدأ الاستيراد.');
+      }
+    } else {
+      checks.push(
+        { table: 'gatekeepers', columns: 'id,school_id,employee_id,full_name,employee_no,phone,notes', migration: '202611100002_gatekeeper_employee_links.sql' },
+        { table: 'employees', columns: 'id,category,employee_no', migration: '202611100001_gatekeeper_category.sql' },
+      );
+    }
+    if (target.kind === 'monthly') {
+      checks.push({ table: 'supervisor_aliases', columns: 'alias_normalised,employee_id', migration: '202611050003_import_support.sql' });
+    }
+    for (const check of checks) {
+      const { error } = await supabase.from(check.table).select(check.columns).limit(0);
+      if (error) {
+        throw new ImportSchemaError(`تحتاج قاعدة البيانات إلى الترحيل ${check.migration} (الجدول ${check.table}). PostgreSQL${error.code ? ` (${error.code})` : ''}: ${error.message}`);
+      }
+    }
+    if (target.kind === 'gatekeepers') {
+      const { error } = await supabase.rpc('gatekeeper_employee_status');
+      if (error?.code === 'PGRST202' || error?.code === '42883') {
+        throw new ImportSchemaError(`تحتاج قاعدة البيانات إلى الترحيل 202611100002_gatekeeper_employee_links.sql. PostgreSQL (${error.code}): ${error.message}`);
+      }
+      if (error) throw new Error(databaseErrorDetails(error));
+    }
+  }
+
   async function writeImport() {
     if (!supabase || !profile || !roleCanImport(profile) || !references) throw new Error('لا تملك صلاحية الاستيراد.');
+    await checkImportSchema();
     const evaluated = rows.map((row, index) => ({ row, state: rowState(row, index) }));
     const reports: ReportRow[] = [];
-    const writable = evaluated.filter(({ state }) =>
-      state.status !== 'skipped' && state.status !== 'attention' && state.school !== null,
-    );
+    const uniqueSchoolTarget = target.kind === 'monthly' || target.kind === 'general' || target.kind === 'gatekeepers';
+    const seenSchoolIds = new Set<string>();
+    const writable = evaluated.filter(({ row, state }) => {
+      if (state.status === 'skipped' || state.status === 'attention' || !state.school) return false;
+      if (uniqueSchoolTarget && seenSchoolIds.has(state.school.id)) {
+        reports.push({
+          line: row.line,
+          ministryNumber: String(row.values.ministry ?? ''),
+          status: 'skipped',
+          note: 'تكرر الصف نفسه في الملف؛ تم تجاهل التكرار دون إيقاف بقية الاستيراد.',
+        });
+        return false;
+      }
+      if (uniqueSchoolTarget) seenSchoolIds.add(state.school.id);
+      return true;
+    });
     for (const { row, state } of evaluated.filter(({ state }) =>
       state.status === 'skipped' || state.status === 'attention' || state.school === null,
     )) {
@@ -598,7 +694,9 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
         }));
         const { error } = await supabase.from('monthly_plan_rows').upsert(payload, { onConflict: 'plan_id,school_id' });
         if (error) {
-          batch.forEach(({ row }) => reports.push({ line: row.line, ministryNumber: String(row.values.ministry), status: 'needs_attention', note: error.message }));
+          const firstLine = batch[0].row.line;
+          const lastLine = batch[batch.length - 1].row.line;
+          batch.forEach(({ row }) => reports.push({ line: row.line, ministryNumber: String(row.values.ministry), status: 'needs_attention', note: `فشل الجزء الذي يضم أسطر الملف ${firstLine}–${lastLine}: ${databaseErrorDetails(error)}` }));
         } else {
           batch.forEach(({ row, state }) => reports.push({
             line: row.line, ministryNumber: String(row.values.ministry),
@@ -631,17 +729,18 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
             line: row.line,
             ministryNumber: String(row.values.ministry),
             status: 'needs_attention',
-            note: result.error.message,
+            note: `فشل الجزء الذي يضم أسطر الملف ${batch[0].row.line}–${batch[batch.length - 1].row.line}: ${databaseErrorDetails(result.error)}`,
           }));
           continue;
         }
-        for (const { state } of batch) {
+        const peopleErrors = new Map<number, string>();
+        for (const { row, state } of batch) {
           const { error: peopleError } = await supabase.from('general_plan_rows').update({
             supervisor_id: state.supervisor?.id ?? null,
             supervisor_name: state.supervisorName || null,
             engineer_name: state.engineerName || null,
           }).eq('plan_id', plan.id).eq('school_id', state.school!.id);
-          if (peopleError) throw peopleError;
+          if (peopleError) peopleErrors.set(row.line, databaseErrorDetails(peopleError));
         }
         const operations = z.array(z.object({ source_line: z.number().int(), operation: z.enum(['created', 'updated']) })).parse(result.data);
         const operationByLine = new Map(operations.map((item) => [item.source_line, item.operation]));
@@ -650,8 +749,8 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
           reports.push({
             line: row.line,
             ministryNumber: String(row.values.ministry),
-            status: operation === 'created' || operation === 'updated' ? operation : 'needs_attention',
-            note: operation ? state.notes.filter((note) => note.startsWith('تحذير:')).join(' ') : 'لم يرجع تقرير بحالة الصف.',
+            status: peopleErrors.has(row.line) ? 'needs_attention' : operation === 'created' || operation === 'updated' ? operation : 'needs_attention',
+            note: peopleErrors.get(row.line) ?? (operation ? state.notes.filter((note) => note.startsWith('تحذير:')).join(' ') : 'لم يرجع تقرير بحالة الصف.'),
           });
         });
       }
@@ -668,7 +767,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
             p_labour_source: labourSource,
           });
           if (result.error) {
-            reports.push({ line: row.line, ministryNumber: String(row.values.ministry), status: 'needs_attention', note: result.error.message });
+            reports.push({ line: row.line, ministryNumber: String(row.values.ministry), status: 'needs_attention', note: databaseErrorDetails(result.error) });
             continue;
           }
           const resultRow = z.array(z.object({
@@ -688,22 +787,24 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
     } else {
       for (let offset = 0; offset < writable.length; offset += 100) {
         const batch = writable.slice(offset, offset + 100);
-        const payload = batch.map(({ row, state }) => ({
-          school_id: state.school!.id,
-          employee_id: state.employee?.id ?? null,
-          full_name: String(row.values.fullName).trim(),
-          employee_no: String(row.values.employeeNo ?? '').trim() || null,
-          phone: normalizePhone(row.phone ?? row.values.phone).phone,
-          residence_no: String(row.values.residence ?? '').trim() || null,
-          notes: String(row.values.notes ?? '').trim() || null,
-        }));
-        const { error } = await supabase.from('gatekeepers').upsert(payload, { onConflict: 'school_id' });
-        batch.forEach(({ row, state }) => reports.push({
-          line: row.line,
-          ministryNumber: String(row.values.ministry),
-          status: error ? 'needs_attention' : references.gatekeeperSchoolIds.has(state.school!.id) ? 'updated' : 'created',
-          note: error?.message ?? state.notes.filter((note) => note.startsWith('تحذير:')).join(' '),
-        }));
+        for (const { row, state } of batch) {
+          const { error } = await supabase.rpc('save_gatekeeper', {
+            p_school_id: state.school!.id,
+            p_employee_id: state.employee?.id ?? null,
+            p_full_name: String(row.values.fullName).trim(),
+            p_employee_no: String(row.values.employeeNo ?? '').trim() || null,
+            p_phone: normalizePhone(row.phone ?? row.values.phone).phone,
+            p_residence_no: String(row.values.residence ?? '').trim() || null,
+            p_notes: String(row.values.notes ?? '').trim() || null,
+            p_clear_residence: false,
+          });
+          reports.push({
+            line: row.line,
+            ministryNumber: String(row.values.ministry),
+            status: error ? 'needs_attention' : references.gatekeeperSchoolIds.has(state.school!.id) ? 'updated' : 'created',
+            note: error ? databaseErrorDetails(error) : state.notes.filter((note) => note.startsWith('تحذير:')).join(' '),
+          });
+        }
       }
     }
 
@@ -752,9 +853,10 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
         { onConflict: 'alias_normalised' },
       );
       if (error) {
+        const details = databaseErrorDetails(error);
         for (const item of batch) for (const line of item.lines) {
           const reportRow = reports.find((row) => row.line === line);
-          if (reportRow) reportRow.note = `${reportRow.note} تعذر حفظ الاسم البديل: ${error.message}`.trim();
+          if (reportRow) reportRow.note = `${reportRow.note} تعذر حفظ الاسم البديل: ${details}`.trim();
         }
       }
     }
@@ -768,7 +870,25 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
     try {
       await writeImport();
     } catch (error) {
-      setMessage(`تعذر إكمال الاستيراد: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
+      const details = databaseErrorDetails(error);
+      setMessage(`تعذر إكمال الاستيراد: ${details}`);
+      if (error instanceof ImportSchemaError) {
+        setReport(rows.map((row) => ({
+          line: row.line,
+          ministryNumber: String(row.values.ministry ?? ''),
+          status: 'needs_attention',
+          note: details,
+        })));
+        setStep('report');
+      } else {
+        setReport(rows.map((row) => ({
+          line: row.line,
+          ministryNumber: String(row.values.ministry ?? ''),
+          status: 'needs_attention',
+          note: `النتيجة غير مؤكدة لهذا الصف بعد توقف الاستيراد: ${details}`,
+        })));
+        setStep('report');
+      }
     } finally {
       setBusy(false);
     }
@@ -820,7 +940,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
                 </label>
               </div>
               <p className="text-sm text-slate-600">طابق كل حقل مع عموده. جرى اكتشاف العناوين العربية المتطابقة تلقائياً، ويمكن تعديل أي ربط يدوياً.</p>
-              {referenceError && <div role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">تعذر تحميل بيانات المطابقة: {referenceError}<button type="button" onClick={() => void loadReferences().then((value) => { setReferences(value); setReferenceError(''); }).catch((error: Error) => setReferenceError(error.message))} className="ms-3 underline">إعادة المحاولة</button></div>}
+              {referenceError && <div role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">تعذر تحميل بيانات المطابقة: {referenceError}<button type="button" onClick={() => void loadReferences().then((value) => { setReferences(value); setReferenceError(''); }).catch((error: Error) => setReferenceError(referenceErrorDetails(error)))} className="ms-3 underline">إعادة المحاولة</button></div>}
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {fields.map((field) => (
                   <label key={field.key} className="grid gap-1 text-sm font-semibold">
@@ -854,7 +974,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
               )}
               {invalidDateCount > 0 && <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">تحذير: تعذر تفسير {invalidDateCount} تاريخاً. استخدم يوم-شهر-سنة أو سنة-شهر-يوم؛ لن يتم التخمين.</p>}
               {outsideMonthCount > 0 && <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">تحذير: {outsideMonthCount} تاريخاً خارج الشهر المحدد وسيتم استبعادها من الاستيراد.</p>}
-              {referenceError && <button type="button" onClick={() => void loadReferences().then((value) => { setReferences(value); setReferenceError(''); }).catch((error: Error) => setReferenceError(error.message))} className="justify-self-start rounded border px-3 py-2 text-sm">إعادة تحميل بيانات المطابقة</button>}
+              {referenceError && <button type="button" onClick={() => void loadReferences().then((value) => { setReferences(value); setReferenceError(''); }).catch((error: Error) => setReferenceError(referenceErrorDetails(error)))} className="justify-self-start rounded border px-3 py-2 text-sm">إعادة تحميل بيانات المطابقة</button>}
               <div className="max-h-[55vh] overflow-auto rounded-lg border border-slate-200">
                 <table className="min-w-full text-start text-xs">
                   <thead className="sticky top-0 bg-slate-50"><tr>
@@ -873,7 +993,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
                         <td className="min-w-52 p-2">
                           <select value={row.schoolId || state.school?.id || ''} onChange={(event) => updateRow(index, { schoolId: event.target.value })} className="w-full rounded border px-2 py-1">
                             <option value="">{matches.length > 1 ? 'اختر المدرسة بسبب التكرار' : matches.length === 0 ? 'اختر المدرسة يدوياً' : 'اختر المدرسة'}</option>
-                            {references?.schools.map((school) => <option key={school.id} value={school.id}>{school.name} · {school.ministry_no}</option>)}
+                            {matches.map((school) => <option key={school.id} value={school.id}>{school.name} · {school.ministry_no}</option>)}
                           </select>
                           {state.school && <span className="mt-1 block text-slate-500">{state.school.name}</span>}
                         </td>
@@ -905,7 +1025,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
                                 <span>{String(row.values.fullName ?? '')}</span>
                                 <select value={row.employeeId || state.employee?.id || ''} onChange={(event) => updateRow(index, { employeeId: event.target.value })} className="rounded border px-2 py-1">
                                   <option value="">ربط بموظف عند التطابق</option>
-                                  {references?.employees.filter((employee) => employee.job_title === 'حارس مدرسة').map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name} · {employee.employee_no ?? 'دون رقم وظيفي'}</option>)}
+                                  {references?.employees.filter((employee) => employee.category === 'gatekeeper').map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name} · {employee.employee_no ?? 'دون رقم وظيفي'}</option>)}
                                 </select>
                               </div>
                             ) : field.key === 'phone' ? (

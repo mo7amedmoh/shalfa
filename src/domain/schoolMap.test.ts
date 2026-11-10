@@ -44,4 +44,20 @@ describe('school map data', () => {
       { ministry_number: '95184', source_row: 119 },
     ])).toEqual([{ ministryNumber: '95183', rows: [117, 118] }]);
   });
+
+  it('ignores retired rows and duplicate observations of the same source row', () => {
+    expect(duplicateMinistryRows([
+      { ministry_number: '95183', source_row: 117, missing_from_sheet_at: null },
+      { ministry_number: '95183', source_row: 117, missing_from_sheet_at: null },
+      { ministry_number: '95183', source_row: 118, missing_from_sheet_at: '2026-11-08' },
+      { ministry_number: '95183', source_row: 119, missing_from_sheet_at: null },
+    ])).toEqual([{ ministryNumber: '95183', rows: [117, 119] }]);
+  });
+
+  it('keeps the legitimate live 95183 duplicate across source rows 117 and 118', () => {
+    expect(duplicateMinistryRows([
+      { ministry_number: '95183', source_row: 117, missing_from_sheet_at: null },
+      { ministry_number: '95183', source_row: 118, missing_from_sheet_at: null },
+    ])).toEqual([{ ministryNumber: '95183', rows: [117, 118] }]);
+  });
 });

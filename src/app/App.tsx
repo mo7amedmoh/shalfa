@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
   BadgeCheck, Building2, CalendarDays, ChevronDown, ClipboardCheck, FileText, Gauge,
   LayoutDashboard, LogOut, Menu, Settings2,
-  ShieldCheck, UserRound, Users, X,
+  UserRound, Users, X,
 } from 'lucide-react';
 import { NavLink, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
@@ -64,8 +64,14 @@ const PlanManagementPage = lazy(() =>
 const AuditLogPage = lazy(() =>
   import('../features/admin/AuditLogPage').then((module) => ({ default: module.AuditLogPage })),
 );
+const SchoolCleanupPage = lazy(() =>
+  import('../features/admin/SchoolCleanupPage').then((module) => ({ default: module.SchoolCleanupPage })),
+);
 const PlanNameLinkingPage = lazy(() =>
   import('../features/admin/PlanNameLinkingPage').then((module) => ({ default: module.PlanNameLinkingPage })),
+);
+const SettingsHubPage = lazy(() =>
+  import('../features/admin/SettingsHubPage').then((module) => ({ default: module.SettingsHubPage })),
 );
 const monthlyPlanTypes: readonly PlanType[] = ['maintenance', 'cleaning', 'security_safety', 'elevators'];
 
@@ -114,7 +120,6 @@ const navigation = [
       ['تسكين العمالة', '/placement/cleaners'],
       ['تسكين البوابين', '/placement/gatekeepers'],
       ['مكافأة الفنيين', '/rewards'],
-      ['ربط الأسماء بالموظفين', '/admin/plan-name-linking'],
     ],
   },
   {
@@ -129,8 +134,7 @@ const navigation = [
 ];
 
 const adminNavigation = [
-  { label: 'المستخدمون والصلاحيات', path: '/admin/users', icon: ShieldCheck },
-  { label: 'المزامنة والإعدادات', path: '/admin/settings', icon: Settings2 },
+  { label: 'الإعدادات', path: '/admin/settings', icon: Settings2 },
   { label: 'سجل التدقيق', path: '/admin/audit', icon: FileText },
 ];
 
@@ -208,14 +212,11 @@ function AppShell({
   });
   const visibleNavigation = useMemo(() => navigation.map((item) => {
     if (!('children' in item)) return item;
-    if (item.label === 'أعمال إدارية' && !canManagePlanNames) {
-      return { ...item, children: item.children?.filter(([, path]) => path !== '/admin/plan-name-linking') };
-    }
     const group = item.label === 'الخطط الشهرية' ? 'monthly' : item.label === 'الخطط العامة' ? 'general' : null;
     if (!group) return item;
     const custom = buildCustomMenu(customTypes.data ?? [], group).map(({ label, path }) => [label, path] as [string, string]);
     return { ...item, children: [...(item.children ?? []), ...custom] };
-  }), [canManagePlanNames, customTypes.data]);
+  }), [customTypes.data]);
   const preferences = useQuery({
     queryKey: ['user-preferences', profile?.id],
     queryFn: () => loadUserPreferences(profile!.id),
@@ -234,6 +235,9 @@ function AppShell({
     if (location.pathname.startsWith('/plans/')) return 'الخطط الشهرية';
     if (location.pathname.startsWith('/kpi/')) return 'مؤشرات الأداء';
     if (location.pathname.startsWith('/placement/')) return 'أعمال إدارية';
+    if (location.pathname === '/admin/settings' || location.pathname.startsWith('/admin/settings/')) return 'الإعدادات';
+    if (location.pathname === '/admin/school-cleanup') return 'تنظيف المدارس';
+    if (location.pathname === '/admin/users') return 'المستخدمون والصلاحيات';
     return 'منصة إدارة المرافق المدرسية';
   }, [location.pathname, visibleNavigation]);
 
@@ -289,7 +293,7 @@ function AppShell({
             );
           })}
           {isAdmin || canCreateCustom ? <div className="mt-3 border-t border-slate-100 pt-3">
-            {isAdmin && adminNavigation.map(({ label, path, icon: Icon }) => (
+            {canManagePlanNames && adminNavigation.filter((item) => item.path !== '/admin/audit' || isAdmin).map(({ label, path, icon: Icon }) => (
               <NavLink key={path} to={path} className="nav-link"><Icon size={19} /><span>{label}</span></NavLink>
             ))}
             {canCreateCustom && <NavLink to="/settings/plans" className="nav-link"><Settings2 size={19} /><span>إدارة الخطط</span></NavLink>}
@@ -334,8 +338,14 @@ function AppShell({
               <Route path="/account" element={<AccountPage profile={profile} />} />
               <Route path="/admin/users" element={isAdmin ? <AdminUsersPage /> : <Navigate to="/" replace />} />
               <Route path="/admin/audit" element={isAdmin ? <AuditLogPage /> : <Navigate to="/" replace />} />
-              <Route path="/admin/plan-name-linking" element={canManagePlanNames ? <PlanNameLinkingPage profile={profile} /> : <Navigate to="/" replace />} />
-              <Route path="/admin/settings" element={isAdmin ? <ModulePage section="admin" type="settings" /> : <Navigate to="/" replace />} />
+              <Route path="/admin/school-cleanup" element={isAdmin ? <SchoolCleanupPage /> : <Navigate to="/" replace />} />
+              <Route path="/admin/plan-name-linking" element={<Navigate to="/admin/settings/name-linking" replace />} />
+              <Route path="/admin/settings" element={canManagePlanNames ? <SettingsHubPage isAdmin={isAdmin} /> : <Navigate to="/" replace />} />
+              <Route path="/admin/settings/sync" element={canManagePlanNames ? <ModulePage section="admin" type="sync" /> : <Navigate to="/" replace />} />
+              <Route path="/admin/settings/eligibility" element={canManagePlanNames ? <ModulePage section="admin" type="eligibility" /> : <Navigate to="/" replace />} />
+              <Route path="/admin/settings/name-linking" element={canManagePlanNames ? <PlanNameLinkingPage profile={profile} /> : <Navigate to="/" replace />} />
+              <Route path="/admin/settings/school-cleanup" element={isAdmin ? <SchoolCleanupPage /> : <Navigate to="/" replace />} />
+              <Route path="/admin/settings/users" element={isAdmin ? <AdminUsersPage /> : <Navigate to="/" replace />} />
               <Route path="/settings/plans" element={canCreateCustom && profile ? <PlanManagementPage profile={profile} /> : <Navigate to="/" replace />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

@@ -3,20 +3,28 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { z } from 'zod';
 import { loadXlsx } from '../../lib/xlsx';
-import { distributePlanDates, isPlanRowOverdue } from '../../domain/plans';
+import { isPlanRowOverdue } from '../../domain/plans';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
+import { schoolPersonDefault } from '../../domain/imports';
+import type { ScheduleAssignment } from '../../domain/planScheduler';
 import type { PlanType } from '../../domain/types';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
+import { BulkPlanUpdates } from './BulkPlanUpdates';
+import { SupervisorPlanGenerator } from './SupervisorPlanGenerator';
 
 const sourceSchoolSchema = z.object({
   id: z.string().uuid(),
   school_name: z.string(),
   ministry_number: z.string(),
+  ministry_key: z.string(),
   source_fields: z.record(z.string(), z.unknown()),
+  neighbourhood: z.string().nullable(),
+  latitude: z.number().nullable(),
+  longitude: z.number().nullable(),
 });
 const eligibilitySchema = z.object({
   buildingTypeHeader: z.string(),
@@ -28,12 +36,12 @@ const eligibilitySchema = z.object({
 const planSchema = z.object({
   id: z.string().uuid(),
   plan_month: z.string(),
-  created_by: z.string().uuid(),
 });
 const rowSchema = z.object({
   id: z.string().uuid(),
   school_id: z.string().uuid(),
   planned_date: z.string(),
+  visited: z.boolean(),
   visited_at: z.string().nullable(),
   report_completed_at: z.string().nullable(),
   engineer_id: z.string().uuid().nullable(),
@@ -41,7 +49,7 @@ const rowSchema = z.object({
   supervisor_name: z.string().nullable(),
   engineer_name: z.string().nullable(),
   contractor_name: z.string().nullable(),
-  school: z.object({ school_name: z.string(), ministry_number: z.string() }).nullable(),
+  school: z.object({ school_name: z.string(), ministry_number: z.string(), ministry_key: z.string() }).nullable(),
 });
 type PlanRow = z.infer<typeof rowSchema>;
 type CandidateData = { schools: z.infer<typeof sourceSchoolSchema>[]; eligibility: PlanEligibilityConfig | null };
@@ -56,7 +64,7 @@ const planTitles: Record<PlanType, string> = {
 async function loadCandidates(): Promise<CandidateData> {
   if (!supabase) return { schools: [], eligibility: null };
   const [schoolsResult, settingsResult] = await Promise.all([
-    supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsBasic).order('name'),
+    supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsPlanGenerator).order('name'),
     supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
   ]);
   if (schoolsResult.error) throw schoolsResult.error;
@@ -106,10 +114,6 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const queryClient = useQueryClient();
   const { formatNumber, formatDate } = useDisplayFormat();
   const [month, setMonth] = useState(currentMonth());
-  const [startDate, setStartDate] = useState(`${currentMonth()}-01`);
-  const [schoolsPerDay, setSchoolsPerDay] = useState('5');
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [generatedDates, setGeneratedDates] = useState<Record<string, string>>({});
   const [activePlanId, setActivePlanId] = useState('');
   const [actualDates, setActualDates] = useState<Record<string, { visited: string; report: string }>>({});
   const [message, setMessage] = useState('');
@@ -135,10 +139,12 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   });
   const canCreate = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
   const canUpdate = Boolean(profile && ['admin', 'project_manager', 'area_engineer', 'report_follower'].includes(profile.role));
+  const loadError = candidates.error ?? plans.error ?? rows.error;
+  const loadErrorMessage = loadError instanceof Error ? loadError.message : String(loadError ?? '');
+  const loadErrorDetails = /ministry_key/i.test(loadErrorMessage)
+    ? `طبّق الترحيل 202611070001_ministry_key.sql. ${loadErrorMessage}`
+    : loadErrorMessage;
 
-  useEffect(() => {
-    setSelectedIds(eligibleIds);
-  }, [eligibleIds]);
   useEffect(() => {
     if (plans.data?.length && !plans.data.some((plan) => plan.id === activePlanId)) setActivePlanId(plans.data[0].id);
   }, [plans.data, activePlanId]);
@@ -151,27 +157,20 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   }, [rows.data]);
 
   const createPlan = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (assignments: ScheduleAssignment[]) => {
       if (!supabase || !profile) throw new Error('يلزم تسجيل الدخول لإنشاء الخطة.');
       if (!canCreate) throw new Error('لا تملك صلاحية إنشاء الخطط.');
       if (!candidates.data?.eligibility) throw new Error('يلزم اعتماد قواعد أهلية المدارس أولاً.');
       const currentEligible = new Set(eligibleIds);
-      if (selectedIds.length === 0 || selectedIds.some((id) => !currentEligible.has(id))) {
+      if (!assignments.length || assignments.some((assignment) => !currentEligible.has(assignment.schoolId))) {
         throw new Error('اختر مدرسة واحدة على الأقل من المدارس المؤهلة.');
       }
-      const distribution = distributePlanDates(selectedIds, {
-        startDate,
-        schoolsPerDay: Number(schoolsPerDay),
-      });
-      const finalDates = distribution.map((visit) => ({
-        ...visit,
-        plannedDate: generatedDates[visit.schoolId] ?? visit.plannedDate,
-      }));
-      if (finalDates.some((visit) => {
-        const parsed = new Date(`${visit.plannedDate}T00:00:00.000Z`);
-        return !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== visit.plannedDate || visit.plannedDate.slice(0, 7) !== month;
+      if (new Set(assignments.map((assignment) => assignment.schoolId)).size !== assignments.length
+        || assignments.some((assignment) => {
+        const parsed = new Date(`${assignment.plannedDate}T00:00:00.000Z`);
+        return !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== assignment.plannedDate || assignment.plannedDate.slice(0, 7) !== month;
       })) {
-        throw new Error('توزيع المواعيد يتجاوز الشهر المحدد. قلل عدد المدارس أو غيّر تاريخ البداية.');
+        throw new Error('تأكد من عدم تكرار المدارس، وأن جميع المواعيد تقع ضمن الشهر المحدد.');
       }
       const { data: createdPlan, error: createError } = await supabase
         .from('monthly_plans')
@@ -180,7 +179,13 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
         .single();
       if (createError) throw createError;
       const { error: rowsError } = await supabase.from('monthly_plan_rows').insert(
-        finalDates.map((visit) => ({ plan_id: createdPlan.id, school_id: visit.schoolId, planned_date: visit.plannedDate })),
+        assignments.map((assignment) => ({
+          plan_id: createdPlan.id,
+          school_id: assignment.schoolId,
+          planned_date: assignment.plannedDate,
+          supervisor_id: assignment.supervisorId,
+          supervisor_name: assignment.supervisorName,
+        })),
       );
       if (rowsError) {
         const { error: rollbackError } = await supabase.from('monthly_plans').delete().eq('id', createdPlan.id);
@@ -203,6 +208,9 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const updateRow = useMutation({
     mutationFn: async ({ rowId, field, value }: { rowId: string; field: 'visited_at' | 'report_completed_at'; value: string | null }) => {
       if (!supabase) throw new Error('يلزم إعداد Supabase.');
+      if (field === 'report_completed_at' && value && !rows.data?.find((row) => row.id === rowId)?.visited_at) {
+        throw new Error('لا يمكن إكمال التقرير قبل تسجيل الزيارة.');
+      }
       const { error } = await supabase.from('monthly_plan_rows').update({
         [field === 'visited_at' ? 'visited_date' : 'report_done_date']: value || null,
         [field === 'visited_at' ? 'visited' : 'report_done']: Boolean(value),
@@ -258,19 +266,21 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
     onError: (error: Error) => setMessage(error.message),
   });
 
-  function prepareDates() {
-    try {
-      const dates = distributePlanDates(selectedIds, { startDate, schoolsPerDay: Number(schoolsPerDay) });
-      setGeneratedDates(Object.fromEntries(dates.map((item) => [item.schoolId, item.plannedDate])));
-      setMessage(`تم توزيع المواعيد على ${dates.length} مدرسة. يمكنك تعديل كل تاريخ قبل الحفظ.`);
-    } catch (error) {
-      setMessage(error instanceof Error ? `تحقق من مدخلات التوزيع: ${error.message}` : 'تعذر توزيع المواعيد.');
-    }
-  }
-
   const today = localDate();
   const completedVisits = rows.data?.filter((row) => row.visited_at).length ?? 0;
   const completedReports = rows.data?.filter((row) => row.report_completed_at).length ?? 0;
+  const monthEnd = month && /^\d{4}-\d{2}$/.test(month)
+    ? new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10)
+    : '';
+  const schedulerSchools = eligibleSchools.map((school) => ({
+    id: school.id,
+    name: school.school_name,
+    ministryNumber: school.ministry_number,
+    supervisorName: schoolPersonDefault({ source_fields: school.source_fields }, 'supervisor', planType) || null,
+    neighbourhood: school.neighbourhood,
+    latitude: school.latitude,
+    longitude: school.longitude,
+  }));
 
   return (
     <div className="monthly-plan-page grid gap-5">
@@ -280,7 +290,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
         <div className="flex flex-wrap gap-2"><ImportWizardLauncher target={{ kind: 'monthly', planType }} profile={profile} />
           {activePlan && canCreate && <><button type="button" onClick={() => deletePlan.mutate({ rowsOnly: true })} className="rounded-lg border border-rose-300 px-3 py-2 text-sm text-rose-800">مسح صفوف الخطة</button><button type="button" onClick={() => deletePlan.mutate({ rowsOnly: false })} className="rounded-lg bg-rose-700 px-3 py-2 text-sm text-white">حذف الخطة</button></>}</div>
       </section>
-      {(candidates.error || plans.error || rows.error) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات الخطط أو المدارس. تحقق من اتصال Supabase وسياسات الوصول.</div>}
+      {loadError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات الخطط أو المدارس: {loadErrorDetails}</div>}
 
       <section className="card grid gap-4 p-5">
         <div>
@@ -290,31 +300,23 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
         {!candidates.data?.eligibility ? (
           <div className="rounded-lg bg-amber-50 p-4 text-sm leading-7 text-amber-950">لم تُعتمد مطابقة أهلية المدارس. اطلب من مدير النظام ضبطها في «المزامنة والإعدادات» قبل إنشاء الخطة.</div>
         ) : <>
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             <label className="grid gap-1 text-sm font-semibold">الشهر<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
-            <label className="grid gap-1 text-sm font-semibold">تاريخ بداية التوزيع<input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
-            <label className="grid gap-1 text-sm font-semibold">مدارس لكل يوم<input type="number" min="1" value={schoolsPerDay} onChange={(event) => setSchoolsPerDay(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-            <span>المدارس المؤهلة: {eligibleSchools.length} · المحددة: {selectedIds.length}</span>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setSelectedIds(eligibleIds)} className="rounded-lg border border-slate-300 px-3 py-1.5">تحديد المؤهلة</button>
-              <button type="button" onClick={() => setSelectedIds([])} className="rounded-lg border border-slate-300 px-3 py-1.5">إلغاء التحديد</button>
-            </div>
-          </div>
-          {candidates.isLoading ? <p role="status">جارٍ تحميل المدارس…</p> : eligibleSchools.length === 0 ? <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">لا توجد مدارس مؤهلة وفق المطابقة الحالية.</p> : (
-            <div className="max-h-52 overflow-y-auto rounded-lg border border-slate-200 p-3">
-              {eligibleSchools.map((school) => <label key={school.id} className="flex items-center gap-2 py-1.5 text-sm">
-                <input type="checkbox" checked={selectedIds.includes(school.id)} onChange={(event) => setSelectedIds((ids) => event.target.checked ? [...ids, school.id] : ids.filter((id) => id !== school.id))} />
-                <span>{school.school_name}</span><span className="text-slate-400">{school.ministry_number}</span>
-                {generatedDates[school.id] && <input aria-label={`موعد ${school.school_name}`} type="date" value={generatedDates[school.id]} onChange={(event) => setGeneratedDates((dates) => ({ ...dates, [school.id]: event.target.value }))} className="me-auto rounded border border-slate-300 px-2 py-1" />}
-              </label>)}
-            </div>
+          {candidates.isLoading ? <p role="status">جارٍ تحميل المدارس…</p> : !monthEnd ? <p role="alert" className="text-sm text-rose-700">اختر شهراً صالحاً.</p> : eligibleSchools.length === 0 ? <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">لا توجد مدارس مؤهلة وفق المطابقة الحالية.</p> : (
+            <SupervisorPlanGenerator
+              key={`${planType}-${month}`}
+              schools={schedulerSchools}
+              initialSchoolIds={eligibleIds}
+              startDate={`${month}-01`}
+              endDate={monthEnd}
+              minDate={`${month}-01`}
+              maxDate={monthEnd}
+              disabled={!canCreate}
+              saving={createPlan.isPending}
+              onSave={(assignments) => createPlan.mutate(assignments)}
+            />
           )}
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={prepareDates} disabled={!selectedIds.length || !canCreate} className="rounded-lg border border-brand-700 px-4 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50">توزيع المواعيد</button>
-            <button type="button" onClick={() => createPlan.mutate()} disabled={!Object.keys(generatedDates).length || createPlan.isPending || !canCreate} className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{createPlan.isPending ? 'جارٍ الحفظ…' : 'إنشاء الخطة'}</button>
-          </div>
         </>}
         {!canCreate && <p className="text-xs text-slate-500">إنشاء الخطة متاح لمهندس المنطقة أو مدير المشروع أو مدير النظام.</p>}
         {message && <p role="status" className="text-sm text-slate-700">{message}</p>}
@@ -338,6 +340,28 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                 <QualityBadge label="تقارير مرفوعة دون زيارة" count={(rows.data ?? []).filter((row) => Boolean(row.report_completed_at) && !row.visited_at).length} />
               </div>
             </details>
+            <BulkPlanUpdates
+              key={activePlan.id}
+              planKind="monthly"
+              planId={activePlan.id}
+              disabled={!canUpdate}
+              rows={(rows.data ?? []).map((row) => ({
+                id: row.id,
+                schoolName: row.school?.school_name ?? row.school_id,
+                ministryNumber: row.school?.ministry_number ?? '',
+                ministryKey: row.school?.ministry_key ?? '',
+                supervisorName: row.supervisor_name,
+                visited: row.visited,
+                visitedAt: row.visited_at,
+                reportAt: row.report_completed_at,
+              }))}
+              allSchools={(candidates.data?.schools ?? []).map((school) => ({
+                schoolName: school.school_name,
+                ministryNumber: school.ministry_number,
+                ministryKey: school.ministry_key,
+              }))}
+              onUpdated={() => { void queryClient.invalidateQueries({ queryKey: ['monthly-plan-rows', activePlanId] }); }}
+            />
             <div className="table-scroll monthly-plan-table-scroll">
               <table className="monthly-plan-table">
                 <thead><tr><th>المدرسة</th><th>الموعد المخطط</th>{planType === 'security_safety' || planType === 'elevators' ? <th>الشركة</th> : null}<th>تاريخ الزيارة</th><th>تاريخ إنجاز التقرير</th><th>الحالة</th></tr></thead>
@@ -363,7 +387,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
           </>
         )}
       </section>
-      <p className="text-xs leading-6 text-slate-400">تجاوز الجمعة والسبت تلقائي في توزيع المواعيد. قواعد الأهلية قابلة للتهيئة؛ راجع <Link to="/schools" className="text-brand-700 underline">بيانات المدارس</Link>.</p>
+      <p className="text-xs leading-6 text-slate-400">تُستثنى الجمعة والسبت افتراضياً ويمكن تعديل أيام العطلة عند التوزيع. قواعد الأهلية قابلة للتهيئة؛ راجع <Link to="/schools" className="text-brand-700 underline">بيانات المدارس</Link>.</p>
     </div>
   );
 }

@@ -7,12 +7,14 @@ import type { UserProfile } from '../../lib/auth';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { supabase } from '../../lib/supabase';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
+import { summarizeGatekeeperCoverage } from '../../domain/gatekeeperCoverage';
 
 const schoolSchema = z.object({
   id: z.string().uuid(),
   school_name: z.string(),
   ministry_number: z.string(),
   neighbourhood: z.string().nullable(),
+  plan_scope: z.boolean(),
 });
 const employeeSchema = z.object({
   id: z.string().uuid(),
@@ -47,11 +49,10 @@ async function loadGatekeeperData() {
   const [schoolsResult, employeeResult, gatekeeperResult] = await Promise.all([
     supabase.from('schools')
       .select(APP_SCHEMA_SELECT.schoolsGatekeeperPlacement)
-      .eq('plan_scope', true)
       .order('name'),
     supabase.from('employees')
       .select(APP_SCHEMA_SELECT.employeesForGatekeepers)
-      .eq('job_title', 'حارس مدرسة')
+      .eq('category', 'gatekeeper')
       .order('full_name'),
     supabase.from('gatekeepers').select(APP_SCHEMA_SELECT.gatekeeperPlacement),
   ]);
@@ -73,6 +74,7 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
   const [editingSchool, setEditingSchool] = useState<School | null>(null);
   const [editor, setEditor] = useState<EditorValues | null>(null);
   const [message, setMessage] = useState('');
+  const canBackfill = profile?.role === 'admin' || profile?.role === 'project_manager';
   const data = useQuery({
     queryKey: ['gatekeeper-placement-data'],
     queryFn: loadGatekeeperData,
@@ -83,6 +85,7 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
     const gatekeepers = new Map((data.data?.gatekeepers ?? []).map((gatekeeper) => [gatekeeper.school_id, gatekeeper]));
     const query = search.trim().toLocaleLowerCase();
     return (data.data?.schools ?? [])
+      .filter((school) => school.plan_scope)
       .map((school) => ({ school, gatekeeper: gatekeepers.get(school.id) ?? null }))
       .filter(({ gatekeeper }) => !withoutGatekeeper || !gatekeeper)
       .filter(({ school, gatekeeper }) =>
@@ -94,34 +97,46 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
         || left.school.school_name.localeCompare(right.school.school_name, 'ar'),
       );
   }, [data.data, search, withoutGatekeeper]);
-  const totalCount = data.data?.schools.length ?? 0;
-  const inScopeSchoolIds = new Set((data.data?.schools ?? []).map((school) => school.id));
-  const withGatekeeperCount = data.data?.gatekeepers.filter((gatekeeper) => inScopeSchoolIds.has(gatekeeper.school_id)).length ?? 0;
-  const withoutGatekeeperCount = Math.max(0, totalCount - withGatekeeperCount);
+  const coverage = summarizeGatekeeperCoverage(
+    (data.data?.schools ?? []).map((school) => ({
+      id: school.id,
+      name: school.school_name,
+      ministryNumber: school.ministry_number,
+      inScope: school.plan_scope,
+    })),
+    (data.data?.gatekeepers ?? []).map((gatekeeper) => ({
+      schoolId: gatekeeper.school_id,
+      employeeId: gatekeeper.employee_id,
+    })),
+  );
+  const totalCount = coverage.inScopeSchools;
+  const withGatekeeperCount = coverage.schoolsWithGatekeeper;
+  const withoutGatekeeperCount = coverage.schoolsWithoutGatekeeper.length;
+  const gatekeeperStatus = useQuery({
+    queryKey: ['gatekeeper-employee-status'],
+    queryFn: async () => {
+      if (!supabase) throw new Error('يلزم إعداد Supabase.');
+      const { data: result, error } = await supabase.rpc('gatekeeper_employee_status');
+      if (error) throw error;
+      return z.object({ unlinked: z.number(), employees: z.number() }).parse(result);
+    },
+    enabled: Boolean(profile && ['admin', 'project_manager'].includes(profile.role)),
+  });
 
   const save = useMutation({
     mutationFn: async ({ schoolId, values }: { schoolId: string; values: EditorValues }) => {
       if (!supabase || !canManage) throw new Error('لا تملك صلاحية تعديل بيانات البوابين.');
       if (!values.fullName.trim()) throw new Error('اسم البواب مطلوب.');
-      const payload: {
-        school_id: string;
-        employee_id: string | null;
-        full_name: string;
-        employee_no: string | null;
-        phone: string | null;
-        notes: string | null;
-        residence_no?: string | null;
-      } = {
-        school_id: schoolId,
-        employee_id: values.employeeId || null,
-        full_name: values.fullName.trim(),
-        employee_no: values.employeeNo.trim() || null,
-        phone: values.phone.trim() || null,
-        notes: values.notes.trim() || null,
-      };
-      if (values.clearResidence) payload.residence_no = null;
-      else if (values.residenceNo.trim()) payload.residence_no = values.residenceNo.trim();
-      const { error } = await supabase.from('gatekeepers').upsert(payload, { onConflict: 'school_id' });
+      const { error } = await supabase.rpc('save_gatekeeper', {
+        p_school_id: schoolId,
+        p_employee_id: values.employeeId || null,
+        p_full_name: values.fullName.trim(),
+        p_employee_no: values.employeeNo.trim() || null,
+        p_phone: values.phone.trim() || null,
+        p_residence_no: values.clearResidence ? null : values.residenceNo.trim() || null,
+        p_notes: values.notes.trim() || null,
+        p_clear_residence: values.clearResidence,
+      });
       if (error) throw error;
     },
     onSuccess: async () => {
@@ -130,8 +145,26 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
       setEditor(null);
       setRevealed({});
       await client.invalidateQueries({ queryKey: ['gatekeeper-placement-data'] });
+      await client.invalidateQueries({ queryKey: ['gatekeeper-employee-status'] });
     },
     onError: (error: Error) => setMessage(`تعذر حفظ بيانات البواب: ${error.message}`),
+  });
+
+  const backfill = useMutation({
+    mutationFn: async () => {
+      if (!supabase || !canBackfill) throw new Error('لا تملك صلاحية ترحيل سجلات البوابين.');
+      const { data: result, error } = await supabase.rpc('backfill_gatekeeper_employees');
+      if (error) throw error;
+      return z.object({ created: z.number(), linked: z.number() }).parse(result);
+    },
+    onSuccess: async ({ created, linked }) => {
+      setMessage(`اكتمل الربط المدقق: أُنشئ ${created} موظفاً ورُبط ${linked} سجل بواب.`);
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['gatekeeper-placement-data'] }),
+        client.invalidateQueries({ queryKey: ['gatekeeper-employee-status'] }),
+      ]);
+    },
+    onError: (error: Error) => setMessage(`تعذر إكمال الربط المدقق: ${error.message}`),
   });
 
   const remove = useMutation({
@@ -146,6 +179,7 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
       setEditor(null);
       setRevealed({});
       await client.invalidateQueries({ queryKey: ['gatekeeper-placement-data'] });
+      await client.invalidateQueries({ queryKey: ['gatekeeper-employee-status'] });
     },
     onError: (error: Error) => setMessage(`تعذر حذف سجل البواب: ${error.message}`),
   });
@@ -221,11 +255,36 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
       {data.error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات البوابين: {data.error.message}</div>}
       <section className="card grid gap-4 p-5">
         <div className="grid gap-3 sm:grid-cols-4">
-          <Metric label="البوابون المطلوبون" value={totalCount} />
-          <Metric label="البوابون المسندون" value={withGatekeeperCount} />
-          <Metric label="العجز" value={withoutGatekeeperCount} />
-          <Metric label="الفائض" value={Math.max(0, withGatekeeperCount - totalCount)} />
+          <Metric label="سجلات البوابين" value={coverage.gatekeeperRows} />
+          <Metric label="المدارس ضمن النطاق" value={totalCount} />
+          <Metric label="مدارس بلا بواب" value={withoutGatekeeperCount} />
+          <Metric label="سجلات خارج النطاق" value={coverage.outOfScopeRows} />
         </div>
+        <details className="rounded-lg border border-slate-200 p-3">
+          <summary className="cursor-pointer text-sm font-semibold">تفاصيل التغطية وأسباب العجز قبل التعديل</summary>
+          <div className="mt-3 grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
+            <p>مدارس ضمن النطاق: {coverage.inScopeSchools}</p>
+            <p>مدارس لديها سجل بواب: {coverage.schoolsWithGatekeeper}</p>
+            <p>سجلات بوابين غير مرتبطة بموظف: {coverage.unlinkedInScopeRows}</p>
+            <p>سجلات لمدارس خارج النطاق: {coverage.outOfScopeRows} (السبب: المدرسة غير مؤهلة للتسكين حالياً).</p>
+            <p className="sm:col-span-2">مدارس ضمن النطاق بلا سجل بواب؛ سبب كل حالة: لا يوجد سجل بواب مسند.</p>
+          </div>
+          {coverage.schoolsWithoutGatekeeper.length > 0 && <div className="table-scroll mt-3"><table>
+            <thead><tr><th>المدرسة</th><th>الرقم الوزاري</th><th>سبب عدم التغطية</th></tr></thead>
+            <tbody>{coverage.schoolsWithoutGatekeeper.map((school) => <tr key={school.id}>
+              <td>{school.name}</td><td dir="ltr">{school.ministryNumber}</td><td>لا يوجد سجل بواب</td>
+            </tr>)}</tbody>
+          </table></div>}
+          {canBackfill && <div className="mt-3 flex flex-wrap items-center gap-3">
+            <span className="text-sm">موظفون من فئة حراس المدارس: {gatekeeperStatus.data?.employees ?? '—'} · سجلات غير مرتبطة: {gatekeeperStatus.data?.unlinked ?? '—'}</span>
+            {gatekeeperStatus.error && <p role="alert" className="text-sm text-rose-700">تعذر تحميل حالة الربط: {gatekeeperStatus.error.message}</p>}
+            <button type="button" disabled={backfill.isPending || !coverage.gatekeeperRows} onClick={() => {
+              if (window.confirm('سيتم إنشاء أو ربط سجلات الموظفين للبوابين الحاليين وتسجيل العملية في سجل التدقيق. متابعة؟')) backfill.mutate();
+            }} className="rounded-lg border border-brand-300 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50">
+              {backfill.isPending ? 'جارٍ الربط…' : 'تنفيذ الربط المدقق'}
+            </button>
+          </div>}
+        </details>
         <div className="grid gap-3 sm:grid-cols-2">
           <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">مدارس لديها بواب: {withGatekeeperCount}</p>
           <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-800">مدارس بلا بواب: {withoutGatekeeperCount}</p>
@@ -310,7 +369,7 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
                     } : {}),
                   }));
                 }} className="rounded-lg border border-slate-300 px-3 py-2">
-                  <option value="">دون ربط بموظف</option>
+                  <option value="">إنشاء / مطابقة موظف تلقائياً</option>
                   {(data.data?.employees ?? []).map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name} · {employee.employee_no ?? 'دون رقم وظيفي'}</option>)}
                 </select>
               </label>

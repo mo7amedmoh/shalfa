@@ -217,11 +217,12 @@ export function SupervisorPlanGenerator({
   const allSelected = selectedIds.length === schools.length && schools.length > 0;
   const availableEmployeeId = referencesData.employees.some((employee) => employee.id === employeeId) ? employeeId : '';
 
-  return <section className="grid gap-4 rounded-xl border border-slate-200 p-4">
-    <div>
-      <h3 className="font-bold text-slate-900">توزيع المشرفين والمواعيد</h3>
-      <p className="mt-1 text-sm text-slate-500">اختر المشرفين وسعة كل مشرف، ثم راجع توزيع المدارس وحمّله بعد التعديل.</p>
-    </div>
+  return <details className="rounded-xl border border-slate-200">
+    <summary className="cursor-pointer list-inside p-4 font-bold text-slate-900">
+      توزيع المشرفين والمواعيد
+      <span className="ms-2 text-sm font-normal text-slate-500">اضغط لفتح منشئ الخطط وتوزيع المشرفين.</span>
+    </summary>
+    <div className="grid gap-4 border-t border-slate-200 p-4">
     {referenceError && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">تعذر تحميل المشرفين وأسمائهم المعتمدة: {referenceError}</p>}
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <label className="grid gap-1 text-sm font-semibold">من تاريخ
@@ -354,5 +355,6 @@ export function SupervisorPlanGenerator({
     </>}
     {summaryState?.error && preview && <p role="alert" className="text-sm text-rose-700">{summaryState.error}</p>}
     {message && <p role="status" className="text-sm text-slate-700">{message}</p>}
-  </section>;
+    </div>
+  </details>;
 }

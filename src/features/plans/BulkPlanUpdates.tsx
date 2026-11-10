@@ -3,7 +3,9 @@ import { Download, Upload } from 'lucide-react';
 import { normalizeMinistryNumber, parseImportDate } from '../../domain/imports';
 import {
   previewPlanNumberUpdates,
+  getUnpersistedPlanUpdateIds,
   type MinistryIndexSchool,
+  type PlanBulkUpdate,
   type PlanBulkAction,
   type PlanBulkPreviewCounts,
   type PlanBulkPreviewRow,
@@ -23,7 +25,7 @@ export type BulkPlanRow = {
 };
 
 type PlanKind = 'monthly' | 'custom';
-type UpdateValues = { row_id: string; visited_date?: string | null; report_date?: string | null };
+type UpdateValues = PlanBulkUpdate;
 type PreviewRow = {
   line: number;
   ministry: string;
@@ -37,7 +39,7 @@ type Props = {
   planId: string;
   rows: readonly BulkPlanRow[];
   disabled: boolean;
-  onUpdated: () => void;
+  onUpdated: () => void | Promise<void>;
   allSchools: readonly MinistryIndexSchool[];
 };
 
@@ -59,8 +61,11 @@ function auditCountsPayload(counts: PlanBulkPreviewCounts, rowsInBatch: number, 
 
 function databaseErrorDetails(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'message' in error) {
-    const databaseError = error as { code?: unknown; message: unknown };
-    return `${String(databaseError.message)}${typeof databaseError.code === 'string' ? ` (${databaseError.code})` : ''}`;
+    const databaseError = error as { code?: unknown; message: unknown; details?: unknown; hint?: unknown };
+    const code = typeof databaseError.code === 'string' ? ` (${databaseError.code})` : '';
+    const details = typeof databaseError.details === 'string' && databaseError.details ? ` — ${databaseError.details}` : '';
+    const hint = typeof databaseError.hint === 'string' && databaseError.hint ? ` (${databaseError.hint})` : '';
+    return `${String(databaseError.message)}${code}${details}${hint}`;
   }
   return error instanceof Error ? error.message : String(error);
 }
@@ -142,10 +147,23 @@ export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, a
           : '';
         throw new Error(`تعذر تحديث الدفعة ${Math.floor(offset / 100) + 1}${lineRange} ${details}`);
       }
-      const result = data as { rows?: number } | null;
-      updated += result?.rows ?? batch.length;
+      const result = typeof data === 'object' && data !== null && 'rows' in data
+        ? (data as { rows?: unknown }).rows
+        : null;
+      if (typeof result !== 'number' || result !== batch.length) {
+        throw new Error(`أعاد الخادم عدد تحديثات غير متوقع: ${String(result)} من ${batch.length}.`);
+      }
+      updated += result;
       onChunkResult?.(offset, batch.length, null);
     }
+    const updatedIds = updates.map(({ row_id }) => row_id);
+    const { data: savedRows, error: verifyError } = await supabase.from(table)
+      .select('id,visited_date,report_done_date')
+      .eq('plan_id', planId)
+      .in('id', updatedIds);
+    if (verifyError) throw new Error(`تم إرسال التحديث لكن تعذّر التحقق من القيم المحفوظة: ${databaseErrorDetails(verifyError)}`);
+    const unpersisted = getUnpersistedPlanUpdateIds(updates, savedRows ?? []);
+    if (unpersisted.length) throw new Error(`لم تُحفظ الحالة المطلوبة للصفوف: ${unpersisted.slice(0, 5).join('، ')}. أعد تحميل الخطة وتحقق من صلاحيات قاعدة البيانات.`);
     return updated;
   }
 
@@ -221,7 +239,7 @@ export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, a
       setNumberPreview(null);
       setNumberPreviewCounts(null);
       setPastedNumbers('');
-      onUpdated();
+      await onUpdated();
     } catch (error) {
       setMessage(databaseErrorDetails(error));
     } finally {
@@ -248,7 +266,7 @@ export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, a
       setMessage(`تم تحديث ${count} صفاً. لن يُحفظ التقرير إلا بعد الزيارة.`);
       setSelectedIds([]);
       setPreview(null);
-      onUpdated();
+      await onUpdated();
     } catch (error) {
       setMessage(databaseErrorDetails(error));
     } finally {
@@ -356,7 +374,7 @@ export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, a
       );
       setMessage(`تم تحديث ${count} صفاً موجوداً. لم تُنشأ أي صفوف جديدة.`);
       setPreview(null);
-      onUpdated();
+      await onUpdated();
     } catch (error) {
       setMessage(databaseErrorDetails(error));
     } finally {
@@ -495,8 +513,9 @@ export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, a
             </table>
           </div>
         </div>}
+        {message && <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{message}</p>}
       </div>
     </div>}
-    {message && <p role="status" className="text-sm text-slate-700">{message}</p>}
+    {!numbersDialogOpen && message && <p role="status" className="text-sm text-slate-700">{message}</p>}
   </section>;
 }

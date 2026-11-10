@@ -9,13 +9,14 @@ import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
+import { employeeCategorySchema } from '../../domain/workforce';
 
 const employeeSchema = z.object({
   id: z.string().uuid(),
   full_name: z.string(),
   employee_number: z.string().nullable(),
   job_title: z.string().nullable(),
-  employee_category: z.enum(['engineer', 'supervisor', 'admin_staff', 'technician', 'driver', 'cleaner']),
+  employee_category: employeeCategorySchema,
   department: z.string().nullable(),
   nationality: z.string().nullable(),
   hire_date: z.string().nullable(),
@@ -52,6 +53,15 @@ const employeeCategories = [
   ['driver', 'سائق'],
   ['cleaner', 'عامل نظافة'],
 ] as const;
+const employeeCategoryLabels: Record<z.infer<typeof employeeCategorySchema>, string> = {
+  engineer: 'مهندس',
+  supervisor: 'مشرف',
+  admin_staff: 'إداري',
+  technician: 'فني',
+  driver: 'سائق',
+  cleaner: 'عامل نظافة',
+  gatekeeper: 'حارس مدرسة',
+};
 
 function categoryFromArabic(value: string) {
   return employeeCategories.find(([, label]) => label === value)?.[0];
@@ -266,7 +276,9 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
   return (
     <div className="grid gap-5">
       <section><p className="text-sm text-slate-500">سجل الموظفين والصلاحيات</p><h2 className="mt-1 text-2xl font-bold text-brand-900">القوى العاملة</h2></section>
-      {(employees.error || (isPrivileged && ratings.error)) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات القوى العاملة.</div>}
+      {(employees.error || (isPrivileged && ratings.error)) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+        تعذر تحميل بيانات القوى العاملة: {employees.error ? `سجل الموظفين: ${employees.error.message}` : `التقييمات: ${ratings.error instanceof Error ? ratings.error.message : String(ratings.error)}`}
+      </div>}
       {canManage && <section className="card grid gap-4 p-5">
         <h3 className="font-bold">إضافة موظف أو استيراد ملف</h3>
         <form className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" onSubmit={handleSubmit(saveEmployee)}>
@@ -304,7 +316,7 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
           <div className="table-scroll"><table>
             <thead><tr><th>الاسم</th><th>الرقم الوظيفي</th><th>الوظيفة</th><th>الفئة الوظيفية</th><th>القسم</th><th>رقم الإقامة</th>{isPrivileged && <th>التقييم</th>}</tr></thead>
             <tbody>{visibleEmployees.map((employee) => <tr key={employee.id}>
-              <td className="font-semibold">{employee.full_name}</td><td>{employee.employee_number ?? '—'}</td><td>{employee.job_title ?? '—'}</td><td>{employeeCategories.find(([value]) => value === employee.employee_category)?.[1] ?? '—'}</td><td>{employee.department ?? '—'}</td>
+              <td className="font-semibold">{employee.full_name}</td><td>{employee.employee_number ?? '—'}</td><td>{employee.job_title ?? '—'}</td><td>{employeeCategoryLabels[employee.employee_category] ?? '—'}</td><td>{employee.department ?? '—'}</td>
               <td><span>{revealedIds[employee.id] ?? '••••••'}</span>{profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role) && <button type="button" onClick={() => void toggleResidence(employee.id)} aria-label={revealedIds[employee.id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="me-2 rounded p-1 text-brand-700">{revealedIds[employee.id] ? <EyeOff size={16} /> : <Eye size={16} />}</button>}</td>
               {isPrivileged && <td>{ratings.data?.get(employee.id) ?? '—'}</td>}
             </tr>)}</tbody>

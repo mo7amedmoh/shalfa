@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parsePastedMinistryNumbers, previewPlanNumberUpdates } from './planBulkUpdates';
+import { getUnpersistedPlanUpdateIds, parsePastedMinistryNumbers, previewPlanNumberUpdates } from './planBulkUpdates';
 
 const planRows = [
   { id: 'row-1', schoolName: 'مدرسة أولى', ministryNumber: 'M010801', ministryKey: '10801', visited: false },
@@ -12,6 +12,18 @@ const allSchools = [
 ];
 
 describe('pasted ministry-number updates', () => {
+  it('detects rows whose requested states were not persisted', () => {
+    const updates = [
+      { row_id: 'row-1', visited_date: '2026-11-10' },
+      { row_id: 'row-2', report_date: '2026-11-10' },
+      { row_id: 'row-3', visited_date: null },
+    ];
+    expect(getUnpersistedPlanUpdateIds(updates, [
+      { id: 'row-1', visited_date: '2026-11-10', report_done_date: null },
+      { id: 'row-2', visited_date: '2026-11-09', report_done_date: null },
+    ])).toEqual(['row-2', 'row-3']);
+  });
+
   it('splits supported separators and normalizes Arabic-Indic digits', () => {
     expect(parsePastedMinistryNumbers('M010801\n٩٥١٨٣, 700، ٨٠٠')).toEqual(['10801', '95183', '700', '800']);
   });

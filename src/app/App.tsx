@@ -366,6 +366,12 @@ export function App() {
   const [authChecked, setAuthChecked] = useState(Boolean(supabase));
 
   useEffect(() => {
+    if (!syncNotice) return;
+    const timeout = window.setTimeout(() => setSyncNotice(''), 8000);
+    return () => window.clearTimeout(timeout);
+  }, [syncNotice]);
+
+  useEffect(() => {
     if (!supabase) return;
     let active = true;
     void supabase.auth.getSession().then(({ data, error }) => {

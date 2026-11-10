@@ -31,6 +31,26 @@ export type PlanBulkSchool = {
 };
 
 export type MinistryIndexSchool = Pick<PlanBulkSchool, 'schoolName' | 'ministryNumber' | 'ministryKey'>;
+export type PersistedPlanUpdate = {
+  id: string;
+  visited_date: string | null;
+  report_done_date: string | null;
+};
+export type PlanBulkUpdate = { row_id: string; visited_date?: string | null; report_date?: string | null };
+
+export function getUnpersistedPlanUpdateIds(
+  updates: readonly PlanBulkUpdate[],
+  persistedRows: readonly PersistedPlanUpdate[],
+): string[] {
+  const persistedById = new Map(persistedRows.map((row) => [row.id, row]));
+  return updates.filter((update) => {
+    const persisted = persistedById.get(update.row_id);
+    if (!persisted) return true;
+    if ('visited_date' in update && persisted.visited_date !== update.visited_date) return true;
+    if ('report_date' in update && persisted.report_done_date !== update.report_date) return true;
+    return false;
+  }).map((update) => update.row_id);
+}
 
 function isValidDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;

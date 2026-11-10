@@ -360,7 +360,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                 ministryNumber: school.ministry_number,
                 ministryKey: school.ministry_key,
               }))}
-              onUpdated={() => { void queryClient.invalidateQueries({ queryKey: ['monthly-plan-rows', activePlanId] }); }}
+              onUpdated={() => queryClient.invalidateQueries({ queryKey: ['monthly-plan-rows', activePlanId] }).then(() => undefined)}
             />
             <div className="table-scroll monthly-plan-table-scroll">
               <table className="monthly-plan-table">

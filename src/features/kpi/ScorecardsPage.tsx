@@ -424,8 +424,6 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
                 const status = indicatorStatus(indicator.id, input, result);
                 return <tr
                   key={indicator.id}
-                  onMouseEnter={() => setActiveIndicatorId(indicator.id)}
-                  onMouseLeave={() => setActiveIndicatorId(null)}
                   className="border-t border-slate-200 align-middle"
                 >
                   <td className="px-3 py-3 text-center"><input type="checkbox" aria-label={`ينطبق ${indicator.id}`} checked={input.applicable} disabled={!canEdit || locked} onChange={(event) => updateIndicator(indicator.id, { applicable: event.target.checked })} /></td>
@@ -435,6 +433,8 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
                       aria-label={`عرض معلومات المؤشر ${indicator.id}`}
                       aria-describedby={activeIndicatorId === indicator.id ? `indicator-tooltip-${indicator.id}` : undefined}
                       aria-expanded={activeIndicatorId === indicator.id}
+                      onMouseEnter={() => setActiveIndicatorId(indicator.id)}
+                      onMouseLeave={() => setActiveIndicatorId(null)}
                       onFocus={() => setActiveIndicatorId(indicator.id)}
                       onBlur={() => setActiveIndicatorId(null)}
                       onClick={() => setActiveIndicatorId(indicator.id)}

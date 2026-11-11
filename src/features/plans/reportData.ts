@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { buildPlanReportView, type AxisSummary, type PlanReportView, type ReportPlanRow } from '../../domain/planReport';
+import { buildPlanReportView, summarizePlanReport, type AxisSummary, type PlanReportView, type ReportPlanRow } from '../../domain/planReport';
 
 export type ReportFormatNumber = (value: string | number) => string;
 export type ReportService = {
@@ -14,7 +14,7 @@ export type ReportData = {
   totalService: ReportService; summaryCards: Array<{ label: string; value: number; tone: string }>;
   supervisors: ReportSupervisor[]; chart: { points: Array<{ x: number; yActual: number; yPlanned: number; actualVisible: boolean }>; xLabels: Array<{ x: number; label: string }>; yTicks: Array<{ y: number; label: string }>; todayX: number; todayY: number; forecastY: number; forecastPoints: boolean; todayLabel: string; max: number };
   reports: { percent: number; uploaded: number; remaining: number; total: number; byService: Array<{ id: string; label: string; uploaded: number; planned: number }> }; formatNumber: ReportFormatNumber;
-  lateItems: Array<{ id: string; schoolName: string; kind: string; plannedDate: string; daysLate: number; supervisorName: string }>;
+  lateItems: Array<{ id: string; schoolName: string; kind: string; plannedDate: string; lateSince: string; daysLate: number; supervisorName: string }>;
   cleaningSupervisors: Array<{ id: string; name: string; planned: number; visited: number; reportsDone: number }>;
   Header?: unknown; Services?: unknown; Summary?: unknown; Supervisors?: unknown; Cumulative?: unknown; Reports?: unknown;
 };
@@ -39,11 +39,12 @@ function service(axis: AxisSummary, expectedVisits: number): ReportService {
 export function buildReportData(view: PlanReportView, rows: readonly ReportPlanRow[], month: string, asOf: string, formatNumber: ReportFormatNumber): ReportData {
   const services = (['maintenance', 'cleaning', 'security_safety', 'elevators'] as const).map((id) => {
     const axis = view.axes.find((item) => item.axis === id)!;
-    return service(axis, rows.filter((row) => row.planType === id && row.plannedDate <= asOf).length);
+    const expectedVisits = summarizePlanReport(rows.filter((row) => row.planType === id), month, asOf).expectedVisits;
+    return service(axis, expectedVisits);
   });
   const totalAxis = services.reduce((total, item) => ({ ...total, planned: total.planned + item.planned, visited: total.visited + item.visited, visitRemaining: total.visitRemaining + item.visitRemaining, reportsDone: total.reportsDone + item.reportsDone, reportRemaining: total.reportRemaining + item.reportRemaining }), { planned: 0, visited: 0, visitRemaining: 0, reportsDone: 0, reportRemaining: 0 });
   const totalOverall = totalAxis.planned ? ((totalAxis.visited + totalAxis.reportsDone) / (2 * totalAxis.planned)) * 100 : 0;
-  const totalExpected = rows.filter((row) => row.plannedDate <= asOf).length;
+  const totalExpected = view.metrics.expectedVisits;
   const totalService: ReportService = { id: 'total', label: 'الإجمالي', ...totalAxis, visitPercent: totalAxis.planned ? (totalAxis.visited / totalAxis.planned) * 100 : 0, reportPercent: totalAxis.planned ? (totalAxis.reportsDone / totalAxis.planned) * 100 : 0, overallPercent: totalOverall, expectedVisits: totalExpected, pillTone: totalAxis.planned ? (totalOverall - (totalExpected / totalAxis.planned) * 100 >= -5 ? 'on-track' : totalOverall - (totalExpected / totalAxis.planned) * 100 >= -15 ? 'slightly-behind' : 'far-behind') : 'no-plan' };
   const maintenanceRows = rows.filter((row) => row.planType === 'maintenance');
   const maintenanceView = buildPlanReportView(maintenanceRows, month, asOf);
@@ -57,15 +58,22 @@ export function buildReportData(view: PlanReportView, rows: readonly ReportPlanR
   const forecastY = 260 - (200 * Math.min(max, maintenanceView.forecast.estimate ?? maintenanceView.forecast.actual) / max);
   const xLabels = [1, 5, 10, 15, 20, 25, days].filter((day, index, list) => day <= days && list.indexOf(day) === index).map((day) => ({ x: 70 + (880 * (day - 1) / Math.max(1, days - 1)), label: formatNumber(day) }));
   const yTicks = [0, 0.25, 0.5, 0.75, 1].map((fraction) => ({ y: 260 - (200 * fraction), label: formatNumber(Math.round(max * fraction)) }));
-  const lateStart = view.lateItems.filter((item) => item.kind === 'visit').sort((a, b) => a.plannedDate.localeCompare(b.plannedDate))[0]?.plannedDate;
+  const lateStart = view.lateItems.filter((item) => item.kind === 'visit').sort((a, b) => a.lateSince.localeCompare(b.lateSince))[0]?.lateSince;
   const lateStartLabel = lateStart ? `${formatNumber(lateStart.slice(8, 10))}/${formatNumber(lateStart.slice(5, 7))}` : `${formatNumber(asOf.slice(8, 10))}/${formatNumber(asOf.slice(5, 7))}`;
   const late = view.metrics.lateVisits;
+  const performanceRows = rows.filter((row) => row.lateByPlannedDate === false);
+  const performanceMetrics = performanceRows.length ? summarizePlanReport(performanceRows, month, asOf) : null;
+  const performanceGap = Math.max(0, (performanceMetrics?.expectedVisits ?? 0) - (performanceMetrics?.visited ?? 0));
   const cleaningSupervisors = view.supervisors.filter((supervisor) => rows.some((row) => row.planType === 'cleaning' && (row.supervisorId ?? `name:${row.supervisorName}`) === supervisor.id)).map((supervisor) => ({ id: supervisor.id, name: supervisor.name, planned: supervisor.planned, visited: supervisor.visited, reportsDone: supervisor.reportsDone }));
   const latestUpdatedAt = rows.map((row) => row.updatedAt).filter((value): value is string => Boolean(value)).sort().at(-1);
   const lastUpdate = latestUpdatedAt ? `${formatDate(latestUpdatedAt.slice(0, 10), formatNumber)} · ${latestUpdatedAt.slice(11, 16)}` : 'غير متاح';
   return {
-    monthLabel: formatMonth(month, formatNumber), asOfLabel: formatDate(asOf, formatNumber), schools: new Set(rows.map((row) => row.schoolId)).size, planned: totalAxis.planned, lastUpdate, status: late ? { late: true, label: `متأخر ${formatNumber(Math.max(0, view.metrics.expectedVisits - view.metrics.visited))} زيارة عن المتوقع اليوم · بدأ التأخر ${lateStartLabel}` } : { late: false, label: 'على المسار' }, logoPath: '/brand/logo.png', services, totalService, summaryCards: [{ label: 'الزيارات المخططة', value: totalAxis.planned, tone: 'navy' }, { label: 'الزيارات المنجزة', value: totalAxis.visited, tone: 'green' }, { label: 'التقارير المرفوعة', value: totalAxis.reportsDone, tone: 'navy' }, { label: 'زيارات متأخرة', value: view.metrics.lateVisits, tone: 'red' }, { label: 'تمت بدون تقرير', value: Math.max(0, totalAxis.visited - services.reduce((sum, item) => sum + (view.axes.find((axis) => axis.axis === item.id)?.completed ?? 0), 0)), tone: 'amber' }], supervisors: view.supervisors.filter((supervisor) => rows.some((row) => row.planType === 'maintenance' && (row.supervisorId ?? `name:${row.supervisorName}`) === supervisor.id)).map((supervisor) => ({ id: supervisor.id, name: supervisor.name, planned: supervisor.planned, visited: supervisor.visited, donePercent: supervisor.planned ? (supervisor.visited / supervisor.planned) * 100 : 0, latePercent: supervisor.planned ? (supervisor.lateVisits / supervisor.planned) * 100 : 0 })), chart: { points, xLabels, yTicks, todayX: todayPoint.x, todayY: todayPoint.yActual, forecastY, forecastPoints: Boolean(maintenanceView.forecast.estimate), todayLabel: formatNumber(Number(asOf.slice(8, 10))) + '/' + formatNumber(Number(asOf.slice(5, 7))), max, },     reports: { percent: totalAxis.planned ? (totalAxis.reportsDone / totalAxis.planned) * 100 : 0, uploaded: totalAxis.reportsDone, remaining: totalAxis.reportRemaining, total: totalAxis.planned, byService: services.map((item) => ({ id: item.id, label: item.label, uploaded: item.reportsDone, planned: item.planned })) }, formatNumber,
-    lateItems: view.lateItems.slice(0, 60).map((item) => ({ id: item.id, schoolName: item.schoolName, kind: item.kind === 'visit' ? 'زيارة' : 'تقرير', plannedDate: item.plannedDate, daysLate: item.daysLate, supervisorName: item.supervisorName })),
+    monthLabel: formatMonth(month, formatNumber), asOfLabel: formatDate(asOf, formatNumber), schools: new Set(rows.map((row) => row.schoolId)).size, planned: totalAxis.planned, lastUpdate, status: late
+      ? { late: true, label: `متأخر ${formatNumber(late)} زيارة حسب الموعد المخطط · بدأ التأخر ${lateStartLabel}` }
+      : performanceGap
+        ? { late: false, label: `الإنجاز أقل من وتيرة الإنجاز المستهدفة بـ ${formatNumber(performanceGap)} زيارة` }
+        : { late: false, label: 'على المسار' }, logoPath: '/brand/logo.png', services, totalService, summaryCards: [{ label: 'الزيارات المخططة', value: totalAxis.planned, tone: 'navy' }, { label: 'الزيارات المنجزة', value: totalAxis.visited, tone: 'green' }, { label: 'التقارير المرفوعة', value: totalAxis.reportsDone, tone: 'navy' }, { label: 'زيارات متأخرة', value: view.metrics.lateVisits, tone: 'red' }, { label: 'تمت بدون تقرير', value: Math.max(0, totalAxis.visited - services.reduce((sum, item) => sum + (view.axes.find((axis) => axis.axis === item.id)?.completed ?? 0), 0)), tone: 'amber' }], supervisors: view.supervisors.filter((supervisor) => rows.some((row) => row.planType === 'maintenance' && (row.supervisorId ?? `name:${row.supervisorName}`) === supervisor.id)).map((supervisor) => ({ id: supervisor.id, name: supervisor.name, planned: supervisor.planned, visited: supervisor.visited, donePercent: supervisor.planned ? (supervisor.visited / supervisor.planned) * 100 : 0, latePercent: supervisor.planned ? (supervisor.lateVisits / supervisor.planned) * 100 : 0 })), chart: { points, xLabels, yTicks, todayX: todayPoint.x, todayY: todayPoint.yActual, forecastY, forecastPoints: Boolean(maintenanceView.forecast.estimate), todayLabel: formatNumber(Number(asOf.slice(8, 10))) + '/' + formatNumber(Number(asOf.slice(5, 7))), max, },     reports: { percent: totalAxis.planned ? (totalAxis.reportsDone / totalAxis.planned) * 100 : 0, uploaded: totalAxis.reportsDone, remaining: totalAxis.reportRemaining, total: totalAxis.planned, byService: services.map((item) => ({ id: item.id, label: item.label, uploaded: item.reportsDone, planned: item.planned })) }, formatNumber,
+    lateItems: view.lateItems.slice(0, 60).map((item) => ({ id: item.id, schoolName: item.schoolName, kind: item.kind === 'visit' ? 'زيارة' : 'تقرير', plannedDate: item.plannedDate, lateSince: item.lateSince, daysLate: item.daysLate, supervisorName: item.supervisorName })),
     cleaningSupervisors,
   };
 }

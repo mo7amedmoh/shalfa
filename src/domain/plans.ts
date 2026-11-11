@@ -15,6 +15,21 @@ export interface PlanProgress {
   reportCompletedAt: string | null;
 }
 
+export type PlanCompletionFilter = 'all' | 'completed' | 'incomplete';
+export interface PlanCompletionState {
+  visitedAt: string | null;
+  reportCompletedAt: string | null;
+}
+
+export function matchesPlanCompletionFilters(
+  row: PlanCompletionState,
+  visitFilter: PlanCompletionFilter,
+  reportFilter: PlanCompletionFilter,
+): boolean {
+  return (visitFilter === 'all' || Boolean(row.visitedAt) === (visitFilter === 'completed'))
+    && (reportFilter === 'all' || Boolean(row.reportCompletedAt) === (reportFilter === 'completed'));
+}
+
 export function isPlanRowOverdue(row: PlanProgress, today: string): boolean {
   return row.plannedDate < today && (!row.visitedAt || !row.reportCompletedAt);
 }

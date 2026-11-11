@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
 import { calculateRewardBalance, canAllocateReward } from '../../domain/rewards';
 import type { UserProfile } from '../../lib/auth';
@@ -78,9 +79,16 @@ function localMonth(): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
+function validInitialMonth(value: string | null): string {
+  if (!value || !/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return localMonth();
+  const parsed = new Date(`${value}-01T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 7) === value ? value : localMonth();
+}
+
 export function RewardsPage({ profile }: { profile: UserProfile | null }) {
   const client = useQueryClient();
-  const [month, setMonth] = useState(localMonth());
+  const [searchParams] = useSearchParams();
+  const [month, setMonth] = useState(() => validInitialMonth(searchParams.get('month')));
   const [engineerId, setEngineerId] = useState('');
   const [amount, setAmount] = useState('');
   const [employeeId, setEmployeeId] = useState('');

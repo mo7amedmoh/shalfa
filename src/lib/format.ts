@@ -16,3 +16,19 @@ export function formatDate(value: string, format: 'dd/mm/yyyy' | 'yyyy/mm/dd'): 
   const [year, month, day] = value.split('-');
   return format === 'dd/mm/yyyy' ? `${day}/${month}/${year}` : `${year}/${month}/${day}`;
 }
+
+export function formatDateTime(
+  value: string,
+  dateFormat: 'dd/mm/yyyy' | 'yyyy/mm/dd',
+  numerals: NumeralSystem,
+): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new RangeError('Date-time must be valid.');
+  const localDate = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  return formatNumerals(`${formatDate(localDate, dateFormat)} ${time}`, numerals);
+}

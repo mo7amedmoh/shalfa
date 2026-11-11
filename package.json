@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "cross-env NODE_OPTIONS=--max-old-space-size=4096 tsc -b && vite build && node scripts/check-bundle.mjs",
+    "build": "cross-env NODE_OPTIONS=--max-old-space-size=8192 tsc -b && vite build && node scripts/check-bundle.mjs",
     "preview": "vite preview",
     "lint": "cross-env NODE_OPTIONS=--max-old-space-size=4096 eslint .",
     "typecheck": "cross-env NODE_OPTIONS=--max-old-space-size=4096 tsc -b --pretty",

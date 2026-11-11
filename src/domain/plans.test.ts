@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { distributePlanDates, isPlanRowOverdue } from './plans';
+import { distributePlanDates, isPlanRowOverdue, matchesPlanCompletionFilters } from './plans';
 
 describe('monthly plan date distribution', () => {
+  it('matches visit and report completion filters independently', () => {
+    const both = { visitedAt: '2026-11-01', reportCompletedAt: '2026-11-02' };
+    const visitOnly = { visitedAt: '2026-11-01', reportCompletedAt: null };
+    const neither = { visitedAt: null, reportCompletedAt: null };
+
+    expect(matchesPlanCompletionFilters(both, 'completed', 'all')).toBe(true);
+    expect(matchesPlanCompletionFilters(visitOnly, 'completed', 'incomplete')).toBe(true);
+    expect(matchesPlanCompletionFilters(visitOnly, 'all', 'completed')).toBe(false);
+    expect(matchesPlanCompletionFilters(neither, 'incomplete', 'incomplete')).toBe(true);
+    expect(matchesPlanCompletionFilters(neither, 'all', 'all')).toBe(true);
+  });
+
   it('distributes by the daily limit and skips Friday and Saturday', () => {
     const dates = distributePlanDates(['a', 'b', 'c', 'd'], {
       startDate: '2026-11-05',

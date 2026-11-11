@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronUp, Download, Printer, Settings, X } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
-import { buildPlanReportView, filterPlanReportRows, type ReportAxisFilter, type ReportPlanRow } from '../../domain/planReport';
+import { buildPlanReportView, filterPlanReportActionRows, filterPlanReportRows, type ReportActionFilter, type ReportAxisFilter, type ReportPlanRow } from '../../domain/planReport';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
@@ -11,7 +12,7 @@ import { loadXlsx } from '../../lib/xlsx';
 import { useReportData } from './reportData';
 import { defaultReportLayout, getReportLayout, normalizeReportLayout, reportSections, type ReportLayoutItem } from './reportSections';
 
-const planHeaderSchema = z.object({ id: z.string().uuid(), plan_type: z.enum(['maintenance', 'cleaning', 'elevators', 'security_safety']), month: z.string() });
+const planHeaderSchema = z.object({ id: z.string().uuid(), plan_type: z.enum(['maintenance', 'cleaning', 'elevators', 'security_safety']), month: z.string(), late_by_planned_date: z.boolean() });
 const reportRowSchema = z.object({
   id: z.string().uuid(), plan_id: z.string().uuid(), school_id: z.string().uuid(), planned_date: z.string(), updated_at: z.string().nullable().optional(), visited: z.boolean(), visited_date: z.string().nullable(), report_done: z.boolean(), report_done_date: z.string().nullable(),
   engineer_id: z.string().uuid().nullable(), engineer_name: z.string().nullable(), supervisor_id: z.string().uuid().nullable(), supervisor_name: z.string().nullable(), contractor_name: z.string().nullable(),
@@ -30,6 +31,19 @@ const EMPTY_ROWS: ReportPlanRow[] = [];
 function monthNow() { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`; }
 function todayLocal() { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
 function previousMonth(month: string) { const date = new Date(`${month}-01T00:00:00Z`); date.setUTCMonth(date.getUTCMonth() - 1); return date.toISOString().slice(0, 7); }
+function initialReportMonth(value: string | null): string {
+  if (!value || !/^\d{4}-\d{2}$/.test(value)) return monthNow();
+  const parsed = new Date(`${value}-01T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 7) === value ? value : monthNow();
+}
+function initialReportAxis(value: string | null): ReportAxisFilter {
+  return value === 'maintenance' || value === 'cleaning' || value === 'elevators' || value === 'security_safety'
+    ? value
+    : 'all';
+}
+function reportActionFilter(value: string | null): ReportActionFilter {
+  return value === 'late-visits' || value === 'visit-no-report' ? value : null;
+}
 
 async function fetchMonthRows(month: string): Promise<ReportPlanRow[]> {
   if (!supabase) throw new Error('إعداد الاتصال بقاعدة البيانات غير مكتمل.');
@@ -51,7 +65,7 @@ async function fetchMonthRows(month: string): Promise<ReportPlanRow[]> {
   const names = new Map(z.array(employeeSchema).parse(employees.data).map((employee) => [employee.id, employee.full_name]));
   const cleanerIds = new Set(z.array(cleanerSchema).parse(cleaners.data).map((row) => row.school_id));
   return rows.map((row) => ({
-    id: row.id, month, planType: plans.find((plan) => plan.id === row.plan_id)!.plan_type, plannedDate: row.planned_date, visited: row.visited, visitedDate: row.visited_date, reportDone: row.report_done, reportCompletedDate: row.report_done_date, updatedAt: row.updated_at ?? null,
+    id: row.id, planId: row.plan_id, lateByPlannedDate: plans.find((plan) => plan.id === row.plan_id)!.late_by_planned_date, month, planType: plans.find((plan) => plan.id === row.plan_id)!.plan_type, plannedDate: row.planned_date, visited: row.visited, visitedDate: row.visited_date, reportDone: row.report_done, reportCompletedDate: row.report_done_date, updatedAt: row.updated_at ?? null,
     engineerId: row.engineer_id, engineerName: row.engineer_id ? names.get(row.engineer_id) ?? row.engineer_name : row.engineer_name, supervisorId: row.supervisor_id, supervisorName: row.supervisor_id ? names.get(row.supervisor_id) ?? row.supervisor_name : row.supervisor_name, contractorName: row.contractor_name,
     schoolId: row.school_id, schoolName: row.school?.name ?? 'مدرسة غير معروفة', ministryNumber: row.school?.ministry_no ?? '', neighbourhood: row.school?.neighbourhood ?? 'غير محدد', hasCleaner: cleanerIds.has(row.school_id),
   }));
@@ -133,12 +147,14 @@ async function exportPdf(reportElement: HTMLElement, month: string): Promise<voi
 
 export function MonthlyReportPage({ fixture }: { fixture?: LoadedReport } = {}) {
   const { formatNumber } = useDisplayFormat();
-  const [month, setMonth] = useState(monthNow);
+  const [searchParams] = useSearchParams();
+  const [month, setMonth] = useState(() => initialReportMonth(searchParams.get('month')));
   const [asOf, setAsOf] = useState(todayLocal);
-  const [axis, setAxis] = useState<ReportAxisFilter>('all');
+  const [axis, setAxis] = useState<ReportAxisFilter>(() => initialReportAxis(searchParams.get('service')));
   const [engineerId, setEngineerId] = useState('');
-  const [supervisorId, setSupervisorId] = useState('');
+  const [supervisorId, setSupervisorId] = useState(() => searchParams.get('supervisor') ?? '');
   const [neighbourhood, setNeighbourhood] = useState('');
+  const actionFilter = reportActionFilter(searchParams.get('action'));
   const reportElementRef = useRef<HTMLDivElement>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [layout, setLayout] = useState<ReportLayoutItem[]>([...defaultReportLayout]);
@@ -146,8 +162,15 @@ export function MonthlyReportPage({ fixture }: { fixture?: LoadedReport } = {}) 
   const [customizing, setCustomizing] = useState(false);
   const report = useQuery({ queryKey: ['monthly-report', month, Boolean(fixture)], queryFn: () => fixture ?? loadReport(month) });
   const rows = report.data?.current ?? EMPTY_ROWS;
-  const filtered = useMemo(() => filterPlanReportRows(rows, { month, axis, engineerId, supervisorId, neighbourhood }), [rows, month, axis, engineerId, supervisorId, neighbourhood]);
-  const previous = useMemo(() => filterPlanReportRows(report.data?.previous ?? [], { month: previousMonth(month), axis, engineerId, supervisorId, neighbourhood }), [report.data, month, axis, engineerId, supervisorId, neighbourhood]);
+  const filtered = useMemo(() => filterPlanReportActionRows(
+    filterPlanReportRows(rows, { month, axis, engineerId, supervisorId, neighbourhood }),
+    actionFilter,
+    asOf,
+  ), [rows, month, axis, engineerId, supervisorId, neighbourhood, actionFilter, asOf]);
+  const previous = useMemo(() => actionFilter
+    ? []
+    : filterPlanReportRows(report.data?.previous ?? [], { month: previousMonth(month), axis, engineerId, supervisorId, neighbourhood }),
+  [report.data, month, axis, engineerId, supervisorId, neighbourhood, actionFilter]);
   const view = useMemo(() => buildPlanReportView(filtered, month, asOf, previous), [filtered, month, asOf, previous]);
   const data = useReportData(view, filtered, month, asOf, formatNumber);
   useEffect(() => {
@@ -179,6 +202,10 @@ export function MonthlyReportPage({ fixture }: { fixture?: LoadedReport } = {}) 
       setIsExporting(true);
       void exportPdf(reportElementRef.current, month).finally(() => setIsExporting(false));
     }} isExporting={isExporting} />
+    {actionFilter && <div role="status" className="card flex flex-wrap items-center justify-between gap-2 p-3 text-sm text-brand-900">
+      <span>{actionFilter === 'late-visits' ? 'قائمة الزيارات المتأخرة' : 'قائمة الزيارات المنفذة دون تقرير'} · {filtered.length}</span>
+      <Link to={`/plans/report?month=${month}&service=${axis}`} className="font-bold underline">إزالة تصفية الإجراء</Link>
+    </div>}
     {report.error && <StateBox tone="error">تعذر تحميل التقرير: {report.error.message}</StateBox>}
     {report.isLoading && <StateBox>جارٍ تحميل التقرير…</StateBox>}
     {!report.isLoading && !report.error && !rows.length && <StateBox>لا توجد خطط شهرية مسجلة لهذا الشهر.</StateBox>}
@@ -197,7 +224,11 @@ export function MonthlyReportPage({ fixture }: { fixture?: LoadedReport } = {}) 
 }
 
 function uniqueOptions(rows: ReportPlanRow[], idKey: 'engineerId' | 'supervisorId', nameKey: 'engineerName' | 'supervisorName') {
-  return [...new Map(rows.filter((row) => row[idKey]).map((row) => [row[idKey]!, { id: row[idKey]!, name: row[nameKey] ?? 'غير محدد' }])).values()].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  return [...new Map(rows.filter((row) => row[idKey] || (idKey === 'supervisorId' && row[nameKey]))
+    .map((row) => {
+      const id = row[idKey] ?? `name:${row[nameKey] ?? ''}`;
+      return [id, { id, name: row[nameKey] ?? 'غير محدد' }] as const;
+    })).values()].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
 }
 function FilterBar(p: { month: string; setMonth: (value: string) => void; asOf: string; setAsOf: (value: string) => void; axis: ReportAxisFilter; setAxis: (value: ReportAxisFilter) => void; engineerId: string; setEngineerId: (value: string) => void; supervisorId: string; setSupervisorId: (value: string) => void; neighbourhood: string; setNeighbourhood: (value: string) => void; engineers: { id: string; name: string }[]; supervisors: { id: string; name: string }[]; neighbourhoods: string[]; onExcel: () => void; onPrint: () => void; onCustomize: () => void; onPdf: () => void; isExporting: boolean }) {
   return <section className="no-print report-filter-bar"><label>الشهر<input type="month" value={p.month} onChange={(event) => p.setMonth(event.target.value)} /></label><label>كما في<input type="date" value={p.asOf} onChange={(event) => p.setAsOf(event.target.value)} /></label><Select label="الخدمة" value={p.axis} options={axisOptions} onChange={(value) => p.setAxis(value as ReportAxisFilter)} /><Select label="المهندس" value={p.engineerId} options={p.engineers.map((item) => ({ value: item.id, label: item.name }))} onChange={p.setEngineerId} empty="كل المهندسين" /><Select label="المشرف" value={p.supervisorId} options={p.supervisors.map((item) => ({ value: item.id, label: item.name }))} onChange={p.setSupervisorId} empty="كل المشرفين" /><Select label="الحي" value={p.neighbourhood} options={p.neighbourhoods.map((item) => ({ value: item, label: item }))} onChange={p.setNeighbourhood} empty="كل الأحياء" /><div className="filter-actions"><button type="button" onClick={p.onCustomize}><Settings size={15} /> تخصيص التقرير</button><button type="button" onClick={p.onExcel}><Download size={15} /> Excel</button><button type="button" className="primary" disabled={p.isExporting} onClick={p.onPdf}><Download size={15} /> {p.isExporting ? 'جارٍ التصدير…' : 'تصدير PDF'}</button><button type="button" onClick={p.onPrint}><Printer size={15} /> طباعة</button></div></section>;

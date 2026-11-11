@@ -6,8 +6,9 @@ import { ratingBand } from '../../domain/kpi/scoring';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { summarizeDeliverables, type DeliverableDueDates } from '../../domain/deliverables';
+import { KPI_WORK_ORDER } from '../../domain/kpi/config';
 
 const cardSchema = z.object({
   code: z.enum(['CM', 'OM', 'HS', 'SS']),
@@ -77,7 +78,6 @@ const cardNames: Record<KpiCard['code'], string> = {
   SS: 'الخدمات الخفيفة',
 };
 const region = 'المنطقة الوسطى';
-const workOrder = 'TBC005754 & TBC006484';
 type IndicatorValues = FormulaInputs & { evidence?: string };
 
 function localToday(): string {
@@ -88,6 +88,12 @@ function localToday(): string {
 function currentMonth(): string {
   const date = new Date();
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function initialMonth(value: string | null): string {
+  if (!value || !/^\d{4}-\d{2}$/.test(value)) return currentMonth();
+  const parsed = new Date(`${value}-01T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 7) === value ? value : currentMonth();
 }
 
 function parseSavedValues(rows: z.infer<typeof kpiEntrySchema>[]): Record<string, IndicatorValues> {
@@ -136,7 +142,7 @@ async function loadScorecards(month: string) {
   const { data: kpiMonth, error: monthError } = await supabase.from('kpi_months')
     .select(APP_SCHEMA_SELECT.kpiMonth)
     .eq('month', `${month}-01`)
-    .eq('work_order', workOrder)
+    .eq('work_order', KPI_WORK_ORDER)
     .maybeSingle();
   if (monthError) throw monthError;
   if (!kpiMonth) return null;
@@ -172,7 +178,8 @@ async function loadDeliverablesSummary() {
 
 export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
   const client = useQueryClient();
-  const [month, setMonth] = useState(currentMonth);
+  const [searchParams] = useSearchParams();
+  const [month, setMonth] = useState(() => initialMonth(searchParams.get('month')));
   const [values, setValues] = useState<Record<string, IndicatorValues>>({});
   const [message, setMessage] = useState('');
   const canEdit = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
@@ -212,7 +219,7 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
       if (locked) throw new Error('الشهر معتمد ومقفل.');
       const { data: kpiMonth, error: monthError } = await supabase.from('kpi_months').upsert({
         month: `${month}-01`,
-        work_order: workOrder,
+        work_order: KPI_WORK_ORDER,
         region,
         contractor: 'شركة شلفا لإدارة المرافق',
       }, { onConflict: 'month,work_order' }).select(APP_SCHEMA_SELECT.id).single();
@@ -273,7 +280,7 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
   return (
     <div className="grid gap-5">
       <section className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-        <div><p className="text-sm text-slate-500">المنطقة الوسطى · أمر العمل {workOrder}</p><h2 className="mt-1 text-2xl font-bold text-brand-900">بطاقات الأداء الشهرية</h2></div>
+        <div><p className="text-sm text-slate-500">المنطقة الوسطى · أمر العمل {KPI_WORK_ORDER}</p><h2 className="mt-1 text-2xl font-bold text-brand-900">بطاقات الأداء الشهرية</h2></div>
         <label className="grid gap-1 text-sm font-semibold">شهر التقييم<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
       </section>
 

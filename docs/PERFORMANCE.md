@@ -12,10 +12,10 @@ $env:ANALYZE='true'; npm run build
 
 | القياس | قبل | بعد | التغير |
 |---|---:|---:|---:|
-| initial `index-*.js` | 1,140,255 B | 409,261 B | -64.1% |
-| initial gzip | نحو 350 KB | 113,837 B | -67.5% |
-| `MonthlyReportPage` | 435,318 B | 29,100 B | -93.3% |
-| `SchoolsPage` | 207,256 B | 20,134 B | -90.3% |
+| initial `index-*.js` | 1,140,255 B | 457,723 B | -59.9% |
+| initial gzip | نحو 350 KB | 126,699 B | -63.8% |
+| `MonthlyReportPage` | 435,318 B | 20,040 B | -95.4% |
+| `SchoolsPage` | 207,256 B | 24,460 B | -88.2% |
 
 تم فصل React، React Query، Leaflet، Recharts، وSheetJS إلى manual chunks، وأصبح SheetJS وLeaflet CSS يُحمّلان فقط من الصفحات/الإجراءات التي تستخدمهما. حد الحزمة الابتدائية هو 400 KiB gzip ويُفشل `npm run build` عند تجاوزه.
 
@@ -39,16 +39,20 @@ $env:ANALYZE='true'; npm run build
 
 ## Startup and queries
 
-Dashboard startup requests are:
+Dashboard startup requests are role-gated and follow RLS:
 
-- current month monthly plan rows;
-- staffing schools (only `id`, `extra`, and `size_source`);
-- cleaner assignment school IDs;
-- size corrections;
-- staffing exceptions;
-- plan eligibility configuration.
+- selected-month plan rows with school name, planned date, visit/report completion, and supervisor fields only, for roles allowed to read plans;
+- staffing schools (only `id`, `extra`, and `size_source`), cleaner assignment and gatekeeper school IDs, size corrections, staffing exceptions, and eligibility configuration for `admin`, `project_manager`, and `area_engineer`;
+- the latest non-null `schools.synced_at` value for `admin` and `project_manager`;
+- the selected KPI month, deliverables and their due-date settings, previous-month KPI status, and a 250-row slim audit-log projection for `admin` and `project_manager` only.
+
+URL query filters preserve month, service, and supervisor selection when sharing the dashboard. Report-follower navigation carries the selected month/service into the plan page so the bulk updater opens the corresponding plan.
 
 The schools page intentionally keeps the full `schoolsMap` projection, including source columns, because the table and details view need it. It is not requested by the dashboard. The IndexedDB persister now restores the large schools cache only when the current path is `/schools`; dashboard/login startup skips that restore. Writes remain throttled to five seconds.
+
+The dashboard does not import charting or spreadsheet libraries. Cleaner staffing is calculated from the same slim school projection and domain staffing rules used by placement; full school-table rows are never requested.
+
+The audit activity list formats only recognized event types and whitelisted count/date fields; raw audit details are never rendered. Existing audit writes cover bulk plan updates, but sync/import/approval events are not currently emitted to `audit_log`, so the dashboard does not invent entries for them.
 
 Authenticated dashboard/schools navigation timings could not be measured in this environment because no Supabase session and production credentials are available. The fixture route was measured, but it does not represent authenticated network latency or cache restore.
 
@@ -75,7 +79,7 @@ Default commands now set `NODE_OPTIONS=--max-old-space-size=4096`; Vitest uses a
 
 Final verification:
 
-- `npm run lint`: passes with one pre-existing hooks warning in `PlanNameLinkingPage.tsx`.
+- `npm run lint`: passes.
 - `npm run typecheck`: passes.
-- `npm test -- --run`: 21 files, 129 tests passed.
-- `npm run build`: passes and the 400 KiB gzip budget passes.
+- `npm test`: 30 files, 174 tests passed.
+- `npm run build`: passes; initial JavaScript is 126,699 B gzip, below the 400 KiB budget.

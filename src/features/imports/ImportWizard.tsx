@@ -582,7 +582,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
     } else if (target.kind === 'general') {
       checks.push(
         { table: 'general_plans', columns: 'id,plan_type,year', migration: '202611040001_reconcile.sql' },
-        { table: 'general_plan_rows', columns: 'id,plan_id,school_id,planned_date,supervisor_id,supervisor_name,engineer_name,notes', migration: '202611050003_import_support.sql' },
+        { table: 'general_plan_rows', columns: 'id,plan_id,school_id,planned_date,supervisor_name,engineer_name,notes', migration: '202611050003_import_support.sql' },
       );
       const { error } = await supabase.rpc('import_general_plan_rows', {
         p_plan_id: '00000000-0000-0000-0000-000000000000',

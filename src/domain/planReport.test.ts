@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPlanReportView,
+  filterPlanReportActionRows,
   filterPlanReportRows,
   rankSupervisorsByLateness,
   rowsForAxisStatus,
+  summarizeDashboardVerdict,
   summarizePlanReport,
   type ReportPlanRow,
 } from './planReport';
@@ -107,6 +109,59 @@ describe('monthly plan report metrics', () => {
       row({ id: 'done-late', plannedDate: '2026-11-08', visited: true, visitedDate: '2026-11-10' }),
     ];
     expect(summarizePlanReport(rows, '2026-11', '2026-11-10').lateVisits).toBe(1);
+  });
+
+  it('keeps performance-pace shortfalls out of late visits and late items', () => {
+    const rows = Array.from({ length: 22 }, (_, index) => row({
+      id: `pace-${index}`,
+      planId: 'performance-plan',
+      lateByPlannedDate: false,
+      plannedDate: '2026-11-30',
+      visited: index < 5,
+      visitedDate: index < 5 ? '2026-11-10' : null,
+    }));
+
+    expect(summarizePlanReport(rows, '2026-11', '2026-11-10')).toMatchObject({
+      planned: 22,
+      expectedVisits: 8,
+      visited: 5,
+      lateVisits: 0,
+      visitGap: -3,
+    });
+    expect(buildPlanReportView(rows, '2026-11', '2026-11-10').lateItems)
+      .toHaveLength(0);
+  });
+
+  it('uses working days for performance pacing and has no target before the month starts', () => {
+    const rows = Array.from({ length: 22 }, (_, index) => row({
+      id: `pace-week-${index}`,
+      planId: 'performance-plan',
+      lateByPlannedDate: false,
+      plannedDate: '2026-11-30',
+    }));
+    expect(summarizePlanReport(rows, '2026-11', '2026-11-06').expectedVisits).toBe(5);
+    expect(summarizePlanReport(rows, '2026-11', '2026-10-31').expectedVisits).toBe(0);
+  });
+
+  it('uses performance pace in progress verdicts, not late-visit action filters', () => {
+    const rows = Array.from({ length: 22 }, (_, index) => row({
+      id: `dashboard-pace-${index}`,
+      planId: 'performance-plan',
+      lateByPlannedDate: false,
+      plannedDate: '2026-11-30',
+      visited: index < 5,
+      visitedDate: index < 5 ? '2026-11-10' : null,
+    }));
+
+    expect(summarizePlanReport(rows, '2026-11', '2026-11-10').expectedVisits).toBe(8);
+    expect(filterPlanReportActionRows(rows, 'late-visits', '2026-11-10')).toHaveLength(0);
+    expect(summarizeDashboardVerdict(rows, '2026-11', '2026-11-10')).toMatchObject({
+      expected: 8,
+      done: 5,
+      behind: 3,
+      firstSlipDay: '2026-11-01',
+      status: 'slightly-behind',
+    });
   });
 
   it('does not call reports late before or on month end, and does after month end', () => {

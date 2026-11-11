@@ -1,5 +1,6 @@
 import { useContext, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
 import { z } from 'zod';
 import { loadXlsx } from '../../lib/xlsx';
@@ -92,6 +93,8 @@ async function loadPlacementData(): Promise<SchoolData> {
 export function CleanerPlacementPage({ profile }: { profile: UserProfile | null }) {
   const client = useQueryClient();
   const { formatNumber } = useDisplayFormat();
+  const [searchParams] = useSearchParams();
+  const shortageOnly = searchParams.get('shortage') === 'true';
   const preferences = useContext(preferencesContext);
   const [viewMode, setViewMode] = useState(preferences.cleaner_placement_view);
   const [search, setSearch] = useState('');
@@ -148,10 +151,11 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   }, [data.data, eligibleIds]);
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
-    return summaries.filter(({ school, neighborhood }) =>
-      `${school.school_name} ${school.ministry_number} ${neighborhood}`.toLocaleLowerCase().includes(query),
+    return summaries.filter(({ school, neighborhood, staffing }) =>
+      (!shortageOnly || staffing.shortage > 0)
+      && `${school.school_name} ${school.ministry_number} ${neighborhood}`.toLocaleLowerCase().includes(query),
     );
-  }, [summaries, search]);
+  }, [summaries, search, shortageOnly]);
 
   const persistAssignment = useMutation({
     mutationFn: async ({ schoolId, employeeId, source }: { schoolId: string; employeeId: string; source: string }) => {
@@ -287,6 +291,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
     <div className="grid gap-5">
       <section className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm text-slate-500">الاحتياج حسب الفصول والاستثناءات المعتمدة</p><h2 className="mt-1 text-2xl font-bold text-brand-900">تسكين العمالة</h2></div><ImportWizardLauncher target={{ kind: 'cleaners' }} profile={profile} /></section>
       {data.error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات التسكين: {data.error.message}</div>}
+      {shortageOnly && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">تصفية مفعلة: المدارس التي لديها عجز في عمالة النظافة.</p>}
       {!data.data?.config && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-7 text-amber-950">يلزم إعداد مطابقة أهلية المدارس في إعدادات النظام قبل عرض المدارس المستقلة والمشترك الأساسي.</div>}
       <section className="grid gap-3 sm:grid-cols-4">
         <Metric label="المطلوب" value={totals.required} formatNumber={formatNumber} />

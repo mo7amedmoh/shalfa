@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
 import { loadXlsx } from '../../lib/xlsx';
-import { isPlanRowOverdue } from '../../domain/plans';
+import { isPlanRowOverdue, matchesPlanCompletionFilters, type PlanCompletionFilter } from '../../domain/plans';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import { schoolPersonDefault } from '../../domain/imports';
 import type { ScheduleAssignment } from '../../domain/planScheduler';
@@ -36,6 +36,7 @@ const eligibilitySchema = z.object({
 const planSchema = z.object({
   id: z.string().uuid(),
   plan_month: z.string(),
+  late_by_planned_date: z.boolean(),
 });
 const rowSchema = z.object({
   id: z.string().uuid(),
@@ -110,12 +111,23 @@ function currentMonth(): string {
   return localDate().slice(0, 7);
 }
 
+function validInitialMonth(value: string | null): string {
+  if (!value || !/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return currentMonth();
+  const parsed = new Date(`${value}-01T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 7) === value ? value : currentMonth();
+}
+
 export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; profile: UserProfile | null }) {
   const queryClient = useQueryClient();
   const { formatNumber, formatDate } = useDisplayFormat();
-  const [month, setMonth] = useState(currentMonth());
+  const [searchParams] = useSearchParams();
+  const [month, setMonth] = useState(() => validInitialMonth(searchParams.get('month')));
   const [activePlanId, setActivePlanId] = useState('');
   const [actualDates, setActualDates] = useState<Record<string, { visited: string; report: string }>>({});
+  const [newPlanLateByPlannedDate, setNewPlanLateByPlannedDate] = useState(true);
+  const [activePlanLateByPlannedDate, setActivePlanLateByPlannedDate] = useState(true);
+  const [visitFilter, setVisitFilter] = useState<PlanCompletionFilter>('all');
+  const [reportFilter, setReportFilter] = useState<PlanCompletionFilter>('all');
   const [message, setMessage] = useState('');
   const candidates = useQuery({ queryKey: ['monthly-plan-candidates'], queryFn: loadCandidates });
   const plans = useQuery({ queryKey: ['monthly-plans', planType], queryFn: () => loadPlans(planType) });
@@ -141,13 +153,21 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const canUpdate = Boolean(profile && ['admin', 'project_manager', 'area_engineer', 'report_follower'].includes(profile.role));
   const loadError = candidates.error ?? plans.error ?? rows.error;
   const loadErrorMessage = loadError instanceof Error ? loadError.message : String(loadError ?? '');
-  const loadErrorDetails = /ministry_key/i.test(loadErrorMessage)
-    ? `طبّق الترحيل 202611070001_ministry_key.sql. ${loadErrorMessage}`
-    : loadErrorMessage;
+  const loadErrorDetails = /late_by_planned_date/i.test(loadErrorMessage)
+    ? `طبّق الترحيل 202611110001_monthly_late_accounting.sql. ${loadErrorMessage}`
+    : /ministry_key/i.test(loadErrorMessage)
+      ? `طبّق الترحيل 202611070001_ministry_key.sql. ${loadErrorMessage}`
+      : loadErrorMessage;
 
   useEffect(() => {
-    if (plans.data?.length && !plans.data.some((plan) => plan.id === activePlanId)) setActivePlanId(plans.data[0].id);
-  }, [plans.data, activePlanId]);
+    if (!plans.data?.length) return;
+    const planForMonth = plans.data.find((plan) => plan.plan_month.slice(0, 7) === month);
+    if (planForMonth) setActivePlanId(planForMonth.id);
+    else setActivePlanId('');
+  }, [plans.data, month]);
+  useEffect(() => {
+    if (activePlan) setActivePlanLateByPlannedDate(activePlan.late_by_planned_date);
+  }, [activePlan]);
   useEffect(() => {
     if (!rows.data) return;
     setActualDates(Object.fromEntries(rows.data.map((row) => [row.id, {
@@ -157,7 +177,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   }, [rows.data]);
 
   const createPlan = useMutation({
-    mutationFn: async (assignments: ScheduleAssignment[]) => {
+    mutationFn: async ({ assignments, lateByPlannedDate }: { assignments: ScheduleAssignment[]; lateByPlannedDate: boolean }) => {
       if (!supabase || !profile) throw new Error('يلزم تسجيل الدخول لإنشاء الخطة.');
       if (!canCreate) throw new Error('لا تملك صلاحية إنشاء الخطط.');
       if (!candidates.data?.eligibility) throw new Error('يلزم اعتماد قواعد أهلية المدارس أولاً.');
@@ -174,7 +194,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
       }
       const { data: createdPlan, error: createError } = await supabase
         .from('monthly_plans')
-        .insert({ month: `${month}-01`, plan_type: planType, created_by: profile.id })
+        .insert({ month: `${month}-01`, plan_type: planType, created_by: profile.id, late_by_planned_date: lateByPlannedDate })
         .select(APP_SCHEMA_SELECT.id)
         .single();
       if (createError) throw createError;
@@ -203,6 +223,26 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
       ]);
     },
     onError: (error: Error) => setMessage(`تعذر إنشاء الخطة: ${error.message}`),
+  });
+
+  const updateLateAccounting = useMutation({
+    mutationFn: async () => {
+      if (!supabase || !profile || !activePlan) throw new Error('اختر خطة أولاً.');
+      if (!canCreate) throw new Error('لا تملك صلاحية تعديل إعداد احتساب التأخر.');
+      const { error } = await supabase.from('monthly_plans')
+        .update({ late_by_planned_date: activePlanLateByPlannedDate })
+        .eq('id', activePlan.id);
+      if (error) throw error;
+    },
+    onSuccess: async () => {
+      setMessage('تم تحديث طريقة احتساب التأخر.');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['monthly-plans', planType] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard-plan-rows'] }),
+        queryClient.invalidateQueries({ queryKey: ['monthly-report'] }),
+      ]);
+    },
+    onError: (error: Error) => setMessage(`تعذر تحديث طريقة احتساب التأخر: ${error.message}`),
   });
 
   const updateRow = useMutation({
@@ -269,6 +309,13 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const today = localDate();
   const completedVisits = rows.data?.filter((row) => row.visited_at).length ?? 0;
   const completedReports = rows.data?.filter((row) => row.report_completed_at).length ?? 0;
+  const filteredPlanRows = useMemo(
+    () => (rows.data ?? []).filter((row) => matchesPlanCompletionFilters({
+      visitedAt: row.visited_at,
+      reportCompletedAt: row.report_completed_at,
+    }, visitFilter, reportFilter)),
+    [rows.data, visitFilter, reportFilter],
+  );
   const monthEnd = month && /^\d{4}-\d{2}$/.test(month)
     ? new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10)
     : '';
@@ -300,8 +347,43 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
         {!candidates.data?.eligibility ? (
           <div className="rounded-lg bg-amber-50 p-4 text-sm leading-7 text-amber-950">لم تُعتمد مطابقة أهلية المدارس. اطلب من مدير النظام ضبطها في «المزامنة والإعدادات» قبل إنشاء الخطة.</div>
         ) : <>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="grid gap-1 text-sm font-semibold">الشهر<input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
+          <div className="grid items-start gap-3 sm:grid-cols-2">
+            <label className="grid min-w-0 grid-rows-[1.25rem_2.75rem_2.5rem] gap-1 text-sm font-semibold">
+              <span>الشهر</span>
+              <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="box-border h-11 w-full rounded-lg border border-slate-300 px-3 py-2" />
+              <span aria-hidden="true" />
+            </label>
+            <label className="grid min-w-0 grid-rows-[1.25rem_2.75rem_2.5rem] gap-1 text-sm font-semibold">
+              <span>{activePlan ? 'احتساب التأخر في الخطة الحالية' : 'احتساب التأخر للخطة الجديدة'}</span>
+              <span className="flex h-11 min-w-0 gap-2">
+                <select
+                  value={(activePlan ? activePlanLateByPlannedDate : newPlanLateByPlannedDate) ? 'planned-date' : 'performance'}
+                  onChange={(event) => {
+                    const byPlannedDate = event.target.value === 'planned-date';
+                    if (activePlan) setActivePlanLateByPlannedDate(byPlannedDate);
+                    else setNewPlanLateByPlannedDate(byPlannedDate);
+                  }}
+                  disabled={!canCreate}
+                  className="box-border h-11 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2"
+                >
+                  <option value="planned-date">حسب التاريخ المخطط لكل زيارة</option>
+                  <option value="performance">حسب وتيرة الإنجاز حتى نهاية الشهر</option>
+                </select>
+                {activePlan && canCreate && <button
+                  type="button"
+                  onClick={() => updateLateAccounting.mutate()}
+                  disabled={updateLateAccounting.isPending || activePlanLateByPlannedDate === activePlan.late_by_planned_date}
+                  className="h-11 shrink-0 rounded-lg bg-brand-700 px-3 text-xs font-bold text-white disabled:opacity-50"
+                >
+                  حفظ
+                </button>}
+              </span>
+              <span className="text-xs font-normal leading-5 text-slate-500">
+                {activePlan
+                  ? 'يُطبّق الحفظ الاختيار على الخطة المنشأة ويحدّث مؤشرات التأخر.'
+                  : 'وتيرة الإنجاز توزّع المطلوب على أيام العمل للشهر وتحتسب الفرق عن الزيارات المنجزة.'}
+              </span>
+            </label>
           </div>
           {candidates.isLoading ? <p role="status">جارٍ تحميل المدارس…</p> : !monthEnd ? <p role="alert" className="text-sm text-rose-700">اختر شهراً صالحاً.</p> : eligibleSchools.length === 0 ? <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">لا توجد مدارس مؤهلة وفق المطابقة الحالية.</p> : (
             <SupervisorPlanGenerator
@@ -314,7 +396,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
               maxDate={monthEnd}
               disabled={!canCreate}
               saving={createPlan.isPending}
-              onSave={(assignments) => createPlan.mutate(assignments)}
+              onSave={(assignments) => createPlan.mutate({ assignments, lateByPlannedDate: newPlanLateByPlannedDate })}
             />
           )}
         </>}
@@ -330,6 +412,23 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
             {!plans.data?.length && <option value="">لا توجد خطط</option>}
           </select>
         </div>
+        {activePlan && rows.data && <div className="flex flex-wrap items-end gap-3 rounded-lg bg-slate-50 p-3">
+          <label className="grid gap-1 text-sm font-semibold">حالة الزيارة
+            <select value={visitFilter} onChange={(event) => setVisitFilter(event.target.value as PlanCompletionFilter)} className="rounded-lg border border-slate-300 bg-white px-3 py-2">
+              <option value="all">جميع المدارس</option>
+              <option value="completed">تمت زيارتها</option>
+              <option value="incomplete">لم تتم زيارتها</option>
+            </select>
+          </label>
+          <label className="grid gap-1 text-sm font-semibold">حالة التقرير
+            <select value={reportFilter} onChange={(event) => setReportFilter(event.target.value as PlanCompletionFilter)} className="rounded-lg border border-slate-300 bg-white px-3 py-2">
+              <option value="all">جميع الحالات</option>
+              <option value="completed">تم تقريرها</option>
+              <option value="incomplete">لم يتم تقريرها</option>
+            </select>
+          </label>
+          <span className="text-sm text-slate-500">عرض {formatNumber(filteredPlanRows.length)} من {formatNumber(rows.data.length)} مدرسة</span>
+        </div>}
         {rows.isLoading ? <p role="status">جارٍ تحميل صفوف الخطة…</p> : !activePlan ? <p className="rounded-lg bg-slate-50 p-5 text-center text-sm text-slate-500">لا توجد خطة من هذا النوع بعد.</p> : (
           <>
             <details className="rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -360,18 +459,23 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                 ministryNumber: school.ministry_number,
                 ministryKey: school.ministry_key,
               }))}
-              onUpdated={() => queryClient.invalidateQueries({ queryKey: ['monthly-plan-rows', activePlanId] }).then(() => undefined)}
+              onUpdated={() => Promise.all([
+                queryClient.invalidateQueries({ queryKey: ['monthly-plan-rows', activePlanId] }),
+                queryClient.invalidateQueries({ queryKey: ['dashboard-plan-rows'] }),
+              ]).then(() => undefined)}
             />
             <div className="table-scroll monthly-plan-table-scroll">
               <table className="monthly-plan-table">
                 <thead><tr><th>المدرسة</th><th>الموعد المخطط</th>{planType === 'security_safety' || planType === 'elevators' ? <th>الشركة</th> : null}<th>تاريخ الزيارة</th><th>تاريخ إنجاز التقرير</th><th>الحالة</th></tr></thead>
-                <tbody>{(rows.data ?? []).map((row) => {
+                <tbody>{filteredPlanRows.map((row) => {
                   const dates = actualDates[row.id] ?? { visited: row.visited_at ?? '', report: row.report_completed_at ?? '' };
-                  const overdue = isPlanRowOverdue({
-                    plannedDate: row.planned_date,
-                    visitedAt: row.visited_at,
-                    reportCompletedAt: row.report_completed_at,
-                  }, today);
+                  const overdue = activePlan.late_by_planned_date
+                    ? isPlanRowOverdue({
+                      plannedDate: row.planned_date,
+                      visitedAt: row.visited_at,
+                      reportCompletedAt: row.report_completed_at,
+                    }, today)
+                    : today > monthEnd && !row.report_completed_at;
                   return <tr key={row.id}>
                     <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small>{row.supervisor_name && <small className="block text-xs text-slate-500">المشرف: {row.supervisor_name}</small>}</td>
                     <td>{formatDate(row.planned_date)}</td>
@@ -384,6 +488,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
               </table>
             </div>
             {rows.data?.length === 0 && <p className="text-sm text-slate-500">لا توجد مدارس في هذه الخطة.</p>}
+            {rows.data && rows.data.length > 0 && filteredPlanRows.length === 0 && <p className="text-sm text-slate-500">لا توجد مدارس تطابق الفلاتر المحددة.</p>}
           </>
         )}
       </section>

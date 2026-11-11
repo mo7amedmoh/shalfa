@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   computeDeliverableDueDate,
+  isDeliverableDueWithinDays,
   isDeliverableLate,
   resolveDeliverableDueDate,
   summarizeDeliverables,
@@ -59,6 +60,20 @@ describe('contractual deliverable due dates', () => {
     expect(isDeliverableLate(deliverable({ status: 'approved' }), dates, '2026-08-01')).toBe(false);
     expect(isDeliverableLate(deliverable({ dueDateOverride: '2026-08-15' }), dates, '2026-08-01')).toBe(false);
     expect(isDeliverableLate(deliverable({ dueBasis: 'نهاية العقد', durationDays: null }), dates, '2026-12-01')).toBe(false);
+  });
+
+  it('counts unapproved deliverables due from today through the inclusive 14-day window', () => {
+    expect(isDeliverableDueWithinDays(deliverable({ dueDateOverride: '2026-08-01' }), dates, '2026-08-01', 14)).toBe(true);
+    expect(isDeliverableDueWithinDays(deliverable({
+      dueDateOverride: '2026-08-15',
+      status: 'delivered_pending',
+    }), dates, '2026-08-01', 14)).toBe(true);
+    expect(isDeliverableDueWithinDays(deliverable({ dueDateOverride: '2026-08-16' }), dates, '2026-08-01', 14)).toBe(false);
+    expect(isDeliverableDueWithinDays(deliverable({ dueDateOverride: '2026-07-31' }), dates, '2026-08-01', 14)).toBe(false);
+    expect(isDeliverableDueWithinDays(deliverable({
+      dueDateOverride: '2026-08-05',
+      status: 'approved',
+    }), dates, '2026-08-01', 14)).toBe(false);
   });
 
   it('summarizes delivered, approved, late, and progress for empty and populated lists', () => {

@@ -5,6 +5,9 @@ export type ReportAxis = 'maintenance' | 'cleaning' | 'elevators' | 'security_sa
 export type ReportAxisFilter = ReportAxis | 'all';
 export type ReportPlanRow = {
   id: string;
+  planId?: string;
+  lateByPlannedDate?: boolean;
+  lateVisitOverride?: boolean;
   month: string;
   planType: ReportAxis;
   plannedDate: string;
@@ -25,6 +28,11 @@ export type ReportPlanRow = {
   updatedAt?: string | null;
 };
 
+export type ReportPlanMetricRow = Pick<
+  ReportPlanRow,
+  'planId' | 'lateByPlannedDate' | 'lateVisitOverride' | 'month' | 'planType' | 'plannedDate' | 'visited' | 'visitedDate' | 'reportDone' | 'reportCompletedDate'
+> & { id?: string };
+
 export type ReportFilters = {
   month: string;
   axis: ReportAxisFilter;
@@ -32,6 +40,8 @@ export type ReportFilters = {
   supervisorId: string;
   neighbourhood: string;
 };
+
+export type ReportActionFilter = 'late-visits' | 'visit-no-report' | null;
 
 export type ReportMetrics = {
   planned: number;
@@ -114,6 +124,8 @@ export type LateItem = {
   axis: string;
   kind: 'visit' | 'report';
   plannedDate: string;
+  lateSince: string;
+  lateByPlannedDate: boolean;
   daysLate: number;
   agingBucket: '1–2' | '3–5' | '6+';
 };
@@ -201,17 +213,21 @@ function dayDifference(start: string, end: string): number {
   return Math.floor((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000);
 }
 
-function countWorkingDays(start: string, end: string): number {
+export function countWorkingDays(start: string, end: string): number {
   if (start > end) return 0;
   let count = 0;
   for (let day = new Date(`${start}T00:00:00Z`); day.toISOString().slice(0, 10) <= end; day.setUTCDate(day.getUTCDate() + 1)) {
-    const weekday = day.getUTCDay();
-    if (weekday !== 5 && weekday !== 6) count += 1;
+    if (isWorkingDay(day)) count += 1;
   }
   return count;
 }
 
-function isCompleteAt(row: ReportPlanRow, asOf: string, kind: 'visit' | 'report'): boolean {
+function isWorkingDay(date: Date): boolean {
+  const weekday = date.getUTCDay();
+  return weekday !== 5 && weekday !== 6;
+}
+
+function isCompleteAt(row: ReportPlanMetricRow, asOf: string, kind: 'visit' | 'report'): boolean {
   const completed = kind === 'visit' ? row.visited : row.reportDone;
   const completedDate = kind === 'visit' ? row.visitedDate : row.reportCompletedDate;
   return completed && (!completedDate || completedDate <= asOf);
@@ -221,17 +237,67 @@ function ratio(numerator: number, denominator: number): number {
   return denominator ? (numerator / denominator) * 100 : 0;
 }
 
-function isLateVisit(row: ReportPlanRow, asOf: string): boolean {
+function isLateVisit(row: ReportPlanMetricRow, asOf: string): boolean {
   return row.plannedDate < asOf && !isCompleteAt(row, asOf, 'visit');
 }
 
-function isLateReport(row: ReportPlanRow, asOf: string): boolean {
+function isLateReport(row: ReportPlanMetricRow, asOf: string): boolean {
   return asOf > monthEnd(row.month) && !isCompleteAt(row, asOf, 'report');
 }
 
 function workingDaysLeft(month: string, asOf: string): number {
   const start = asOf < `${month}-01` ? `${month}-01` : asOf;
   return countWorkingDays(start, monthEnd(month));
+}
+
+function groupByPlan<T extends ReportPlanMetricRow>(rows: readonly T[]): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const row of rows) {
+    const key = row.planId ?? `${row.planType}:${row.lateByPlannedDate === false ? 'performance' : 'planned-date'}`;
+    const group = groups.get(key) ?? [];
+    group.push(row);
+    groups.set(key, group);
+  }
+  return groups;
+}
+
+function performanceTarget(total: number, month: string, asOf: string): number {
+  if (!total) return 0;
+  const start = `${month}-01`;
+  const end = monthEnd(month);
+  if (asOf < start) return 0;
+  const totalWorkingDays = countWorkingDays(start, end);
+  const elapsedEnd = asOf > end ? end : asOf;
+  const elapsedWorkingDays = countWorkingDays(start, elapsedEnd);
+  return totalWorkingDays ? Math.ceil(total * elapsedWorkingDays / totalWorkingDays) : total;
+}
+
+export function expectedVisitCount(rows: readonly ReportPlanMetricRow[], month: string, asOf: string): number {
+  let expected = 0;
+  for (const planRows of groupByPlan(rows).values()) {
+    if (planRows[0]?.lateByPlannedDate === false) {
+      expected += performanceTarget(planRows.length, month, asOf);
+    } else {
+      expected += planRows.filter((row) => row.plannedDate <= asOf).length;
+    }
+  }
+  return expected;
+}
+
+export function lateVisitRows<T extends ReportPlanMetricRow>(rows: readonly T[], asOf: string): Set<T> {
+  const late = new Set<T>();
+  for (const planRows of groupByPlan(rows).values()) {
+    const unclassified = planRows.filter((row) => row.lateVisitOverride === undefined);
+    for (const row of planRows) {
+      if (row.lateVisitOverride === true) late.add(row);
+    }
+    if (!unclassified.length) continue;
+    if (unclassified[0]?.lateByPlannedDate === false) continue;
+    for (const row of unclassified) {
+      if (isLateVisit(row, asOf)) late.add(row);
+    }
+  }
+  return late;
 }
 
 export function filterPlanReportRows(
@@ -243,22 +309,38 @@ export function filterPlanReportRows(
     row.month.slice(0, 7) === filters.month
     && (filters.axis === 'all' || row.planType === filters.axis)
     && (!filters.engineerId || row.engineerId === filters.engineerId)
-    && (!filters.supervisorId || row.supervisorId === filters.supervisorId)
+    && (!filters.supervisorId || (filters.supervisorId.startsWith('name:')
+      ? !row.supervisorId && `name:${row.supervisorName ?? ''}` === filters.supervisorId
+      : row.supervisorId === filters.supervisorId))
     && (!filters.neighbourhood || row.neighbourhood === filters.neighbourhood),
   );
 }
 
-export function summarizePlanReport(rows: readonly ReportPlanRow[], month: string, asOf: string): ReportMetrics {
+export function filterPlanReportActionRows(
+  rows: readonly ReportPlanRow[],
+  action: ReportActionFilter,
+  asOf: string,
+): ReportPlanRow[] {
+  if (!action) return [...rows];
+  assertDate(asOf);
+  const lateVisits = action === 'late-visits' ? lateVisitRows(rows, asOf) : null;
+  return rows.filter((row) => action === 'late-visits'
+    ? lateVisits!.has(row)
+    : isCompleteAt(row, asOf, 'visit') && !isCompleteAt(row, asOf, 'report'))
+    .map((row) => action === 'late-visits' ? { ...row, lateVisitOverride: true } : row);
+}
+
+export function summarizePlanReport(rows: readonly ReportPlanMetricRow[], month: string, asOf: string): ReportMetrics {
   assertMonth(month);
   assertDate(asOf);
   const planned = rows.length;
-  const expectedVisits = rows.filter((row) => row.plannedDate <= asOf).length;
+  const expectedVisits = expectedVisitCount(rows, month, asOf);
   const visited = rows.filter((row) => isCompleteAt(row, asOf, 'visit')).length;
   const reportsDone = rows.filter((row) => isCompleteAt(row, asOf, 'report')).length;
   const completed = rows.filter((row) =>
     isCompleteAt(row, asOf, 'visit') && isCompleteAt(row, asOf, 'report'),
   ).length;
-  const lateVisits = rows.filter((row) => isLateVisit(row, asOf)).length;
+  const lateVisits = lateVisitRows(rows, asOf).size;
   const lateReports = rows.filter((row) => isLateReport(row, asOf)).length;
   const reportsDueByMonthEnd = asOf <= monthEnd(month)
     ? rows.filter((row) => !isCompleteAt(row, asOf, 'report')).length
@@ -294,9 +376,86 @@ export function summarizePlanReport(rows: readonly ReportPlanRow[], month: strin
   };
 }
 
+export interface DashboardVerdict {
+  planned: number;
+  expected: number;
+  done: number;
+  behind: number;
+  firstSlipDay: string | null;
+  requiredDailyPace: number | null;
+  remainingWorkingDays: number;
+  elapsedWorkingDays: number;
+  totalWorkingDays: number;
+  monthProgressPercent: number;
+  status: 'on-track' | 'slightly-behind' | 'far-behind' | 'no-plan';
+}
+
+export function summarizeDashboardVerdict(
+  rows: readonly ReportPlanMetricRow[],
+  month: string,
+  asOf: string,
+): DashboardVerdict {
+  const metrics = summarizePlanReport(rows, month, asOf);
+  const start = `${month}-01`;
+  const end = monthEnd(month);
+  const elapsedEnd = asOf < start ? null : asOf > end ? end : asOf;
+  const elapsedWorkingDays = elapsedEnd ? countWorkingDays(start, elapsedEnd) : 0;
+  const totalWorkingDays = countWorkingDays(start, end);
+  const remainingStart = asOf < start ? start : (() => {
+    const next = new Date(`${asOf}T00:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    return next.toISOString().slice(0, 10);
+  })();
+  const remainingWorkingDays = countWorkingDays(remainingStart, end);
+  const slipEnd = asOf < start ? null : asOf > end ? end : asOf;
+  let firstSlipDay: string | null = null;
+  if (slipEnd) {
+    const day = new Date(`${start}T00:00:00Z`);
+    while (day.toISOString().slice(0, 10) <= slipEnd) {
+      if (isWorkingDay(day)) {
+        const date = day.toISOString().slice(0, 10);
+        const cumulativePlanned = expectedVisitCount(rows, month, date);
+        const cumulativeActual = rows.filter((row) => {
+          if (!row.visited) return false;
+          const completedDate = row.visitedDate ?? asOf;
+          return completedDate <= date && completedDate <= asOf;
+        }).length;
+        if (cumulativeActual < cumulativePlanned) {
+          firstSlipDay = date;
+          break;
+        }
+      }
+      day.setUTCDate(day.getUTCDate() + 1);
+    }
+  }
+  const behind = Math.max(0, metrics.expectedVisits - metrics.visited);
+  const status = !metrics.planned
+    ? 'no-plan'
+    : behind / metrics.planned <= 0.05
+      ? 'on-track'
+      : behind / metrics.planned <= 0.15
+        ? 'slightly-behind'
+        : 'far-behind';
+  return {
+    planned: metrics.planned,
+    expected: metrics.expectedVisits,
+    done: metrics.visited,
+    behind,
+    firstSlipDay,
+    requiredDailyPace: remainingWorkingDays ? Math.max(0, metrics.planned - metrics.visited) / remainingWorkingDays : null,
+    remainingWorkingDays,
+    elapsedWorkingDays,
+    totalWorkingDays,
+    monthProgressPercent: totalWorkingDays ? (elapsedWorkingDays / totalWorkingDays) * 100 : 0,
+    status,
+  };
+}
+
 function statusStack(rows: readonly ReportPlanRow[], asOf: string, kind: 'visit' | 'report'): StatusStack {
   const done = rows.filter((row) => isCompleteAt(row, asOf, kind)).length;
-  const late = rows.filter((row) => kind === 'visit' ? isLateVisit(row, asOf) : isLateReport(row, asOf)).length;
+  const late = kind === 'visit'
+    ? lateVisitRows(rows, asOf).size
+    : rows.filter((row) => isLateReport(row, asOf)).length;
   const pending = rows.length - done - late;
   return {
     done,
@@ -378,13 +537,14 @@ function supervisorMetrics(rows: readonly ReportPlanRow[], month: string, asOf: 
   }
   return [...groups.entries()].map(([id, assigned]) => {
     const metrics = summarizePlanReport(assigned, month, asOf);
+    const assignedLateVisits = lateVisitRows(assigned, asOf);
     const score = (metrics.completionPercent * 0.5)
       + (metrics.visitPercent * 0.25)
       + (metrics.reportPercent * 0.25);
     const rawDaily = Array.from({ length: monthDays(month) }, (_, index) => {
       const date = `${month}-${String(index + 1).padStart(2, '0')}`;
       const dayRows = assigned.filter((row) => row.plannedDate === date);
-      const hasLate = dayRows.some((row) => isLateVisit(row, asOf) || isLateReport(row, asOf));
+      const hasLate = dayRows.some((row) => assignedLateVisits.has(row) || isLateReport(row, asOf));
       const done = dayRows.length > 0 && dayRows.every((row) =>
         isCompleteAt(row, asOf, 'visit') && isCompleteAt(row, asOf, 'report'),
       );
@@ -433,12 +593,15 @@ export function rankSupervisorsByLateness(
 
 function buildLateItems(rows: readonly ReportPlanRow[], asOf: string): LateItem[] {
   const items: LateItem[] = [];
+  const lateVisits = lateVisitRows(rows, asOf);
   for (const row of rows) {
-    const lateVisit = isLateVisit(row, asOf);
+    const lateVisit = lateVisits.has(row);
     const lateReport = isLateReport(row, asOf);
     for (const kind of (['visit', 'report'] as const)) {
       if ((kind === 'visit' && !lateVisit) || (kind === 'report' && !lateReport)) continue;
-      const lateSince = kind === 'visit' ? row.plannedDate : monthEnd(row.month);
+      const lateSince = kind === 'visit'
+        ? row.plannedDate
+        : monthEnd(row.month);
       const daysLate = dayDifference(lateSince, asOf);
       items.push({
         id: `${row.id}:${kind}`,
@@ -452,6 +615,8 @@ function buildLateItems(rows: readonly ReportPlanRow[], asOf: string): LateItem[
         axis: axisLabels[row.planType],
         kind,
         plannedDate: row.plannedDate,
+        lateSince,
+        lateByPlannedDate: true,
         daysLate,
         agingBucket: daysLate <= 2 ? '1–2' : daysLate <= 5 ? '3–5' : '6+',
       });
@@ -473,6 +638,7 @@ function breakdown(rows: readonly ReportPlanRow[], asOf: string, by: 'neighbourh
     groups.set(id, items);
   }
   return [...groups.entries()].map(([id, assigned]) => {
+    const lateVisits = lateVisitRows(assigned, asOf);
     const visited = assigned.filter((row) => isCompleteAt(row, asOf, 'visit')).length;
     const reportsDone = assigned.filter((row) => isCompleteAt(row, asOf, 'report')).length;
     const completed = assigned.filter((row) =>
@@ -488,7 +654,7 @@ function breakdown(rows: readonly ReportPlanRow[], asOf: string, by: 'neighbourh
       visited,
       reportsDone,
       completed,
-      late: assigned.filter((row) => isLateVisit(row, asOf) || isLateReport(row, asOf)).length,
+      late: assigned.filter((row) => lateVisits.has(row) || isLateReport(row, asOf)).length,
       completionPercent: ratio(completed, assigned.length),
     };
   }).sort((left, right) => right.completionPercent - left.completionPercent || left.label.localeCompare(right.label, 'ar'));
@@ -582,12 +748,13 @@ export function rowsForAxisStatus(
   status: 'visit-done' | 'visit-pending' | 'visit-late' | 'report-done' | 'report-pending' | 'report-late',
   asOf: string,
 ): ReportPlanRow[] {
-  return rows.filter((row) => {
-    if (row.planType !== axis) return false;
+  const axisRows = rows.filter((row) => row.planType === axis);
+  const lateVisits = lateVisitRows(axisRows, asOf);
+  return axisRows.filter((row) => {
     switch (status) {
       case 'visit-done': return isCompleteAt(row, asOf, 'visit');
-      case 'visit-pending': return !isCompleteAt(row, asOf, 'visit') && !isLateVisit(row, asOf);
-      case 'visit-late': return isLateVisit(row, asOf);
+      case 'visit-pending': return !isCompleteAt(row, asOf, 'visit') && !lateVisits.has(row);
+      case 'visit-late': return lateVisits.has(row);
       case 'report-done': return isCompleteAt(row, asOf, 'report');
       case 'report-pending': return !isCompleteAt(row, asOf, 'report') && !isLateReport(row, asOf);
       case 'report-late': return isLateReport(row, asOf);

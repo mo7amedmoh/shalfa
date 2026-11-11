@@ -40,14 +40,22 @@
 
 للتحقق من السياسات، عيّن `TEST_<ROLE>_EMAIL` و`TEST_<ROLE>_PASSWORD` لكل دور وشغّل `npm run verify:rls`. بيانات الاعتماد لا تُحفظ في المستودع.
 
-## النشر المجاني
+## النشر على Vercel
 
-أنشئ موقعاً ثابتاً عبر Cloudflare Pages أو Netlify أو GitHub Pages:
+1. استورد مستودع GitHub إلى Vercel واختر إطار Vite؛ إعدادات البناء ومجلد `dist` وإعادة توجيه مسارات SPA ورؤوس الأمان مضبوطة في `vercel.json`.
+2. أضف `VITE_SUPABASE_URL` و`VITE_SUPABASE_PUBLISHABLE_KEY` ضمن متغيرات البيئة في إعدادات المشروع، على الأقل لبيئة Production. أعد النشر بعد تغيير المتغيرات؛ فهي تُضمّن أثناء البناء.
+3. أضف نطاق Vercel إلى إعدادات Redirect URLs في Supabase Auth، واضبط Site URL على النطاق الأساسي للإنتاج.
+
+لا تضف `SUPABASE_SERVICE_ROLE_KEY` أو أي بيانات اعتماد خادمية إلى متغيرات Vercel الخاصة ببناء الواجهة. لا تضع بيانات المدارس أو الموظفين في ملفات ساكنة أو متغيرات عامة.
+
+## النشر على مضيفات ثابتة أخرى
+
+يمكن النشر عبر Cloudflare Pages أو Netlify أو GitHub Pages:
 
 - أمر البناء: `npm run build`
 - مجلد النشر: `dist`
 - أضف متغيري Vite السابقين كمتغيرات بيئة وقت البناء.
-- على Cloudflare Pages انسخ `public/_headers` إلى جذر المخرجات عند النشر إذا لم ينسخ المضيف مجلد `public` تلقائياً؛ Vite ينسخه افتراضياً.
+- على Cloudflare Pages أو Netlify، تأكد من إعداد fallback إلى `index.html` لمسارات SPA. يوفّر `public/_headers` رؤوس الأمان للمضيفات التي تدعم صيغة `_headers`.
 - أضف نطاق النشر إلى إعدادات Redirect URLs في Supabase Auth.
 
 لا تضع بيانات المدارس أو الموظفين في ملفات ساكنة أو متغيرات عامة.

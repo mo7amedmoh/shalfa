@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>لوحة التحكم</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap">
+<style>
+body{margin:0;background:#f4f6fb}
+.c{background:#fff;border:1px solid #e3e8f2;border-radius:16px;padding:20px 22px}
+.h{font-size:16px;font-weight:800;color:#21366a;margin:0 0 14px}
+.t{font-size:12px;color:#55617f}
+.n{font-size:30px;font-weight:800;line-height:1.1}
+.bar{height:9px;border-radius:9px;background:#e8ecf5;position:relative}
+.bar i{position:absolute;top:0;bottom:0;inset-inline-start:0;border-radius:9px;background:#17825a}
+.bar b{position:absolute;top:-4px;bottom:-4px;width:2px;background:#21366a}
+.chip{font-size:12px;font-weight:700;padding:3px 10px;border-radius:20px}
+.ok{background:#dff3ea;color:#0f6b47}.wn{background:#fdecc8;color:#8a5200}.bd{background:#fbdcd8;color:#a3281d}
+.act{display:block;text-decoration:none;color:inherit;background:#fff;border:1px solid #e3e8f2;border-radius:14px;padding:16px 18px}
+.act:hover{border-color:#21366a}
+.row{display:grid;grid-template-columns:120px 1fr 70px;gap:14px;align-items:center;padding:8px 0;font-size:14px;font-weight:600}
+</style>
+</helmet>
+<div dir="rtl" style="max-width:1240px;margin:0 auto;padding:24px;box-sizing:border-box;font-family:Cairo,sans-serif;color:#16213d;display:flex;flex-direction:column;gap:18px">
+
+<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+<div><div style="font-size:26px;font-weight:800;color:#21366a">لوحة التحكم</div><div class="t">نوفمبر 2026 · حتى يوم 09/11/2026 · آخر مزامنة للمدارس 09/11/2026 08:40</div></div>
+<div style="display:flex;gap:10px;flex-wrap:wrap"><span class="chip" style="background:#fff;border:1px solid #e3e8f2;padding:8px 14px">كل المشرفين ▾</span><span class="chip" style="background:#fff;border:1px solid #e3e8f2;padding:8px 14px">كل الخدمات ▾</span></div>
+</div>
+
+<div class="c" style="display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap;border-top:4px solid #d79527">
+<div style="min-width:320px"><div class="t" style="font-weight:700;color:#8a5200">هل نمشي مع الخطة؟</div>
+<div style="font-size:32px;font-weight:800;margin:4px 0">متأخرون 38 زيارة عن المتوقع</div>
+<div style="font-size:14px;color:#3c4766">بدأ التأخر يوم <b>03/11</b> · المطلوب 6.3 زيارة يوميًا لتعويض التأخر قبل نهاية الشهر</div></div>
+<div style="display:flex;gap:28px;flex-wrap:wrap">
+<div><div class="t">المنجز حتى اليوم</div><div class="n" style="color:#17825a">150</div></div>
+<div><div class="t">المتوقع حتى اليوم</div><div class="n" style="color:#21366a">188</div></div>
+<div style="min-width:180px"><div class="t">تقدم الشهر · 7 من 22 يوم عمل</div><div class="bar" style="margin-top:14px"><i style="width:32%;background:#21366a"></i></div></div>
+</div></div>
+
+<div>
+<div class="h" style="margin-bottom:10px">يحتاج إجراء اليوم</div>
+<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px">
+<a class="act" href="#"><div class="t">زيارات متأخرة</div><div class="n" style="color:#c0392b;margin:6px 0">19</div><div class="t" style="color:#21366a;font-weight:700">عرض القائمة ←</div></a>
+<a class="act" href="#"><div class="t">تمت بدون تقرير</div><div class="n" style="color:#b86e00;margin:6px 0">4</div><div class="t" style="color:#21366a;font-weight:700">تحديث جماعي ←</div></a>
+<a class="act" href="#"><div class="t">عجز عمالة نظافة</div><div class="n" style="color:#b86e00;margin:6px 0">12</div><div class="t" style="color:#21366a;font-weight:700">فتح التسكين ←</div></a>
+<a class="act" href="#"><div class="t">مخرجات تستحق خلال 14 يومًا</div><div class="n" style="color:#21366a;margin:6px 0">3</div><div class="t" style="color:#21366a;font-weight:700">عرض المخرجات ←</div></a>
+<a class="act" href="#"><div class="t">بطاقة أكتوبر غير معتمدة</div><div class="n" style="color:#21366a;margin:6px 0">1</div><div class="t" style="color:#21366a;font-weight:700">فتح البطاقة ←</div></a>
+</div></div>
+
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
+<div class="c"><div style="display:flex;justify-content:space-between"><b>الصيانة والتكييف</b><span class="chip wn">متأخر 12</span></div><div class="n" style="margin:10px 0 4px">21.4%</div><div class="t">زيارات 39/182 · تقارير 34/182</div><div class="bar" style="margin-top:12px"><i style="width:21.4%"></i><b style="inset-inline-start:30%"></b></div></div>
+<div class="c"><div style="display:flex;justify-content:space-between"><b>النظافة</b><span class="chip bd">متأخر 19</span></div><div class="n" style="margin:10px 0 4px">14.0%</div><div class="t">زيارات 28/182 · تقارير 23/182</div><div class="bar" style="margin-top:12px"><i style="width:15.4%"></i><b style="inset-inline-start:30%"></b></div></div>
+<div class="c"><div style="display:flex;justify-content:space-between"><b>الأمن والسلامة</b><span class="chip ok">على المسار</span></div><div class="n" style="margin:10px 0 4px">29.1%</div><div class="t">زيارات 55/182 · تقارير 51/182</div><div class="bar" style="margin-top:12px"><i style="width:30.2%"></i><b style="inset-inline-start:30%"></b></div></div>
+<div class="c"><div style="display:flex;justify-content:space-between"><b>المصاعد</b><span class="chip wn">متأخر 7</span></div><div class="n" style="margin:10px 0 4px">18.8%</div><div class="t">زيارات 8/56 · تقارير 5/56</div><div class="bar" style="margin-top:12px"><i style="width:14.3%"></i><b style="inset-inline-start:30%"></b></div></div>
+</div>
+
+<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:14px">
+<div class="c"><h3 class="h">التزام المشرفين (الصيانة والنظافة)</h3>
+<div class="row"><div>طه</div><div class="bar"><i style="width:84%"></i></div><span class="chip ok">84%</span></div>
+<div class="row"><div>نزار الأمير</div><div class="bar"><i style="width:71%"></i></div><span class="chip ok">71%</span></div>
+<div class="row"><div>حمزة</div><div class="bar"><i style="width:58%;background:#d79527"></i></div><span class="chip wn">58%</span></div>
+<div class="row"><div>محمد سيف</div><div class="bar"><i style="width:49%;background:#d79527"></i></div><span class="chip wn">49%</span></div>
+<div class="row"><div>السيد</div><div class="bar"><i style="width:31%;background:#c0392b"></i></div><span class="chip bd">31%</span></div>
+<div class="t" style="margin-top:6px">الالتزام = المنجز في موعده ÷ المستحق حتى اليوم</div></div>
+<div class="c"><h3 class="h">تغطية القوى العاملة</h3>
+<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:600"><span>البوابون</span><span>182 / 182</span></div><div class="bar" style="margin:8px 0 16px"><i style="width:100%"></i></div>
+<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:600"><span>عمالة النظافة</span><span>350 / 362</span></div><div class="bar" style="margin:8px 0 16px"><i style="width:96.7%;background:#d79527"></i></div>
+<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:600"><span>الإجمالي المطلوب</span><span>532 / 544</span></div><div class="bar" style="margin:8px 0 6px"><i style="width:97.8%;background:#21366a"></i></div>
+<div class="t">عجز 12 عامل نظافة · لا عجز في البوابين</div></div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px">
+<div class="c"><h3 class="h">مؤشرات الأداء · أكتوبر</h3>
+<div style="display:flex;align-items:center;gap:18px"><svg viewBox="0 0 110 110" width="110" height="110" role="img" aria-label="92.9%"><circle cx="55" cy="55" r="44" fill="none" stroke="#e8ecf5" stroke-width="12"/><circle cx="55" cy="55" r="44" fill="none" stroke="#d79527" stroke-width="12" stroke-dasharray="256.9 276.5" transform="rotate(-90 55 55)" stroke-linecap="round"/><text x="55" y="62" text-anchor="middle" font-family="Cairo,sans-serif" font-size="22" font-weight="800" fill="#16213d">92.9%</text></svg>
+<div><span class="chip wn">تقييم: متوسط</span><div class="t" style="margin-top:8px">المستحق من الفاتورة: 98%</div><div class="t">الشهر التعاقدي 4 (خصم 2%)</div></div></div></div>
+<div class="c"><h3 class="h">المخرجات التعاقدية</h3>
+<div class="n" style="color:#21366a">18 <span style="font-size:15px;color:#55617f">من 28</span></div><div class="bar" style="margin:10px 0"><i style="width:64%;background:#21366a"></i></div>
+<div class="t">معتمد 12 · بانتظار الاعتماد 6 · لم يُسلَّم 10 · <b style="color:#c0392b">متأخر 2</b></div></div>
+<div class="c"><h3 class="h">آخر النشاط</h3>
+<div style="display:flex;flex-direction:column;gap:10px;font-size:13px;color:#2b3652"><div>تحديث جماعي: 14 زيارة صيانة · 09/11 08:15</div><div>مزامنة المدارس: 221 مدرسة · 09/11 08:40</div><div>اعتماد مخرج رقم 7 · 08/11 14:02</div></div></div>
+</div>
+
+<div class="t" style="text-align:center">بيانات تجريبية لغرض التصميم فقط</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1500}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

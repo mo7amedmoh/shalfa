@@ -324,7 +324,7 @@ function AppShell({
             <Routes>
               {import.meta.env.DEV && DevReportFixture && <Route path="/__dev/report-fixture" element={<DevReportFixture />} />}
               {import.meta.env.DEV && DevMapFixture && <Route path="/__dev/map-fixture" element={<DevMapFixture />} />}
-              <Route path="/" element={<DashboardPage />} />
+              <Route path="/" element={<DashboardPage profile={profile} />} />
               <Route path="/schools" element={<SchoolsPage profile={profile} />} />
               <Route path="/plans/report" element={<MonthlyReportPage />} />
               <Route path="/plans/:type" element={<MonthlyPlanRoute profile={profile} />} />

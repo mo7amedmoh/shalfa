@@ -114,6 +114,12 @@ describe('monthly report presentation data', () => {
     ]);
   });
 
+  it('hides the pace gap when no plan uses pace accounting', () => {
+    const data = reportData([row('planned-date-plan')]);
+
+    expect(data.summaryCards.some(({ label }) => label === 'عجز وتيرة الإنجاز')).toBe(false);
+  });
+
   it('marks a service far behind when visits are due but nothing is complete', () => {
     const data = reportData([
       row('cleaning-due', { planType: 'cleaning', plannedDate: '2026-11-05' }),
@@ -125,5 +131,21 @@ describe('monthly report presentation data', () => {
       expectedVisits: 1,
       pillTone: 'far-behind',
     });
+  });
+
+  it('keeps pace shortfall out of overdue visits and summary cards', () => {
+    const rows = Array.from({ length: 22 }, (_, index) => row(`pace-${index}`, {
+      planId: 'performance-plan',
+      lateByPlannedDate: false,
+      plannedDate: '2026-11-30',
+      visited: index < 5,
+      visitedDate: index < 5 ? '2026-11-10' : null,
+    }));
+    const data = reportData(rows);
+
+    expect(data.summaryCards.find(({ label }) => label === 'زيارات متأخرة')?.value).toBe(0);
+    expect(data.summaryCards.some(({ label }) => label === 'عجز وتيرة الإنجاز')).toBe(false);
+    expect(data.lateItems).toHaveLength(0);
+    expect(data.status.label).toContain('أقل من وتيرة الإنجاز المستهدفة');
   });
 });

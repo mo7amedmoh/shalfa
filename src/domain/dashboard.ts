@@ -1,5 +1,8 @@
 import type { PlanType } from './types';
-import { calculateStaffing, parseClassCount, type StaffingInput, type StaffingResult } from './staffing';
+import { isDeliverableDueWithinDays, type DeliverableDueDates, type DeliverableRecord } from './deliverables';
+import { normalizeImportName } from './imports';
+import { summarizePlanReport, type DashboardVerdict, type ReportPlanMetricRow } from './planReport';
+import { calculateStaffing, parseClassCount, type SchoolSize, type StaffingInput, type StaffingResult } from './staffing';
 import { eligibleSchoolIds, type PlanEligibilityConfig, type SchoolSourceRecord } from './planEligibility';
 
 export interface DashboardPlanRow {
@@ -18,6 +21,7 @@ export interface DashboardPlanProgress {
 }
 
 export interface DashboardStaffingRow {
+  size?: SchoolSize | null;
   requiredCleaners: number | null;
   assignedCleaners: number;
   shortage: number;
@@ -33,6 +37,123 @@ export interface DashboardSchool extends SchoolSourceRecord {
 export interface DashboardEligibilityConfig extends PlanEligibilityConfig {
   classCountHeader: string;
   schoolSizeHeader: string;
+}
+
+export interface DashboardServiceProgress {
+  planType: PlanType;
+  planned: number;
+  visited: number;
+  reportsDone: number;
+  overallPercent: number;
+  expectedPercent: number;
+  behind: number;
+  status: DashboardVerdict['status'];
+}
+
+export interface DashboardActionCounts {
+  lateVisits: number;
+  visitedWithoutReport: number;
+  cleanerShortage: number;
+  deliverablesDueSoon: number;
+  previousKpiNotApproved: number;
+}
+
+export interface SupervisorComplianceRow {
+  supervisorId: string | null;
+  supervisorName: string | null;
+  plannedDate: string;
+  visited: boolean;
+  visitedDate: string | null;
+}
+
+export interface SupervisorCompliance {
+  id: string;
+  name: string;
+  planned: number;
+  completedOnTime: number;
+  percent: number;
+}
+
+export function summarizeSupervisorCompliance(
+  rows: readonly SupervisorComplianceRow[],
+  asOf: string,
+): SupervisorCompliance[] {
+  const groups = new Map<string, { name: string; planned: number; completedOnTime: number }>();
+  for (const row of rows) {
+    if (row.plannedDate > asOf) continue;
+    const normalizedName = normalizeImportName(row.supervisorName);
+    const id = row.supervisorId ?? (normalizedName ? `name:${normalizedName}` : 'name:unassigned');
+    const current = groups.get(id) ?? {
+      name: row.supervisorName?.trim() || 'مشرف غير محدد',
+      planned: 0,
+      completedOnTime: 0,
+    };
+    current.planned += 1;
+    if (row.visited && row.visitedDate !== null && row.visitedDate <= row.plannedDate) {
+      current.completedOnTime += 1;
+    }
+    groups.set(id, current);
+  }
+  return [...groups.entries()]
+    .map(([id, summary]) => ({
+      id,
+      ...summary,
+      percent: summary.planned ? (summary.completedOnTime / summary.planned) * 100 : 0,
+    }))
+    .sort((left, right) => right.percent - left.percent || left.name.localeCompare(right.name, 'ar'));
+}
+
+export function summarizeDashboardServices(
+  rows: readonly ReportPlanMetricRow[],
+  month: string,
+  asOf: string,
+): DashboardServiceProgress[] {
+  const planTypes: readonly PlanType[] = ['maintenance', 'cleaning', 'security_safety', 'elevators'];
+  return planTypes.map((planType) => {
+    const metrics = summarizePlanReport(rows.filter((row) => row.planType === planType), month, asOf);
+    const overallPercent = metrics.planned
+      ? ((metrics.visited + metrics.reportsDone) / (2 * metrics.planned)) * 100
+      : 0;
+    const expectedPercent = metrics.planned ? (metrics.expectedVisits / metrics.planned) * 100 : 0;
+    const gap = overallPercent - expectedPercent;
+    return {
+      planType,
+      planned: metrics.planned,
+      visited: metrics.visited,
+      reportsDone: metrics.reportsDone,
+      overallPercent,
+      expectedPercent,
+      behind: Math.max(0, Math.ceil((expectedPercent - overallPercent) * metrics.planned / 100)),
+      status: !metrics.planned
+        ? 'no-plan'
+        : gap >= -5
+          ? 'on-track'
+          : gap >= -15
+            ? 'slightly-behind'
+            : 'far-behind',
+    };
+  });
+}
+
+export function countDashboardActions(input: {
+  rows: readonly ReportPlanMetricRow[];
+  month: string;
+  asOf: string;
+  staffing: readonly DashboardStaffingRow[];
+  deliverables: readonly DeliverableRecord[];
+  deliverableDates: DeliverableDueDates;
+  previousKpiStatus: 'draft' | 'submitted' | 'approved' | null;
+}): DashboardActionCounts {
+  const metrics = summarizePlanReport(input.rows, input.month, input.asOf);
+  return {
+    lateVisits: metrics.lateVisits,
+    visitedWithoutReport: metrics.inProgress,
+    cleanerShortage: input.staffing.reduce((total, row) => total + row.shortage, 0),
+    deliverablesDueSoon: input.deliverables.filter((deliverable) =>
+      isDeliverableDueWithinDays(deliverable, input.deliverableDates, input.asOf, 14),
+    ).length,
+    previousKpiNotApproved: Number(input.previousKpiStatus !== 'approved'),
+  };
 }
 
 export function summarizeDashboardPlans(rows: readonly DashboardPlanRow[]): DashboardPlanProgress[] {
@@ -83,8 +204,9 @@ export function summarizeDashboardStaffing(rows: readonly DashboardStaffingRow[]
     assigned: summary.assigned + row.assignedCleaners,
     shortage: summary.shortage + row.shortage,
     surplus: summary.surplus + row.surplus,
+    shortageSchools: summary.shortageSchools + Number(row.shortage > 0),
     missingClassCount: summary.missingClassCount + Number(row.requiredCleaners === null),
-  }), { schools: 0, required: 0, assigned: 0, shortage: 0, surplus: 0, missingClassCount: 0 });
+  }), { schools: 0, required: 0, assigned: 0, shortage: 0, surplus: 0, shortageSchools: 0, missingClassCount: 0 });
 }
 
 export interface WorkforceSummary {
@@ -93,15 +215,18 @@ export interface WorkforceSummary {
     assigned: number;
     shortage: number;
     surplus: number;
+    netBalance: number;
   };
   cleaners: ReturnType<typeof summarizeDashboardStaffing> & {
     bySize: Record<'small' | 'medium' | 'large', { required: number; assigned: number; shortage: number; surplus: number }>;
+    netBalance: number;
   };
   total: {
     required: number;
     assigned: number;
     shortage: number;
     surplus: number;
+    netBalance: number;
   };
 }
 
@@ -134,14 +259,17 @@ export function summarizeWorkforce(
     shortage: Math.max(0, gatekeepersRequired - gatekeepersAssigned),
     surplus: Math.max(0, gatekeepersAssigned - gatekeepersRequired),
   };
+  const cleanersNetBalance = cleaners.shortage - cleaners.surplus;
+  const gatekeepersNetBalance = gatekeepers.shortage - gatekeepers.surplus;
   return {
-    gatekeepers,
-    cleaners,
+    gatekeepers: { ...gatekeepers, netBalance: gatekeepersNetBalance },
+    cleaners: { ...cleaners, netBalance: cleanersNetBalance },
     total: {
       required: gatekeepers.required + cleaners.required,
       assigned: gatekeepers.assigned + cleaners.assigned,
       shortage: gatekeepers.shortage + cleaners.shortage,
       surplus: gatekeepers.surplus + cleaners.surplus,
+      netBalance: gatekeepersNetBalance + cleanersNetBalance,
     },
   };
 }

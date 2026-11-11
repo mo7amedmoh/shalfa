@@ -108,6 +108,23 @@ export function isDeliverableLate(
   return Boolean(dueDate && dueDate < asOf && deliverable.status === 'not_delivered');
 }
 
+export function isDeliverableDueWithinDays(
+  deliverable: DeliverableRecord,
+  dates: DeliverableDueDates,
+  asOf: string,
+  days: number,
+): boolean {
+  if (!Number.isInteger(days) || days < 0) {
+    throw new RangeError('The due-date window must be a non-negative integer.');
+  }
+  if (!validDate(asOf) || deliverable.status === 'approved') return false;
+  const dueDate = resolveDeliverableDueDate(deliverable, dates).dueDate;
+  if (!dueDate || dueDate < asOf) return false;
+  const latestDate = new Date(`${asOf}T00:00:00Z`);
+  latestDate.setUTCDate(latestDate.getUTCDate() + days);
+  return dueDate <= latestDate.toISOString().slice(0, 10);
+}
+
 export function summarizeDeliverables<T extends DeliverableRecord>(
   deliverables: readonly T[],
   dates: DeliverableDueDates,

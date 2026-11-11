@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { Download, ExternalLink, Paperclip, Upload, X } from 'lucide-react';
 import { loadXlsx } from '../../lib/xlsx';
 import { z } from 'zod';
-import { isDeliverableLate, resolveDeliverableDueDate, summarizeDeliverables, type DeliverableDueDates, type DeliverableStatus } from '../../domain/deliverables';
+import { isDeliverableDueWithinDays, isDeliverableLate, resolveDeliverableDueDate, summarizeDeliverables, type DeliverableDueDates, type DeliverableStatus } from '../../domain/deliverables';
 import type { UserProfile } from '../../lib/auth';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { supabase } from '../../lib/supabase';
@@ -135,6 +136,8 @@ function toDueRecord(item: Deliverable): {
 export function DeliverablesPage({ profile }: { profile: UserProfile | null }) {
   const queryClient = useQueryClient();
   const { formatNumber, formatDate } = useDisplayFormat();
+  const [searchParams] = useSearchParams();
+  const dueSoonOnly = searchParams.get('filter') === 'due-soon';
   const [filters, setFilters] = useState<Filters>({ status: 'all', lateness: 'all' });
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [message, setMessage] = useState('');
@@ -157,8 +160,9 @@ export function DeliverablesPage({ profile }: { profile: UserProfile | null }) {
   const visibleItems = useMemo(() => items.filter((item) => {
     if (filters.status !== 'all' && item.status !== filters.status) return false;
     const late = isDeliverableLate(toDueRecord(item), dates, asOf);
-    return filters.lateness === 'all' || (filters.lateness === 'late' ? late : !late);
-  }), [items, dates, asOf, filters]);
+    if (filters.lateness !== 'all' && (filters.lateness === 'late' ? !late : late)) return false;
+    return !dueSoonOnly || isDeliverableDueWithinDays(toDueRecord(item), dates, asOf, 14);
+  }), [items, dates, asOf, filters, dueSoonOnly]);
 
   const save = useMutation({
     mutationFn: async (draft: EditorState) => {
@@ -291,6 +295,7 @@ export function DeliverablesPage({ profile }: { profile: UserProfile | null }) {
       {query.error && <p role="alert" className="rounded-lg bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل المخرجات: {query.error.message}</p>}
       {query.isLoading && <p role="status" className="card p-5 text-center">جارٍ تحميل المخرجات التعاقدية…</p>}
       {!canEdit && <p role="status" className="rounded-lg bg-sky-50 p-3 text-sm text-sky-900">وضع القراءة فقط؛ يمكن لمدير النظام ومدير المشروع تعديل البيانات.</p>}
+      {dueSoonOnly && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">تصفية مفعلة: مخرجات تستحق خلال 14 يومًا وغير معتمدة.</p>}
 
       {query.data && <>
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="ملخص المخرجات">

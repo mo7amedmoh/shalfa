@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Download, Upload } from 'lucide-react';
 import { normalizeMinistryNumber, parseImportDate } from '../../domain/imports';
 import {
-  previewPlanNumberUpdates,
+  previewPlanIdentifierUpdates,
   getUnpersistedPlanUpdateIds,
   type MinistryIndexSchool,
   type PlanBulkUpdate,
@@ -84,10 +84,6 @@ function dateCell(value: unknown): { value: string | null; valid: boolean } {
 }
 
 export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, allSchools }: Props) {
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [supervisor, setSupervisor] = useState('');
-  const [visitDate, setVisitDate] = useState('');
-  const [reportDate, setReportDate] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [preview, setPreview] = useState<PreviewRow[] | null>(null);
@@ -98,14 +94,6 @@ export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, a
   const [numberReportDate, setNumberReportDate] = useState('');
   const [numberPreview, setNumberPreview] = useState<PlanBulkPreviewRow[] | null>(null);
   const [numberPreviewCounts, setNumberPreviewCounts] = useState<PlanBulkPreviewCounts | null>(null);
-
-  const supervisors = useMemo(() => [...new Set(rows.map((row) => row.supervisorName).filter((name): name is string => Boolean(name)))].sort((a, b) => a.localeCompare(b, 'ar')), [rows]);
-  const filteredRows = supervisor ? rows.filter((row) => row.supervisorName === supervisor) : rows;
-  const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
-
-  function selectRows(selected: readonly BulkPlanRow[]) {
-    setSelectedIds((current) => [...new Set([...current, ...selected.map((row) => row.id)])]);
-  }
 
   async function sendUpdates(
     updates: readonly UpdateValues[],
@@ -169,7 +157,7 @@ export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, a
 
   function prepareNumberPreview() {
     try {
-      const result = previewPlanNumberUpdates(
+      const result = previewPlanIdentifierUpdates(
         pastedNumbers,
         rows.map((row) => ({
           id: row.id,
@@ -183,7 +171,7 @@ export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, a
         numberVisitDate,
         numberReportDate,
       );
-      if (!result.rows.length) throw new Error('أدخل رقماً وزارياً واحداً على الأقل.');
+      if (!result.rows.length) throw new Error('أدخل رقماً وزارياً أو اسم مدرسة واحداً على الأقل.');
       setNumberPreview(result.rows);
       setNumberPreviewCounts(result.counts);
       setMessage('');
@@ -239,33 +227,6 @@ export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, a
       setNumberPreview(null);
       setNumberPreviewCounts(null);
       setPastedNumbers('');
-      await onUpdated();
-    } catch (error) {
-      setMessage(databaseErrorDetails(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function applySelected(kind: 'visited' | 'report' | 'clear') {
-    setBusy(true);
-    setMessage('');
-    try {
-      if (!selectedRows.length) throw new Error('حدد صفاً واحداً على الأقل.');
-      if (kind === 'visited' && !visitDate) throw new Error('حدد تاريخ الزيارة.');
-      if (kind === 'report' && !reportDate) throw new Error('حدد تاريخ إنجاز التقرير.');
-      if (kind === 'report' && selectedRows.some((row) => !row.visited)) {
-        throw new Error('لا يمكن إكمال التقرير قبل تسجيل الزيارة لجميع الصفوف المحددة.');
-      }
-      const updates = selectedRows.map((row): UpdateValues => kind === 'clear'
-        ? { row_id: row.id, visited_date: null, report_date: null }
-        : kind === 'visited'
-          ? { row_id: row.id, visited_date: visitDate }
-          : { row_id: row.id, report_date: reportDate });
-      const count = await sendUpdates(updates);
-      setMessage(`تم تحديث ${count} صفاً. لن يُحفظ التقرير إلا بعد الزيارة.`);
-      setSelectedIds([]);
-      setPreview(null);
       await onUpdated();
     } catch (error) {
       setMessage(databaseErrorDetails(error));
@@ -404,31 +365,6 @@ export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, a
       setNumberPreviewCounts(null);
       setMessage('');
     }} className={buttonClass}>تحديث بالأرقام</button>
-    <div className="flex flex-wrap items-end gap-2">
-      <label className="grid gap-1 text-xs font-semibold">المشرف
-        <select value={supervisor} onChange={(event) => setSupervisor(event.target.value)} className={inputClass}>
-          <option value="">جميع المشرفين</option>{supervisors.map((name) => <option key={name}>{name}</option>)}
-        </select>
-      </label>
-      <button type="button" disabled={disabled || busy} onClick={() => selectRows(filteredRows)} className={buttonClass}>تحديد كل النتائج ({filteredRows.length})</button>
-      <button type="button" disabled={disabled || busy || !supervisor} onClick={() => selectRows(rows.filter((row) => row.supervisorName === supervisor))} className={buttonClass}>تحديد صفوف المشرف</button>
-      <button type="button" disabled={busy} onClick={() => setSelectedIds([])} className={buttonClass}>إلغاء التحديد</button>
-    </div>
-    <div className="max-h-44 overflow-y-auto rounded-lg border border-slate-200 p-2">
-      {filteredRows.map((row) => <label key={row.id} className="flex items-center gap-2 border-b border-slate-100 py-1.5 text-sm last:border-0">
-        <input type="checkbox" checked={selectedIds.includes(row.id)} disabled={disabled || busy} onChange={(event) => setSelectedIds((current) => event.target.checked ? [...current, row.id] : current.filter((id) => id !== row.id))} />
-        <span>{row.schoolName}</span><span className="text-slate-400">{row.ministryNumber}</span>
-        {row.supervisorName && <span className="ms-auto text-slate-500">{row.supervisorName}</span>}
-      </label>)}
-      {!filteredRows.length && <p className="p-2 text-sm text-slate-500">لا توجد صفوف مطابقة.</p>}
-    </div>
-    <div className="flex flex-wrap items-end gap-2">
-      <label className="grid gap-1 text-xs font-semibold">تاريخ الزيارة<input type="date" value={visitDate} onChange={(event) => setVisitDate(event.target.value)} className={inputClass} /></label>
-      <button type="button" disabled={disabled || busy || !selectedIds.length} onClick={() => void applySelected('visited')} className={buttonClass}>تسجيل الزيارة</button>
-      <label className="grid gap-1 text-xs font-semibold">تاريخ التقرير<input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} className={inputClass} /></label>
-      <button type="button" disabled={disabled || busy || !selectedIds.length} onClick={() => void applySelected('report')} className={buttonClass}>إكمال التقرير</button>
-      <button type="button" disabled={disabled || busy || !selectedIds.length} onClick={() => void applySelected('clear')} className="rounded-lg border border-rose-300 px-3 py-2 text-sm text-rose-800 disabled:opacity-50">مسح الزيارة والتقرير</button>
-    </div>
     <div className="flex flex-wrap gap-2">
       <button type="button" disabled={busy} onClick={() => void downloadTemplate()} className={buttonClass}><Download size={15} className="me-1 inline" />تنزيل قالب Excel</button>
       <label className={`cursor-pointer ${buttonClass} ${disabled || busy ? 'pointer-events-none opacity-50' : ''}`}><Upload size={15} className="me-1 inline" />معاينة ملف Excel<input className="hidden" type="file" accept=".xlsx" disabled={disabled || busy} onChange={(event) => { void previewWorkbook(event.target.files?.[0]); event.currentTarget.value = ''; }} /></label>
@@ -455,16 +391,16 @@ export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, a
     {numbersDialogOpen && <div className="fixed inset-0 z-40 grid place-items-center overflow-y-auto bg-slate-950/40 p-4" role="dialog" aria-modal="true" aria-labelledby="plan-number-update-title">
       <div className="my-4 grid max-h-[90vh] w-full max-w-4xl gap-4 overflow-y-auto rounded-xl bg-white p-5 shadow-xl">
         <div className="flex items-start justify-between gap-3">
-          <div><h4 id="plan-number-update-title" className="font-bold text-slate-900">تحديث بالأرقام الوزارية</h4>
-            <p className="mt-1 text-sm text-slate-500">افصل الأرقام بمسافة أو سطر جديد أو فاصلة. لن تُنشأ أي صفوف.</p></div>
+          <div><h4 id="plan-number-update-title" className="font-bold text-slate-900">تحديث بالأرقام أو الأسماء</h4>
+            <p className="mt-1 text-sm text-slate-500">يمكن إدخال الأرقام الوزارية مفصولة بمسافات، أو أسماء المدارس مفصولة بأسطر أو فواصل. تطابق الأسماء دقيق بعد توحيد التشكيل والمسافات. لن تُنشأ أي صفوف.</p></div>
           <button type="button" onClick={() => setNumbersDialogOpen(false)} className="text-sm text-slate-600 underline">إغلاق</button>
         </div>
-        <label className="grid gap-1 text-sm font-semibold">الأرقام الوزارية
+        <label className="grid gap-1 text-sm font-semibold">الأرقام الوزارية أو أسماء المدارس
           <textarea rows={5} value={pastedNumbers} onChange={(event) => {
             setPastedNumbers(event.target.value);
             setNumberPreview(null);
             setNumberPreviewCounts(null);
-          }} className={`${inputClass} w-full`} placeholder="M010801، ٩٥١٨٣" />
+          }} className={`${inputClass} w-full`} placeholder={'M010801 ٩٥١٨٣\nمدرسة أولى، مدرسة ثانية'} />
         </label>
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="grid gap-1 text-sm font-semibold">الإجراء
@@ -502,9 +438,9 @@ export function BulkPlanUpdates({ planKind, planId, rows, disabled, onUpdated, a
           </div>
           <div className="max-h-64 overflow-auto rounded border text-sm">
             <table className="min-w-full text-start">
-              <thead className="sticky top-0 bg-slate-100"><tr><th className="p-2">#</th><th className="p-2">الرقم الوزاري</th><th className="p-2">الحالة</th><th className="p-2">التفاصيل</th></tr></thead>
-              <tbody>{numberPreview.map((row) => <tr key={`${row.line}-${row.ministryNumber}`} className="border-t border-slate-100">
-                <td className="p-2">{row.line}</td><td className="p-2">{row.ministryNumber}</td>
+              <thead className="sticky top-0 bg-slate-100"><tr><th className="p-2">#</th><th className="p-2">المدخل</th><th className="p-2">الحالة</th><th className="p-2">التفاصيل</th></tr></thead>
+              <tbody>{numberPreview.map((row) => <tr key={`${row.line}-${row.identifier}`} className="border-t border-slate-100">
+                <td className="p-2">{row.line}</td><td className="p-2">{row.identifier}</td>
                 <td className="p-2">{({
                   matched: 'مطابق', unmatched: 'غير مطابق', not_in_plan: 'ليس في الخطة',
                   duplicate: 'مكرر', ambiguous: 'ملتبس', invalid: 'غير صالح',

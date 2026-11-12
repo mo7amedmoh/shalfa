@@ -371,7 +371,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
           </p>
         </article>
 
-        <article className="card dashboard-card-enter p-5">
+        <article className="card dashboard-glass dashboard-card-enter dashboard-workforce-card p-5">
           <h3 className="font-extrabold text-brand-900">تغطية القوى العاملة</h3>
           <p className="mt-1 text-xs text-slate-500">الحالة الحالية للمدارس المؤهلة؛ لا تتغير بفلاتر الخدمة أو المشرف.</p>
           {dashboard.staffingLoading ? <CardSkeleton /> : dashboard.staffingError
@@ -414,7 +414,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
                   </tbody>
                 </table>
               </div>
-              <div className="rounded-xl bg-slate-50 p-3">
+              <div className="dashboard-workforce-total">
                 <CoverageLine label="الإجمالي" assigned={workforce.total.assigned} required={workforce.total.required} formatNumber={formatNumber} />
                 <p className={`mt-2 text-xs font-bold ${workforce.total.netBalance > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
                   {workforce.total.netBalance > 0
@@ -443,7 +443,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
 
       {dashboard.access.kpi && (
         <section className="dashboard-stagger grid gap-4 lg:grid-cols-2" aria-label="مؤشرات الأداء والمخرجات">
-          <article className="card dashboard-card-enter p-5">
+          <article className="card dashboard-glass dashboard-card-enter dashboard-scorecard-card p-5">
             <h3 className="font-extrabold text-brand-900">بطاقة أداء الشهر المحدد</h3>
             {dashboard.kpiLoading ? <CardSkeleton /> : dashboard.kpiError
               ? <CardError title="تعذر تحميل بطاقة الأداء" message={dashboard.kpiError.message} />

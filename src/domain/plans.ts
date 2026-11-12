@@ -1,3 +1,5 @@
+import { normalizeImportName, normalizeMinistryNumber } from './imports';
+
 export interface PlannedVisit {
   schoolId: string;
   plannedDate: string;
@@ -19,6 +21,28 @@ export type PlanCompletionFilter = 'all' | 'completed' | 'incomplete';
 export interface PlanCompletionState {
   visitedAt: string | null;
   reportCompletedAt: string | null;
+}
+
+export interface PlanSchoolSearchFields {
+  schoolName: string | null;
+  ministryNumber: string | null;
+  ministryKey?: string | null;
+}
+
+export function matchesPlanSchoolSearch(
+  row: PlanSchoolSearchFields,
+  search: string,
+): boolean {
+  const query = search.trim();
+  if (!query) return true;
+
+  const normalizedName = normalizeImportName(query);
+  if (normalizeImportName(row.schoolName).includes(normalizedName)) return true;
+
+  const normalizedNumber = normalizeMinistryNumber(query);
+  if (!normalizedNumber) return false;
+  const rowNumber = normalizeMinistryNumber(row.ministryKey || row.ministryNumber);
+  return rowNumber.includes(normalizedNumber);
 }
 
 export function matchesPlanCompletionFilters(

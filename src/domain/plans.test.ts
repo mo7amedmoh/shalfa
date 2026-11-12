@@ -1,7 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { distributePlanDates, isPlanRowOverdue, matchesPlanCompletionFilters } from './plans';
+import { distributePlanDates, isPlanRowOverdue, matchesPlanCompletionFilters, matchesPlanSchoolSearch } from './plans';
 
 describe('monthly plan date distribution', () => {
+  it('searches plan rows by normalized school name or ministry number', () => {
+    const school = {
+      schoolName: 'مدرسة أُحد الابتدائية',
+      ministryNumber: 'M٠١٠٨٠١',
+      ministryKey: '10801',
+    };
+
+    expect(matchesPlanSchoolSearch(school, 'أحد')).toBe(true);
+    expect(matchesPlanSchoolSearch(school, '  مدرسة أُحد  ')).toBe(true);
+    expect(matchesPlanSchoolSearch(school, '٠١٠٨')).toBe(true);
+    expect(matchesPlanSchoolSearch(school, 'M10801')).toBe(true);
+    expect(matchesPlanSchoolSearch(school, 'مدرسة أخرى')).toBe(false);
+    expect(matchesPlanSchoolSearch(school, '')).toBe(true);
+  });
+
   it('matches visit and report completion filters independently', () => {
     const both = { visitedAt: '2026-11-01', reportCompletedAt: '2026-11-02' };
     const visitOnly = { visitedAt: '2026-11-01', reportCompletedAt: null };

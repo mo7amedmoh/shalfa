@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
 import { loadXlsx } from '../../lib/xlsx';
-import { isPlanRowOverdue, matchesPlanCompletionFilters, type PlanCompletionFilter } from '../../domain/plans';
+import { isPlanRowOverdue, matchesPlanCompletionFilters, matchesPlanSchoolSearch, type PlanCompletionFilter } from '../../domain/plans';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import { schoolPersonDefault } from '../../domain/imports';
 import type { ScheduleAssignment } from '../../domain/planScheduler';
@@ -128,6 +128,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const [activePlanLateByPlannedDate, setActivePlanLateByPlannedDate] = useState(true);
   const [visitFilter, setVisitFilter] = useState<PlanCompletionFilter>('all');
   const [reportFilter, setReportFilter] = useState<PlanCompletionFilter>('all');
+  const [schoolSearch, setSchoolSearch] = useState('');
   const [message, setMessage] = useState('');
   const candidates = useQuery({ queryKey: ['monthly-plan-candidates'], queryFn: loadCandidates });
   const plans = useQuery({ queryKey: ['monthly-plans', planType], queryFn: () => loadPlans(planType) });
@@ -313,8 +314,12 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
     () => (rows.data ?? []).filter((row) => matchesPlanCompletionFilters({
       visitedAt: row.visited_at,
       reportCompletedAt: row.report_completed_at,
-    }, visitFilter, reportFilter)),
-    [rows.data, visitFilter, reportFilter],
+    }, visitFilter, reportFilter) && matchesPlanSchoolSearch({
+      schoolName: row.school?.school_name ?? null,
+      ministryNumber: row.school?.ministry_number ?? null,
+      ministryKey: row.school?.ministry_key ?? null,
+    }, schoolSearch)),
+    [rows.data, visitFilter, reportFilter, schoolSearch],
   );
   const monthEnd = month && /^\d{4}-\d{2}$/.test(month)
     ? new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10)
@@ -413,6 +418,17 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
           </select>
         </div>
         {activePlan && rows.data && <div className="flex flex-wrap items-end gap-3 rounded-lg bg-slate-50 p-3">
+          <label className="grid min-w-56 flex-1 gap-1 text-sm font-semibold">
+            البحث عن مدرسة
+            <input
+              type="search"
+              value={schoolSearch}
+              onChange={(event) => setSchoolSearch(event.target.value)}
+              placeholder="اسم المدرسة أو الرقم الوزاري"
+              aria-label="البحث باسم المدرسة أو الرقم الوزاري"
+              className="min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2"
+            />
+          </label>
           <label className="grid gap-1 text-sm font-semibold">حالة الزيارة
             <select value={visitFilter} onChange={(event) => setVisitFilter(event.target.value as PlanCompletionFilter)} className="rounded-lg border border-slate-300 bg-white px-3 py-2">
               <option value="all">جميع المدارس</option>
@@ -488,7 +504,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
               </table>
             </div>
             {rows.data?.length === 0 && <p className="text-sm text-slate-500">لا توجد مدارس في هذه الخطة.</p>}
-            {rows.data && rows.data.length > 0 && filteredPlanRows.length === 0 && <p className="text-sm text-slate-500">لا توجد مدارس تطابق الفلاتر المحددة.</p>}
+            {rows.data && rows.data.length > 0 && filteredPlanRows.length === 0 && <p className="text-sm text-slate-500">لا توجد مدارس تطابق البحث والفلاتر المحددة.</p>}
           </>
         )}
       </section>

@@ -86,6 +86,158 @@ a {
   box-shadow: 0 10px 30px rgba(27, 44, 88, 0.05);
 }
 
+.dashboard-page {
+  position: relative;
+  isolation: isolate;
+  min-height: 100%;
+}
+
+.dashboard-page::before {
+  position: absolute;
+  z-index: -1;
+  inset: -32px;
+  background:
+    radial-gradient(ellipse at 12% 12%, rgb(105 132 191 / 12%), transparent 34%),
+    radial-gradient(ellipse at 88% 32%, rgb(112 177 157 / 10%), transparent 30%),
+    radial-gradient(ellipse at 55% 92%, rgb(190 169 213 / 9%), transparent 38%);
+  content: '';
+  pointer-events: none;
+}
+
+.dashboard-page .dashboard-glass {
+  border: 1px solid rgb(255 255 255 / 75%);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgb(27 44 88 / 10%);
+}
+
+.dashboard-page .text-slate-400,
+.dashboard-page .text-slate-500 {
+  color: #556078;
+}
+
+.dashboard-page .dashboard-glass.border-t-4 {
+  border-top-width: 4px;
+}
+
+.dashboard-page .dashboard-glass.border-emerald-500 {
+  border-top-color: #10b981;
+}
+
+.dashboard-page .dashboard-glass.border-amber-500 {
+  border-top-color: #f59e0b;
+}
+
+.dashboard-page .dashboard-glass.border-rose-600 {
+  border-top-color: #e11d48;
+}
+
+.dashboard-page .dashboard-glass.border-slate-300 {
+  border-top-color: #cbd5e1;
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .dashboard-page .dashboard-glass {
+    background: rgb(255 255 255 / 60%);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+  }
+}
+
+.dashboard-page .dashboard-card-enter {
+  animation: dashboard-fade-up 420ms ease backwards;
+}
+
+.dashboard-page .dashboard-content-enter {
+  animation: dashboard-fade-up 320ms ease both;
+}
+
+.dashboard-page .dashboard-stagger > .dashboard-card-enter:nth-child(2) {
+  animation-delay: 60ms;
+}
+
+.dashboard-page .dashboard-stagger > .dashboard-card-enter:nth-child(3) {
+  animation-delay: 120ms;
+}
+
+.dashboard-page .dashboard-stagger > .dashboard-card-enter:nth-child(4) {
+  animation-delay: 180ms;
+}
+
+.dashboard-page .dashboard-stagger > .dashboard-card-enter:nth-child(5) {
+  animation-delay: 240ms;
+}
+
+.dashboard-page a.dashboard-card-enter {
+  transition: transform 180ms ease;
+}
+
+.dashboard-page a.dashboard-card-enter:hover {
+  border-color: #536ba0;
+  transform: translateY(-2px);
+}
+
+.dashboard-page .dashboard-progress-fill {
+  transform-origin: right center;
+  animation: dashboard-progress-grow 700ms ease-out both;
+}
+
+.dashboard-skeleton > span {
+  animation: dashboard-skeleton-pulse 1.4s ease-in-out infinite alternate;
+}
+
+@keyframes dashboard-fade-up {
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes dashboard-progress-grow {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes dashboard-skeleton-pulse {
+  from {
+    opacity: 0.55;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-page *,
+  .dashboard-page *::before,
+  .dashboard-page *::after {
+    animation: none !important;
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}
+
+@media print {
+  .dashboard-page *,
+  .dashboard-page *::before,
+  .dashboard-page *::after {
+    animation: none !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
 .workforce-employee-form-actions {
   display: flex;
   justify-content: flex-start;

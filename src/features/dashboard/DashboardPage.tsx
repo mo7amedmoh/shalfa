@@ -373,57 +373,37 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
 
         <article className="card dashboard-glass dashboard-card-enter dashboard-workforce-card p-5">
           <h3 className="font-extrabold text-brand-900">تغطية القوى العاملة</h3>
-          <p className="mt-1 text-xs text-slate-500">الحالة الحالية للمدارس المؤهلة؛ لا تتغير بفلاتر الخدمة أو المشرف.</p>
           {dashboard.staffingLoading ? <CardSkeleton /> : dashboard.staffingError
             ? <CardError title="تعذر تحميل تغطية القوى العاملة" message={dashboard.staffingError.message} />
             : !dashboard.staffingConfigured ? (
             <p className="mt-4 text-sm text-slate-500">إعدادات احتياج القوى العاملة غير متاحة.</p>
           ) : workforce ? (
-            <div className="dashboard-content-enter mt-4 grid gap-4">
-              <CoverageLine label="البوابون" assigned={workforce.gatekeepers.assigned} required={workforce.gatekeepers.required} formatNumber={formatNumber} />
-              <CoverageLine label="عمال النظافة" assigned={workforce.cleaners.assigned} required={workforce.cleaners.required} formatNumber={formatNumber} />
-              <p className="text-xs font-semibold text-slate-600">
-                عجز في {formatNumber(workforce.cleaners.shortageSchools)} مدرسة
-                {workforce.cleaners.netBalance > 0
-                  ? ` · عجز صافي ${formatNumber(workforce.cleaners.netBalance)}`
-                  : workforce.cleaners.netBalance < 0
-                    ? ` · فائض صافي ${formatNumber(Math.abs(workforce.cleaners.netBalance))}`
-                    : ' · التوازن الصافي مكتمل'}
+            <div className="dashboard-content-enter mt-4 grid gap-1">
+              <WorkforceProgressLine label="البوابون" assigned={workforce.gatekeepers.assigned}
+                required={workforce.gatekeepers.required} formatNumber={formatNumber}
+                tone={workforce.gatekeepers.assigned >= workforce.gatekeepers.required ? 'emerald' : 'amber'} />
+              <WorkforceProgressLine label="عمال النظافة" assigned={workforce.cleaners.assigned}
+                required={workforce.cleaners.required} formatNumber={formatNumber}
+                tone={workforce.cleaners.assigned >= workforce.cleaners.required ? 'emerald' : 'amber'} />
+              <WorkforceProgressLine label="الإجمالي المطلوب" assigned={workforce.total.assigned}
+                required={workforce.total.required} formatNumber={formatNumber} tone="brand" />
+              <p className="mt-1 text-xs text-slate-500">
+                {formatNumber(workforce.cleaners.shortageSchools)} مدرسة لديها عجز في عمال النظافة
+                {' · '}
+                {workforce.gatekeepers.shortage > 0
+                  ? `عجز ${formatNumber(workforce.gatekeepers.shortage)} بواب`
+                  : 'لا عجز في البوابين'}
               </p>
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="text-slate-500">
-                    <tr>
-                      <th scope="col" className="py-1 text-start font-semibold">حجم المدرسة</th>
-                      <th scope="col" className="px-2 py-1 text-center font-semibold">المطلوب</th>
-                      <th scope="col" className="py-1 text-center font-semibold">المعيّن</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {([
-                      ['small', 'صغيرة'],
-                      ['medium', 'متوسطة'],
-                      ['large', 'كبيرة'],
-                    ] as const).map(([size, label]) => (
-                      <tr key={size}>
-                        <th scope="row" className="py-1 text-start font-medium">{label}</th>
-                        <td className="px-2 py-1 text-center">{formatNumber(workforce.cleaners.bySize[size].required)}</td>
-                        <td className="py-1 text-center">{formatNumber(workforce.cleaners.bySize[size].assigned)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="dashboard-workforce-total">
-                <CoverageLine label="الإجمالي" assigned={workforce.total.assigned} required={workforce.total.required} formatNumber={formatNumber} />
-                <p className={`mt-2 text-xs font-bold ${workforce.total.netBalance > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                  {workforce.total.netBalance > 0
-                    ? `عجز صافي ${formatNumber(workforce.total.netBalance)}`
-                    : workforce.total.netBalance < 0
-                      ? `فائض صافي ${formatNumber(Math.abs(workforce.total.netBalance))}`
-                      : 'التغطية مكتملة'}
-                </p>
-              </div>
+              <p className={`text-xs font-bold ${workforce.total.netBalance > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                {workforce.total.netBalance > 0
+                  ? `عجز صافي ${formatNumber(workforce.total.netBalance)}`
+                  : workforce.total.netBalance < 0
+                    ? `فائض صافي ${formatNumber(Math.abs(workforce.total.netBalance))}`
+                    : 'التغطية مكتملة'}
+              </p>
+              <p className="dashboard-workforce-note text-xs text-slate-500">
+                الحالة الحالية للمدارس المؤهلة؛ لا تتغير بفلاتر الخدمة أو المشرف.
+              </p>
             </div>
           ) : (
             <p className="mt-4 text-sm text-slate-500">لا توجد بيانات تغطية.</p>
@@ -455,19 +435,34 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
                     : `آخر بطاقة: ${formatNumber(dashboard.latestKpi.month.slice(0, 7))}`}
                   {dashboard.latestKpi.contractMonth !== null && ` · الشهر التعاقدي ${formatNumber(dashboard.latestKpi.contractMonth)}`}
                 </p>
-                <div className="mt-4 grid grid-cols-2 gap-4">
-                  <Metric label="النتيجة" value={dashboard.latestKpi.scorePercent ?? undefined}
-                    formatNumber={formatNumber} decimals={1} suffix="%" tone="text-brand-900" />
-                  <Metric label="معامل الاستحقاق" value={dashboard.latestKpi.payablePercent ?? undefined}
-                    formatNumber={formatNumber} decimals={1} suffix="%" tone="text-emerald-700" />
+                <div className="dashboard-scorecard-summary mt-4">
+                  <ScoreRing value={dashboard.latestKpi.scorePercent} formatNumber={formatNumber} />
+                  <div className="grid gap-2">
+                    <span className={`dashboard-rating-chip ${dashboard.latestKpi.rating ?? 'unavailable'}`}>
+                      {dashboard.latestKpi.rating === 'excellent'
+                        ? 'تقييم: ممتاز'
+                        : dashboard.latestKpi.rating === 'average'
+                          ? 'تقييم: متوسط'
+                          : dashboard.latestKpi.rating === 'weak' ? 'تقييم: يحتاج إلى تحسين' : 'التقييم غير متاح'}
+                    </span>
+                    <p className="text-xs text-slate-500">
+                      المستحق من الفاتورة: <b className="text-slate-700">
+                        {dashboard.latestKpi.payablePercent === null
+                          ? '—'
+                          : `${formatNumber(dashboard.latestKpi.payablePercent.toFixed(0))}%`}
+                      </b>
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {dashboard.latestKpi.payablePercent === null
+                        ? 'الخصم: غير متاح'
+                        : <>
+                            {dashboard.latestKpi.contractMonth !== null
+                              && `الشهر التعاقدي ${formatNumber(dashboard.latestKpi.contractMonth)} `}
+                            (خصم {formatNumber((100 - dashboard.latestKpi.payablePercent).toFixed(0))}%)
+                          </>}
+                    </p>
+                  </div>
                 </div>
-                <p className="mt-3 text-sm text-slate-600">
-                  التصنيف: <b>{dashboard.latestKpi.rating === 'excellent'
-                    ? 'ممتاز'
-                    : dashboard.latestKpi.rating === 'average'
-                      ? 'جيد'
-                      : dashboard.latestKpi.rating === 'weak' ? 'ضعيف' : 'غير متاح'}</b>
-                </p>
               </div>
             ) : (
               <p className="mt-4 text-sm text-slate-500">لا توجد بطاقة أداء مسجلة.</p>
@@ -682,16 +677,49 @@ function ReportFollowerDashboard({
   );
 }
 
-function CoverageLine({ label, assigned, required, formatNumber }: {
+function WorkforceProgressLine({ label, assigned, required, formatNumber, tone }: {
   label: string;
   assigned: number;
   required: number;
   formatNumber: (value: number) => string;
+  tone: 'emerald' | 'amber' | 'brand';
 }) {
+  const percent = required > 0 ? Math.min(100, Math.max(0, (assigned / required) * 100)) : 100;
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-sm font-semibold text-slate-700">{label}</span>
-      <span className="text-sm text-slate-600">{formatNumber(assigned)} / {formatNumber(required)} مكلّف / مطلوب</span>
+    <div className="dashboard-workforce-row">
+      <div className="flex items-center justify-between gap-3 text-sm font-semibold text-slate-700">
+        <span>{label}</span>
+        <span dir="ltr" className="shrink-0 text-slate-500">{formatNumber(assigned)} / {formatNumber(required)}</span>
+      </div>
+      <div className="dashboard-workforce-track" role="progressbar" aria-label={label}
+        aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+        <div className={`dashboard-progress-fill ${tone}`} style={{ width: `${percent}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function ScoreRing({ value, formatNumber }: {
+  value: number | null;
+  formatNumber: (value: number) => string;
+}) {
+  const normalized = value === null ? 0 : Math.min(100, Math.max(0, value));
+  const circumference = 2 * Math.PI * 44;
+  const stroke = value === null ? '#cbd5e1' : value >= 95 ? '#17825a' : value >= 85 ? '#d79527' : '#c0392b';
+  return (
+    <div className="dashboard-score-ring" role="img"
+      aria-label={value === null ? 'نتيجة الأداء غير متاحة' : `نتيجة الأداء ${formatNumber(Number(value.toFixed(1)))}%`}>
+      <svg className="dashboard-score-ring-svg" viewBox="0 0 110 110" aria-hidden="true">
+        <circle cx="55" cy="55" r="44" fill="none" stroke="#e8ecf5" strokeWidth="12" />
+        <circle cx="55" cy="55" r="44" fill="none" stroke={stroke} strokeWidth="12"
+          strokeDasharray={`${circumference * normalized / 100} ${circumference}`}
+          transform="rotate(-90 55 55)" strokeLinecap="round" />
+      </svg>
+      <span aria-hidden="true">
+        {value === null
+          ? '—'
+          : <AnimatedNumber value={value} formatNumber={formatNumber} decimals={1} suffix="%" />}
+      </span>
     </div>
   );
 }

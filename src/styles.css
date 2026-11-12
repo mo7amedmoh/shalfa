@@ -204,68 +204,99 @@ a {
   display: none;
 }
 
-.dashboard-page .dashboard-workforce-card,
-.dashboard-page .dashboard-scorecard-card {
-  padding: 20px 22px;
-}
-
 .dashboard-page .dashboard-workforce-card > h3,
 .dashboard-page .dashboard-scorecard-card > h3 {
-  font-size: 26px;
-  line-height: 1.35;
-}
-
-.dashboard-page .dashboard-workforce-card > p {
+  margin: 0 0 14px;
   font-size: 16px;
+  font-weight: 800;
 }
 
-.dashboard-page .dashboard-workforce-card .dashboard-content-enter > p.text-xs,
-.dashboard-page .dashboard-workforce-total .text-xs {
-  font-size: 16px;
+.dashboard-workforce-row {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
-.dashboard-page .dashboard-workforce-card .dashboard-content-enter > div.flex > span {
-  font-size: 16px;
+.dashboard-workforce-track {
+  position: relative;
+  height: 9px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: #e8ecf5;
 }
 
-.dashboard-page .dashboard-workforce-total .flex > span {
-  font-size: 16px;
+.dashboard-workforce-track .dashboard-progress-fill {
+  height: 100%;
+  border-radius: inherit;
 }
 
-.dashboard-page .dashboard-workforce-card table {
-  font-size: 16px;
+.dashboard-workforce-track .emerald {
+  background: #17825a;
 }
 
-.dashboard-page .dashboard-workforce-card thead th {
-  padding-bottom: 8px;
+.dashboard-workforce-track .amber {
+  background: #d79527;
 }
 
-.dashboard-page .dashboard-workforce-card tbody th,
-.dashboard-page .dashboard-workforce-card tbody td {
-  padding-block: 5px;
+.dashboard-workforce-track .brand {
+  background: #21366a;
 }
 
-.dashboard-workforce-total {
-  margin-top: 20px;
-  padding: 24px 0 0;
-  border-top: 1px solid rgb(226 232 240 / 75%);
+.dashboard-scorecard-summary {
+  display: flex;
+  align-items: center;
+  gap: 18px;
 }
 
-.dashboard-page .dashboard-scorecard-card > div > p:first-child {
-  font-size: 18px;
+.dashboard-score-ring {
+  position: relative;
+  display: grid;
+  width: 110px;
+  height: 110px;
+  flex: 0 0 auto;
+  place-items: center;
 }
 
-.dashboard-page .dashboard-scorecard-card .grid-cols-2 > div > p:first-child {
-  font-size: 16px;
+.dashboard-score-ring-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
-.dashboard-page .dashboard-scorecard-card .text-3xl {
-  font-size: 42px;
-  line-height: 1.1;
+.dashboard-score-ring > span {
+  color: #16213d;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
 }
 
-.dashboard-page .dashboard-scorecard-card .dashboard-content-enter > p:last-child {
-  font-size: 16px;
+.dashboard-rating-chip {
+  width: fit-content;
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dashboard-rating-chip.excellent {
+  background: #dff3ea;
+  color: #0f6b47;
+}
+
+.dashboard-rating-chip.average {
+  background: #fdecc8;
+  color: #8a5200;
+}
+
+.dashboard-rating-chip.weak {
+  background: #fbdcd8;
+  color: #a3281d;
+}
+
+.dashboard-rating-chip.unavailable {
+  background: #eef1f7;
+  color: #556078;
 }
 
 .dashboard-page .dashboard-card-enter {

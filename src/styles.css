@@ -204,47 +204,68 @@ a {
   display: none;
 }
 
-.dashboard-page .dashboard-workforce-card > h3,
-.dashboard-page .dashboard-scorecard-card > h3 {
-  font-size: 20px;
+.dashboard-page .dashboard-workforce-card,
+.dashboard-page .dashboard-scorecard-card {
+  padding: 20px 22px;
 }
 
-.dashboard-page .dashboard-workforce-card > p,
+.dashboard-page .dashboard-workforce-card > h3,
+.dashboard-page .dashboard-scorecard-card > h3 {
+  font-size: 26px;
+  line-height: 1.35;
+}
+
+.dashboard-page .dashboard-workforce-card > p {
+  font-size: 16px;
+}
+
 .dashboard-page .dashboard-workforce-card .dashboard-content-enter > p.text-xs,
 .dashboard-page .dashboard-workforce-total .text-xs {
-  font-size: 14px;
+  font-size: 16px;
+}
+
+.dashboard-page .dashboard-workforce-card .dashboard-content-enter > div.flex > span {
+  font-size: 16px;
+}
+
+.dashboard-page .dashboard-workforce-total .flex > span {
+  font-size: 16px;
 }
 
 .dashboard-page .dashboard-workforce-card table {
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .dashboard-page .dashboard-workforce-card thead th {
-  padding-bottom: 6px;
+  padding-bottom: 8px;
 }
 
 .dashboard-page .dashboard-workforce-card tbody th,
 .dashboard-page .dashboard-workforce-card tbody td {
-  padding-block: 4px;
+  padding-block: 5px;
 }
 
 .dashboard-workforce-total {
-  margin-top: 8px;
-  padding: 18px 0 0;
+  margin-top: 20px;
+  padding: 24px 0 0;
   border-top: 1px solid rgb(226 232 240 / 75%);
 }
 
 .dashboard-page .dashboard-scorecard-card > div > p:first-child {
+  font-size: 18px;
+}
+
+.dashboard-page .dashboard-scorecard-card .grid-cols-2 > div > p:first-child {
   font-size: 16px;
 }
 
-.dashboard-page .dashboard-scorecard-card .text-xs {
-  font-size: 14px;
+.dashboard-page .dashboard-scorecard-card .text-3xl {
+  font-size: 42px;
+  line-height: 1.1;
 }
 
-.dashboard-page .dashboard-scorecard-card .text-3xl {
-  font-size: 36px;
-  line-height: 1.2;
+.dashboard-page .dashboard-scorecard-card .dashboard-content-enter > p:last-child {
+  font-size: 16px;
 }
 
 .dashboard-page .dashboard-card-enter {

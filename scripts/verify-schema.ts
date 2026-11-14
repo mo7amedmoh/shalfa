@@ -48,6 +48,7 @@ const appQueries: ReadonlyArray<{ label: string; table: string; select: string }
   { label: 'monthly report cleaner assignments', table: 'cleaner_assignments', select: APP_SCHEMA_SELECT.cleanerAssignmentSchool },
   { label: 'monthly report profile preferences', table: 'profiles', select: APP_SCHEMA_SELECT.profilePrefs },
   { label: 'monthly plan generator schools', table: 'schools', select: APP_SCHEMA_SELECT.schoolsPlanGenerator },
+  { label: 'report generator school search', table: 'schools', select: APP_SCHEMA_SELECT.reportSchoolSearch },
   { label: 'monthly plan list', table: 'monthly_plans', select: APP_SCHEMA_SELECT.monthlyPlanList },
   { label: 'monthly plan rows', table: 'monthly_plan_rows', select: APP_SCHEMA_SELECT.monthlyPlanRows },
   { label: 'monthly plan row mutation result', table: 'monthly_plan_rows', select: APP_SCHEMA_SELECT.id },

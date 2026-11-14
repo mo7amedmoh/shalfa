@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { z } from 'zod';
@@ -41,6 +41,8 @@ const rowSchema = z.object({
   planned_date: z.string().nullable(),
   status: z.enum(['planned', 'in_progress', 'done', 'cancelled']),
   execution_date: z.string().nullable(),
+  report_done: z.boolean(),
+  report_done_date: z.string().nullable(),
   notes: z.string().nullable(),
   contractor_name: z.string().nullable(),
   school: z.object({ school_name: z.string(), ministry_number: z.string() }).nullable(),
@@ -148,13 +150,15 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   });
 
   const updateRow = useMutation({
-    mutationFn: async ({ row, status, notes }: { row: GeneralRow; status: GeneralRow['status']; notes: string }) => {
+    mutationFn: async ({ row, status, notes, reportDone }: { row: GeneralRow; status: GeneralRow['status']; notes: string; reportDone: boolean }) => {
       if (!supabase) throw new Error('يلزم إعداد Supabase.');
       const parsedNotes = z.string().max(2000).safeParse(notes);
       if (!parsedNotes.success) throw new Error('يجب ألا تتجاوز الملاحظات 2000 خانة.');
       const { error } = await supabase.from('general_plan_rows').update({
         status: status === 'complete' ? 'done' : status === 'pending' ? 'planned' : status,
         execution_date: status === 'complete' ? localToday() : null,
+        report_done: reportDone,
+        report_done_date: reportDone ? row.report_done_date ?? localToday() : null,
         notes: notes.trim() || null,
       }).eq('id', row.id);
       if (error) throw error;
@@ -181,7 +185,8 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
       const ids = (plansToDelete ?? []).map((item) => item.id);
       const currentRows = (rows.data ?? []);
       const visited = currentRows.filter((row) => row.execution_date).length;
-      const answer = window.prompt(`سيتم حذف ${currentRows.length} صفاً، ${visited} زيارة، ${visited} تقريراً. اكتب حذف للتأكيد.`);
+      const reports = currentRows.filter((row) => row.report_done).length;
+      const answer = window.prompt(`سيتم حذف ${currentRows.length} صفاً، ${visited} زيارة، ${reports} تقريراً. اكتب حذف للتأكيد.`);
       if (answer !== 'حذف') throw new Error('لم يتم تأكيد الحذف.');
       const XLSX = await loadXlsx();
       const book = XLSX.utils.book_new();
@@ -242,8 +247,8 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
         </div>
         {rows.isLoading ? <p role="status">جارٍ تحميل السجلات…</p> : totalCount === 0 ? <p className="rounded-lg bg-slate-50 p-5 text-center text-sm text-slate-500">لا توجد مهام مسجلة لهذه الخطة.</p> : (
           <div className="table-scroll"><table>
-            <thead><tr><th>المدرسة</th><th>التاريخ المخطط</th><th>المقاول</th><th>الحالة</th><th>تاريخ الإنجاز</th><th>الملاحظات</th><th>إجراء</th></tr></thead>
-            <tbody>{(rows.data ?? []).map((row) => <GeneralPlanRow key={row.id} row={row} onSave={(status, notes) => updateRow.mutate({ row, status, notes })} onDelete={() => deletePlan.mutate({ rowId: row.id })} disabled={!canManage || updateRow.isPending} />)}</tbody>
+            <thead><tr><th>المدرسة</th><th>التاريخ المخطط</th><th>المقاول</th><th>حالة التنفيذ</th><th>تاريخ الإنجاز</th><th>حالة التقرير</th><th>تاريخ إنجاز التقرير</th><th>الملاحظات</th><th>إجراء</th></tr></thead>
+            <tbody>{(rows.data ?? []).map((row) => <GeneralPlanRow key={row.id} row={row} onSave={(status, notes, reportDone) => updateRow.mutate({ row, status, notes, reportDone })} onDelete={() => deletePlan.mutate({ rowId: row.id })} disabled={!canManage || updateRow.isPending} />)}</tbody>
           </table></div>
         )}
       </section>
@@ -251,16 +256,20 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   );
 }
 
-function GeneralPlanRow({ row, onSave, onDelete, disabled }: { row: GeneralRow; onSave: (status: GeneralRow['status'], notes: string) => void; onDelete?: () => void; disabled: boolean }) {
+function GeneralPlanRow({ row, onSave, onDelete, disabled }: { row: GeneralRow; onSave: (status: GeneralRow['status'], notes: string, reportDone: boolean) => void; onDelete?: () => void; disabled: boolean }) {
   const [status, setStatus] = useState(row.status);
   const [notes, setNotes] = useState(row.notes ?? '');
+  const [reportDone, setReportDone] = useState(row.report_done);
+  useEffect(() => setReportDone(row.report_done), [row.report_done]);
   return <tr>
     <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small></td>
     <td>{row.planned_date}</td>
     <td>{row.contractor_name ?? '—'}</td>
     <td><select value={status} onChange={(event) => { if (event.target.value === 'pending' || event.target.value === 'in_progress' || event.target.value === 'complete') setStatus(event.target.value); }} disabled={disabled} className="rounded border border-slate-300 px-2 py-1"><option value="pending">لم يبدأ</option><option value="in_progress">جارٍ</option><option value="complete">مكتمل</option></select></td>
     <td>{row.completed_at ?? '—'}</td>
+    <td><select value={reportDone ? 'done' : 'pending'} onChange={(event) => setReportDone(event.target.value === 'done')} disabled={disabled} className="rounded border border-slate-300 px-2 py-1"><option value="pending">لم ينجز</option><option value="done">تم إنجاز التقرير</option></select></td>
+    <td>{row.report_done_date ?? '—'}</td>
     <td><input value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={2000} disabled={disabled} className="max-w-40 rounded border border-slate-300 px-2 py-1" /></td>
-    <td><button type="button" onClick={() => onSave(status, notes)} disabled={disabled} className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-50">حفظ</button>{onDelete && <button type="button" onClick={onDelete} className="ms-2 text-xs text-rose-700 underline">حذف</button>}</td>
+    <td><button type="button" onClick={() => onSave(status, notes, reportDone)} disabled={disabled} className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-50">حفظ</button>{onDelete && <button type="button" onClick={onDelete} className="ms-2 text-xs text-rose-700 underline">حذف</button>}</td>
   </tr>;
 }

@@ -13,11 +13,11 @@
 | React Hook Form | إدارة حقول نموذج الدخول والتحقق قبل الإرسال |
 | Supabase JS | Auth وPostgres وRLS وStorage على الخطة المجانية |
 | Zod | التحقق من بيانات الإعدادات والمدخلات |
-| PapaParse | قراءة CSV من Google Visualization |
 | Leaflet وReact Leaflet | خريطة المدارس مع OpenStreetMap |
 | React Leaflet Cluster | تجميع علامات المدارس عند تقاربها بالخريطة |
 | Recharts | رسوم مؤشرات الأداء وتقارير الخطط |
 | SheetJS (`xlsx`) | قراءة ملفات KPI الرسمية، واستيراد Excel داخل المتصفح، وتبادل Excel؛ يؤخذ الإصدار 0.20.3 من CDN الرسمي لأن سجل npm لا يحدّث الحزمة بعد 0.18.5 المتأثرة بتحذيرات أمنية |
+| JSZip | تعديل ملفات Office OOXML مباشرةً للحفاظ على محتوى قوالب التقارير، بما فيه الرسومات والصور |
 | npm override لـ `minimatch` | تثبيت الإصدار المصحح 11.0.1 لإزالة تحذير DoS متوسط في سلسلة ESLint/TypeScript ESLint؛ تم التحقق من نجاح lint وbuild بعد التغيير |
 | Lucide React | أيقونات واجهة متسقة |
 | Vitest | اختبارات وحدات منطق النطاق |

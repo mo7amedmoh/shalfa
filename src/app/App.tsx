@@ -14,6 +14,7 @@ import { defaultPreferences, loadUserPreferences } from '../lib/preferences';
 import { PreferencesProvider } from './PreferencesProvider';
 import type { PlanType } from '../domain/types';
 import { buildCustomMenu, customPlanTypeSchema, type CustomPlanType } from '../domain/customPlans';
+import { canUseReportTools, reportTools } from '../domain/reportTools';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
 
 const SchoolsPage = lazy(() =>
@@ -78,6 +79,12 @@ const StaffingRulesSettingsPage = lazy(() =>
 );
 const TicketAnalysisPage = lazy(() =>
   import('../features/tickets/TicketAnalysisPage').then((module) => ({ default: module.TicketAnalysisPage })),
+);
+const ReportToolsPage = lazy(() =>
+  import('../features/reports/ReportToolsPage').then((module) => ({ default: module.ReportToolsPage })),
+);
+const ReportGeneratorPage = lazy(() =>
+  import('../features/reports/ReportGeneratorPage').then((module) => ({ default: module.ReportGeneratorPage })),
 );
 const monthlyPlanTypes: readonly PlanType[] = ['maintenance', 'cleaning', 'security_safety', 'elevators'];
 
@@ -205,6 +212,7 @@ function AppShell({
   const isAdmin = profile?.role === 'admin';
   const canCreateCustom = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
   const canManagePlanNames = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
+  const canAccessReportTools = canUseReportTools(profile?.role);
   const customTypes = useQuery({
     queryKey: ['custom-plan-types'],
     queryFn: async () => {
@@ -241,6 +249,11 @@ function AppShell({
     if (location.pathname.startsWith('/plans/')) return 'الخطط الشهرية';
     if (location.pathname.startsWith('/kpi/')) return 'مؤشرات الأداء';
     if (location.pathname.startsWith('/placement/')) return 'أعمال إدارية';
+    if (location.pathname.startsWith('/tools/reports/')) {
+      const toolId = location.pathname.split('/').at(-1);
+      return reportTools.find((tool) => tool.id === toolId)?.label ?? 'منجز التقارير';
+    }
+    if (location.pathname === '/tools/reports') return 'منجز التقارير';
     if (location.pathname === '/tools/ticket-analysis') return 'تحليل البلاغات';
     if (location.pathname === '/admin/settings' || location.pathname.startsWith('/admin/settings/')) return 'الإعدادات';
     if (location.pathname === '/admin/school-cleanup') return 'تنظيف المدارس';
@@ -326,13 +339,21 @@ function AppShell({
                     <UserRound size={17} />
                     <span>حسابي</span>
                   </NavLink>
-                  {canManagePlanNames && (
+                  {(canManagePlanNames || canAccessReportTools) && (
                     <div className="border-t border-slate-100 pt-2">
                       <p className="px-3 pb-1 text-xs font-bold text-slate-500">أدواتي</p>
-                      <NavLink to="/tools/ticket-analysis" className="nav-link min-h-9 text-sm" onClick={() => setProfileMenuOpen(false)}>
-                        <FileText size={17} />
-                        <span>تحليل البلاغات</span>
-                      </NavLink>
+                      {canAccessReportTools && (
+                        <NavLink to="/tools/reports" className="nav-link min-h-9 text-sm" onClick={() => setProfileMenuOpen(false)}>
+                          <FileText size={17} />
+                          <span>منجز التقارير</span>
+                        </NavLink>
+                      )}
+                      {canManagePlanNames && (
+                        <NavLink to="/tools/ticket-analysis" className="nav-link min-h-9 text-sm" onClick={() => setProfileMenuOpen(false)}>
+                          <FileText size={17} />
+                          <span>تحليل البلاغات</span>
+                        </NavLink>
+                      )}
                     </div>
                   )}
                   <button type="button" onClick={onSignOut} className="nav-link min-h-9 text-sm text-rose-700">
@@ -374,6 +395,8 @@ function AppShell({
               <Route path="/kpi/:type" element={<ModulePage section="kpi" profile={profile} />} />
               <Route path="/account" element={<AccountPage profile={profile} />} />
               <Route path="/tools/ticket-analysis" element={canManagePlanNames ? <TicketAnalysisPage /> : <Navigate to="/" replace />} />
+              <Route path="/tools/reports" element={canAccessReportTools ? <ReportToolsPage /> : <Navigate to="/" replace />} />
+              <Route path="/tools/reports/:toolId" element={canAccessReportTools ? <ReportGeneratorPage /> : <Navigate to="/" replace />} />
               <Route path="/admin/users" element={isAdmin ? <AdminUsersPage /> : <Navigate to="/" replace />} />
               <Route path="/admin/audit" element={isAdmin ? <AuditLogPage /> : <Navigate to="/" replace />} />
               <Route path="/admin/school-cleanup" element={isAdmin ? <SchoolCleanupPage /> : <Navigate to="/" replace />} />

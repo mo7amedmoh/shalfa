@@ -313,6 +313,14 @@ function AppShell({
               </section>
             );
           })}
+          {canAccessReportTools && (
+            <div className="mt-3 border-t border-slate-100 pt-3">
+              <NavLink to="/tools/reports" className="nav-link" end>
+                <FileText size={19} />
+                <span>منجز التقارير</span>
+              </NavLink>
+            </div>
+          )}
           {isAdmin || canCreateCustom ? <div className="mt-3 border-t border-slate-100 pt-3">
             {canManagePlanNames && adminNavigation.filter((item) => item.path !== '/admin/audit' || isAdmin).map(({ label, path, icon: Icon }) => (
               <NavLink key={path} to={path} className="nav-link"><Icon size={19} /><span>{label}</span></NavLink>

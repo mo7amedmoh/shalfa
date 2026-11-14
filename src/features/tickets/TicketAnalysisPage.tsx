@@ -10,7 +10,6 @@ import {
   countTicketDataWarnings,
   deduplicateTicketRecords,
   filterTicketRecordsByCreatedMonth,
-  filterTicketRecordsThroughMonth,
   parseTicketRows,
   type TicketAnalysis,
   type TicketDataWarnings,
@@ -108,12 +107,11 @@ async function analyzeSpreadsheets(
   const tickets = attachSchoolSupervisors(allTickets, schoolSources);
   const currentMonth = currentUtcMonth();
   const currentTickets = filterTicketRecordsByCreatedMonth(tickets, currentMonth);
-  const trendTickets = filterTicketRecordsThroughMonth(tickets, currentMonth);
   return {
     analyzedAt: new Date(),
     analysis: analyzeTickets(currentTickets, currentTickets.some((ticket) => Boolean(ticket.supervisor))),
     warnings: countTicketDataWarnings(currentTickets),
-    slaTrend: buildTicketSlaTrend(trendTickets, currentMonth),
+    slaTrend: buildTicketSlaTrend(tickets, currentMonth),
     currentMonth,
     filesCount: files.length,
     unmatchedSupervisorTickets: currentTickets.filter((ticket) => !ticket.supervisor).length,
@@ -311,7 +309,7 @@ export function TicketAnalysisPage() {
         <section className="card grid justify-items-center gap-2 p-8 text-center text-slate-500">
           <FileSpreadsheet size={28} className="text-brand-600" />
           <p className="font-semibold">ارفع ملفًا أو أكثر من ملفات البلاغات لعرض التحليل.</p>
-          <p className="text-xs">تقتصر مؤشرات البلاغات على الشهر الحالي، مع مقارنة تراكمية للالتزام بـ SLA عبر الأشهر المتاحة.</p>
+          <p className="text-xs">تقتصر مؤشرات البلاغات على الشهر الحالي، مع رسم نسبة اختراق SLA شهريًا عبر الأشهر المتاحة.</p>
         </section>
       )}
 
@@ -466,19 +464,14 @@ function TicketReport({
     ),
     'sla-trend': (
       <section className="report-design-card">
-        <h2 className="report-design-title">مقارنة الالتزام التراكمي بـ SLA</h2>
+        <h2 className="report-design-title">نسبة اختراق SLA شهريًا</h2>
         <p className="mb-2 text-xs leading-5 text-slate-500">
-          يقارن الرسم نسبة الالتزام الشهرية بالنسبة التراكمية منذ أول شهر متاح؛ يشمل التحذير ضمن الملتزم ويستثني حالات SLA غير المحددة.
+          تُحسب النسبة من حالات الاختراق في عمود «حالة SLM» إلى جميع حالات SLM المعروفة لكل شهر؛ تُستثنى الحالة غير المحددة.
         </p>
         {report.slaTrend.length ? (
-          <>
-            <TicketSlaChart points={report.slaTrend} formatNumber={formatNumber} />
-            <p className="mt-1 text-[11px] text-slate-500">
-              عدد البلاغات ذات حالة SLA معروفة في الشهر الحالي: {formatNumber(report.slaTrend.at(-1)?.assessed ?? 0)}.
-            </p>
-          </>
+          <TicketSlaChart points={report.slaTrend} currentMonth={report.currentMonth} formatNumber={formatNumber} />
         ) : (
-          <p className="report-empty text-sm">لا توجد بيانات SLA مؤرخة لإنشاء المقارنة.</p>
+          <p className="report-empty text-sm">لا توجد بيانات SLM مؤرخة لإنشاء الرسم.</p>
         )}
       </section>
     ),
@@ -486,7 +479,7 @@ function TicketReport({
       <section className="report-design-card">
         <h2 className="report-design-title">حالة البلاغات وSLA حسب المشرف</h2>
         {report.unmatchedSupervisorTickets > 0 && (
-          <p className="mb-3 text-xs text-amber-800">
+          <p className="no-print mb-3 text-xs text-amber-800">
             لم يُحدد مشرف لـ {formatNumber(report.unmatchedSupervisorTickets)} بلاغًا بسبب نقص بيانات المشرف أو عدم تطابق رقم المدرسة.
           </p>
         )}
@@ -620,9 +613,11 @@ function TicketReport({
 
 function TicketSlaChart({
   points,
+  currentMonth,
   formatNumber,
 }: {
   points: readonly TicketSlaTrendPoint[];
+  currentMonth: string;
   formatNumber: (value: string | number) => string;
 }) {
   const left = 70;
@@ -634,10 +629,10 @@ function TicketSlaChart({
     ? (left + right) / 2
     : left + ((right - left) * index) / lastIndex;
   const yForValue = (value: number) => bottom - ((bottom - top) * value) / 100;
-  const linePath = (key: 'monthlyCompliancePercent' | 'cumulativeCompliancePercent') => {
+  const linePath = () => {
     let activeSegment = false;
     return points.map((point, index) => {
-      const value = point[key];
+      const value = point.monthlyBreachPercent;
       if (value === null) {
         activeSegment = false;
         return '';
@@ -651,23 +646,27 @@ function TicketSlaChart({
   const tickIndices = [...new Set(Array.from({ length: tickCount }, (_, index) => (
     Math.round((lastIndex * index) / Math.max(1, tickCount - 1))
   )))];
-  const currentX = xForIndex(lastIndex);
-  const pillWidth = 170;
-  const pillX = Math.min(right - pillWidth, Math.max(left, currentX - pillWidth / 2));
+  const currentIndex = points.findIndex(({ month }) => month === currentMonth);
+  const currentX = currentIndex < 0 ? null : xForIndex(currentIndex);
+  const currentRate = points[currentIndex]?.monthlyBreachPercent ?? null;
+  const currentRateLabel = currentRate === null ? '—' : `${formatNumber(currentRate.toFixed(1))}%`;
+  const pillWidth = 250;
+  const pillX = currentX === null
+    ? null
+    : Math.min(right - pillWidth, Math.max(left, currentX - pillWidth / 2));
   const yTicks = [0, 25, 50, 75, 100];
 
   return (
     <>
       <div className="report-legend report-chart-legend ticket-sla-legend">
-        <span><i className="green" /> الالتزام الشهري</span>
-        <span><i className="navy" /> الالتزام التراكمي</span>
+        <span><i className="red" /> نسبة الاختراق الشهرية</span>
       </div>
       <svg
         className="report-line-chart ticket-sla-svg"
         viewBox="0 0 1000 310"
         preserveAspectRatio="none"
         role="img"
-        aria-label="نسبة الالتزام الشهرية والتراكمية بـ SLA"
+        aria-label="نسبة اختراق SLA الشهرية"
       >
         <g fill="none" stroke="#e5eaf2" strokeWidth="1">
           {yTicks.map((tick) => {
@@ -675,11 +674,22 @@ function TicketSlaChart({
             return <line key={tick} x1={left} y1={y} x2={right} y2={y} />;
           })}
         </g>
-        <path d={linePath('monthlyCompliancePercent')} fill="none" stroke="#2f9b72" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-        <path d={linePath('cumulativeCompliancePercent')} fill="none" stroke="#21366a" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-        <line x1={currentX} y1="42" x2={currentX} y2={bottom} fill="none" stroke="#b7c1d3" strokeWidth="1.5" strokeDasharray="4 4" />
-        <rect x={pillX} y="2" width={pillWidth} height="38" rx="19" fill="#21366a" />
-        <text x={pillX + pillWidth / 2} y="27" textAnchor="middle" fill="#ffffff" fontSize="18" fontFamily="Cairo, sans-serif">الشهر الحالي</text>
+        <path d={linePath()} fill="none" stroke="#c0392b" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+        {points.map((point, index) => point.monthlyBreachPercent === null ? null : (
+          <circle key={`monthly-${point.month}`} cx={xForIndex(index)} cy={yForValue(point.monthlyBreachPercent)} r="4" fill="#c0392b">
+            <title>{`${formatMonthLabel(point.month)} · نسبة الاختراق الشهرية ${formatNumber(point.monthlyBreachPercent.toFixed(1))}% · ${formatNumber(point.assessed)} بلاغ`}</title>
+          </circle>
+        ))}
+        {currentX !== null && pillX !== null && (
+          <>
+            <line x1={currentX} y1="42" x2={currentX} y2={bottom} fill="none" stroke="#b7c1d3" strokeWidth="1.5" strokeDasharray="4 4" />
+            <rect x={pillX} y="2" width={pillWidth} height="38" rx="19" fill="#21366a" />
+            <text x={pillX + pillWidth / 2} y="27" textAnchor="middle" direction="rtl" fill="#ffffff" fontSize="16" fontFamily="Cairo, sans-serif">
+              <tspan>الشهر الحالي: </tspan>
+              <tspan direction="ltr" style={{ unicodeBidi: 'isolate' }}>{currentRateLabel}</tspan>
+            </text>
+          </>
+        )}
         {yTicks.map((tick) => {
           const y = yForValue(tick);
           return (

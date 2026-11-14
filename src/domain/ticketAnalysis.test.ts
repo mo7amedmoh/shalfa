@@ -27,6 +27,71 @@ const headers = {
 };
 
 describe('parseTicketRows', () => {
+  it('renames the requested category level 3 values within their category level 2', () => {
+    const categoryMappings = [
+      ['الصيانة', 'أعمال مدنية', 'أعمال مدنية'],
+      ['الصيانة', 'أعمال سباكة', 'أعمال سباكة'],
+      ['الصيانة', 'صيانة الأعمال الصحية', 'أعمال سباكة'],
+      ['الصيانة', 'بلاغات صيانة العناصر المعمارية والمدنية', 'أعمال مدنية'],
+      ['التكييف', 'بلاغات صيانة أجهزة التكييف', 'أعمال التكييف'],
+      ['أعمال الصيانة', 'صيانة الأعمال الكهربائية', 'أعمال كهرباء'],
+      ['الصيانة', 'بلاغات صيانة نظام الانذار ومكافحة الحريق', 'امن و سلامة'],
+      ['الصيانة', 'بلاغات صيانة الاعمال الكهربائية', 'أعمال كهرباء'],
+      ['الصيانة', 'المصاعد والسلالم الكهربائية', 'مصاعد'],
+      ['النظافة', 'خدمات النظافة', 'أعمال نظافة'],
+      ['الصيانة', 'بلاغات صيانة الاعمال الصحية', 'أعمال سباكة'],
+      ['الصيانة', 'أعمال كهربائية', 'أعمال كهرباء'],
+      ['النظافة', 'بلاغات أعمال النظافة العامة', 'أعمال نظافة'],
+      ['الصيانة', 'بلاغات صيانة أنظمة المراقبة', 'أنظمة مراقبة'],
+      ['الصيانة', 'الأنظمة الصوتية', 'أنظمة صوتية'],
+      ['النظافة', 'استفسارات اعمال النظافة العامة', 'أعمال نظافة'],
+      ['التكييف', 'بلاغات نظافة أجهزة التكييف', 'أعمال التكييف'],
+      ['الصيانة', 'بلاغات صيانة الأعمال الميكانيكية', 'اعمال ميكانيكية'],
+      ['الصيانة', 'بلاغات صيانة المصاعد والسلالم الكهربائية', 'مصاعد'],
+    ];
+    const parsed = parseTicketRows(categoryMappings.map(([group, category], index) => ({
+      [headers.id]: `CATEGORY-${index}`,
+      [headers.priority]: 'متوسط',
+      [headers.status]: 'قيد التنفيذ',
+      [headers.slaStatus]: 'ضمن المهلة',
+      'الطبقة 2 للفئة': group,
+      [headers.category]: category,
+      [headers.schoolName]: 'مدرسة',
+      [headers.createdAt]: '10/11/2026',
+    })));
+
+    expect(parsed.tickets.map(({ category }) => category)).toEqual(categoryMappings.map(([, , renamed]) => renamed));
+  });
+
+  it('renames known categories when the upload omits category level 2', () => {
+    const parsed = parseTicketRows([{
+      [headers.id]: 'CATEGORY-WITHOUT-GROUP',
+      [headers.priority]: 'متوسط',
+      [headers.status]: 'قيد التنفيذ',
+      [headers.slaStatus]: 'ضمن المهلة',
+      [headers.category]: 'صيانة الأعمال الصحية',
+      [headers.schoolName]: 'مدرسة',
+      [headers.createdAt]: '10/11/2026',
+    }]);
+
+    expect(parsed.tickets[0].category).toBe('أعمال سباكة');
+  });
+
+  it('renames sanitary maintenance work even when its category group differs', () => {
+    const parsed = parseTicketRows([{
+      [headers.id]: 'SANITARY-MAINTENANCE',
+      [headers.priority]: 'متوسط',
+      [headers.status]: 'قيد التنفيذ',
+      [headers.slaStatus]: 'ضمن المهلة',
+      'الطبقة 2 للفئة': 'أعمال الصيانة',
+      [headers.category]: 'صيانة الأعمال الصحية',
+      [headers.schoolName]: 'مدرسة',
+      [headers.createdAt]: '10/11/2026',
+    }]);
+
+    expect(parsed.tickets[0].category).toBe('أعمال سباكة');
+  });
+
   it('maps the sample Arabic headers and parses Arabic locale date values', () => {
     const parsed = parseTicketRows([{
       [headers.id]: 'CASE-1',
@@ -68,27 +133,28 @@ describe('parseTicketRows', () => {
 });
 
 describe('analyzeTickets', () => {
-  it('builds monthly and cumulative SLA compliance from the uploaded ticket dates', () => {
+  it('builds monthly SLA breach percentages from the uploaded ticket dates', () => {
     const parsed = parseTicketRows([
       { [headers.id]: 'A', [headers.priority]: 'متوسط', [headers.status]: 'تم حله', [headers.slaStatus]: 'ضمن المهلة', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '10/08/2026' },
-      { [headers.id]: 'B', [headers.priority]: 'متوسط', [headers.status]: 'تم حله', [headers.slaStatus]: 'تجاوز المهلة', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '11/08/2026' },
+      { [headers.id]: 'B', [headers.priority]: 'متوسط', [headers.status]: 'تم حله', [headers.slaStatus]: 'تم اختراقه', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '11/08/2026' },
       { [headers.id]: 'C', [headers.priority]: 'متوسط', [headers.status]: 'قيد التنفيذ', [headers.slaStatus]: 'تحذير', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '12/09/2026' },
       { [headers.id]: 'D', [headers.priority]: 'متوسط', [headers.status]: 'قيد التنفيذ', [headers.slaStatus]: 'تجاوز المهلة', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '12/11/2026' },
+      { [headers.id]: 'E', [headers.priority]: 'متوسط', [headers.status]: 'قيد التنفيذ', [headers.slaStatus]: 'ضمن المهلة', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '12/12/2026' },
+      { [headers.id]: 'F', [headers.priority]: 'متوسط', [headers.status]: 'قيد التنفيذ', [headers.slaStatus]: 'تجاوز المهلة', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '13/12/2026' },
     ]);
 
     const trend = buildTicketSlaTrend(parsed.tickets, '2026-11');
-    expect(trend.map(({ month, assessed, monthlyCompliancePercent }) => (
-      { month, assessed, monthlyCompliancePercent }
+    expect(trend.map(({ month, assessed, monthlyBreachPercent }) => (
+      { month, assessed, monthlyBreachPercent }
     ))).toEqual([
-      { month: '2026-08', assessed: 2, monthlyCompliancePercent: 50 },
-      { month: '2026-09', assessed: 1, monthlyCompliancePercent: 100 },
-      { month: '2026-10', assessed: 0, monthlyCompliancePercent: null },
-      { month: '2026-11', assessed: 1, monthlyCompliancePercent: 0 },
+      { month: '2026-08', assessed: 2, monthlyBreachPercent: 50 },
+      { month: '2026-09', assessed: 1, monthlyBreachPercent: 0 },
+      { month: '2026-10', assessed: 0, monthlyBreachPercent: null },
+      { month: '2026-11', assessed: 1, monthlyBreachPercent: 100 },
+      { month: '2026-12', assessed: 2, monthlyBreachPercent: 50 },
     ]);
-    expect(trend[0].cumulativeCompliancePercent).toBe(50);
-    expect(trend[1].cumulativeCompliancePercent).toBeCloseTo(200 / 3);
-    expect(trend[2].cumulativeCompliancePercent).toBeCloseTo(200 / 3);
-    expect(trend[3].cumulativeCompliancePercent).toBe(50);
+    expect(trend[3]).toMatchObject({ breached: 1 });
+    expect(trend[4]).toMatchObject({ breached: 1 });
   });
 
   it('filters current-month results while retaining prior-months for the SLA trend', () => {

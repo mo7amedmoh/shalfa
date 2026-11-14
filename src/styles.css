@@ -460,6 +460,58 @@ a {
   opacity: 0.65;
 }
 
+.workforce-page {
+  width: 100%;
+}
+
+.workforce-page > * {
+  min-width: 0;
+}
+
+.workforce-table-scroll {
+  width: 100%;
+  overscroll-behavior-inline: contain;
+}
+
+.workforce-table {
+  width: 100%;
+  min-width: 720px;
+  table-layout: fixed;
+  font-size: 0.8rem;
+}
+
+.workforce-table th,
+.workforce-table td {
+  padding: 8px 10px;
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.workforce-employee-table {
+  min-width: 820px;
+}
+
+.workforce-shared-table {
+  min-width: 640px;
+}
+
+.workforce-shared-table th:first-child,
+.workforce-shared-table td:first-child {
+  width: 190px;
+}
+
+@media (max-width: 639px) {
+  .workforce-table {
+    font-size: 0.75rem;
+  }
+
+  .workforce-table th,
+  .workforce-table td {
+    padding: 7px;
+  }
+}
+
 @media (max-width: 639px) {
   .workforce-employee-form-actions,
   .workforce-save-employee-button {
@@ -1388,6 +1440,7 @@ th {
 .report-legend { margin-top: 12px; }.report-legend i, .report-supervisor-legend i, .report-donut-key i { display: inline-block; width: 10px; height: 10px; margin-inline-end: 5px; border-radius: 2px; }
 .report-formula { margin: 8px 0 0; color: #55617f; font-size: 12px; }
 .report-legend .green, .report-supervisor-legend .green, .report-donut-key .green { background: #17825a; }.report-legend .navy { background: #21366a; }.report-supervisor-legend .red { background: #c0392b; }.report-supervisor-legend .empty, .report-donut-key .empty { background: #c9d1e3; }.report-legend .dash { border-top: 2px dashed #b86e00; }
+.ticket-sla-legend .red { background: #c0392b; }
 .report-summary-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
 .report-summary-card { min-height: 104px; padding: 18px 20px; border: 1px solid #e3e8f2; border-top: 4px solid #21366a; border-radius: 16px; background: #fff; }
 .report-summary-card span { color: #55617f; font-size: 12px; }.report-summary-card b { display: block; margin-top: 6px; color: #16213d; font-size: 32px; line-height: 1.1; }.report-summary-card.green { border-top-color: #17825a; }.report-summary-card.green b { color: #17825a; }.report-summary-card.red { border-top-color: #c0392b; }.report-summary-card.red b { color: #c0392b; }.report-summary-card.amber { border-top-color: #d79527; }.report-summary-card.amber b { color: #b86e00; }

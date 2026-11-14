@@ -130,8 +130,8 @@ export interface TicketAnalysis {
 export interface TicketSlaTrendPoint {
   month: string;
   assessed: number;
-  monthlyCompliancePercent: number | null;
-  cumulativeCompliancePercent: number | null;
+  breached: number;
+  monthlyBreachPercent: number | null;
 }
 
 export interface TicketSchoolSupervisorSource {
@@ -180,6 +180,48 @@ const requiredFields: readonly TicketField[] = [
   'schoolName',
   'createdAt',
 ];
+
+const ticketCategoryRenameEntries = [
+  ['الصيانة', 'أعمال مدنية', 'أعمال مدنية'],
+  ['الصيانة', 'أعمال سباكة', 'أعمال سباكة'],
+  ['الصيانة', 'صيانة الأعمال الصحية', 'أعمال سباكة'],
+  ['الصيانة', 'بلاغات صيانة العناصر المعمارية والمدنية', 'أعمال مدنية'],
+  ['التكييف', 'بلاغات صيانة أجهزة التكييف', 'أعمال التكييف'],
+  ['أعمال الصيانة', 'صيانة الأعمال الكهربائية', 'أعمال كهرباء'],
+  ['الصيانة', 'بلاغات صيانة نظام الانذار ومكافحة الحريق', 'امن و سلامة'],
+  ['الصيانة', 'بلاغات صيانة الاعمال الكهربائية', 'أعمال كهرباء'],
+  ['الصيانة', 'المصاعد والسلالم الكهربائية', 'مصاعد'],
+  ['النظافة', 'خدمات النظافة', 'أعمال نظافة'],
+  ['الصيانة', 'بلاغات صيانة الاعمال الصحية', 'أعمال سباكة'],
+  ['الصيانة', 'أعمال كهربائية', 'أعمال كهرباء'],
+  ['النظافة', 'بلاغات أعمال النظافة العامة', 'أعمال نظافة'],
+  ['الصيانة', 'بلاغات صيانة أنظمة المراقبة', 'أنظمة مراقبة'],
+  ['الصيانة', 'الأنظمة الصوتية', 'أنظمة صوتية'],
+  ['النظافة', 'استفسارات اعمال النظافة العامة', 'أعمال نظافة'],
+  ['التكييف', 'بلاغات نظافة أجهزة التكييف', 'أعمال التكييف'],
+  ['الصيانة', 'بلاغات صيانة الأعمال الميكانيكية', 'اعمال ميكانيكية'],
+  ['الصيانة', 'بلاغات صيانة المصاعد والسلالم الكهربائية', 'مصاعد'],
+] as const;
+
+const ticketCategoryRenames = new Map<string, string>(ticketCategoryRenameEntries.map(
+  ([group, category, renamed]): [string, string] => [
+    `${normalizedText(group)}|${normalizedText(category)}`,
+    renamed,
+  ],
+));
+const ticketCategoryRenamesWithoutGroup = new Map<string, string>(ticketCategoryRenameEntries.map(
+  ([, category, renamed]): [string, string] => [normalizedText(category), renamed],
+));
+
+function renameTicketCategory(categoryGroup: string, category: string): string {
+  const normalizedCategory = normalizedText(category);
+  if (categoryGroup) {
+    const key = `${normalizedText(categoryGroup)}|${normalizedCategory}`;
+    const groupSpecificRename = ticketCategoryRenames.get(key);
+    if (groupSpecificRename) return groupSpecificRename;
+  }
+  return ticketCategoryRenamesWithoutGroup.get(normalizedCategory) ?? category;
+}
 
 const schoolNumberHeaders = new Set([
   'رقم المدرسة',
@@ -386,7 +428,7 @@ export function parseTicketRows(rows: readonly Record<string, unknown>[]): Parse
       status: status || 'غير محدد',
       slaStatus: slaStatus || 'غير محدد',
       categoryGroup,
-      category: category || 'غير مصنف',
+      category: category ? renameTicketCategory(categoryGroup, category) : 'غير مصنف',
       schoolNumber,
       schoolName: schoolName || 'مدرسة غير محددة',
       supervisor,
@@ -479,7 +521,15 @@ function ticketState(status: string): TicketState {
 
 function slaState(status: string): SlaState {
   const text = normalizedText(status);
-  if (text.includes('مخترق') || text.includes('تجاوز') || text.includes('متاخر') || text.includes('breach') || text.includes('overdue')) return 'breached';
+  if (
+    text.includes('مخترق')
+    || text.includes('اختراق')
+    || text.includes('اخترق')
+    || text.includes('تجاوز')
+    || text.includes('متاخر')
+    || text.includes('breach')
+    || text.includes('overdue')
+  ) return 'breached';
   if (text.includes('تحذير') || text.includes('warning')) return 'warning';
   if (text.includes('ضمن المهلة') || text.includes('within') || text.includes('compliant') || text.includes('on time')) return 'within';
   return 'unknown';
@@ -495,7 +545,6 @@ export function buildTicketSlaTrend(
   for (const ticket of tickets) {
     if (!ticket.createdAt) continue;
     const month = ticket.createdAt.toISOString().slice(0, 7);
-    if (month > throughMonth) continue;
     const counts = monthly.get(month) ?? { within: 0, warning: 0, breached: 0 };
     const state = slaState(ticket.slaStatus);
     if (state === 'within') counts.within += 1;
@@ -507,22 +556,19 @@ export function buildTicketSlaTrend(
   if (!firstMonth) return [];
 
   const [firstYear, firstMonthNumber] = firstMonth.split('-').map(Number);
+  const latestDataMonth = [...monthly.keys()].sort().at(-1);
+  const finalMonth = latestDataMonth && latestDataMonth > throughMonth ? latestDataMonth : throughMonth;
   const cursor = new Date(Date.UTC(firstYear, firstMonthNumber - 1, 1));
-  const cumulative = { compliant: 0, assessed: 0 };
   const trend: TicketSlaTrendPoint[] = [];
-  while (cursor.toISOString().slice(0, 7) <= throughMonth) {
+  while (cursor.toISOString().slice(0, 7) <= finalMonth) {
     const month = cursor.toISOString().slice(0, 7);
     const counts = monthly.get(month) ?? { within: 0, warning: 0, breached: 0 };
     const assessed = counts.within + counts.warning + counts.breached;
-    cumulative.compliant += counts.within + counts.warning;
-    cumulative.assessed += assessed;
     trend.push({
       month,
       assessed,
-      monthlyCompliancePercent: assessed ? ((counts.within + counts.warning) / assessed) * 100 : null,
-      cumulativeCompliancePercent: cumulative.assessed
-        ? (cumulative.compliant / cumulative.assessed) * 100
-        : null,
+      breached: counts.breached,
+      monthlyBreachPercent: assessed ? (counts.breached / assessed) * 100 : null,
     });
     cursor.setUTCMonth(cursor.getUTCMonth() + 1);
   }

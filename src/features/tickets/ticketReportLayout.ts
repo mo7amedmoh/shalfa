@@ -1,6 +1,7 @@
 export const ticketReportSections = [
   { id: 'header', title: 'رأس التقرير', visible: true },
   { id: 'summary', title: 'ملخص البلاغات', visible: true },
+  { id: 'sla-trend', title: 'مقارنة الالتزام التراكمي بـ SLA', visible: true },
   { id: 'supervisors', title: 'حالة البلاغات وSLA حسب المشرف', visible: true },
   { id: 'schools', title: 'المدارس الأعلى في عدد البلاغات', visible: true },
   { id: 'categories', title: 'تصنيف البلاغات', visible: true },

@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   analyzeTickets,
   attachSchoolSupervisors,
+  buildTicketSlaTrend,
+  countTicketDataWarnings,
+  deduplicateTicketRecords,
+  filterTicketRecordsByCreatedMonth,
+  filterTicketRecordsThroughMonth,
   normalizeTicketSchoolNumber,
   parseTicketRows,
 } from './ticketAnalysis';
@@ -16,6 +21,7 @@ const headers = {
   schoolName: 'اسم المبنى',
   supervisor: 'المشرف',
   createdAt: 'تاريخ الإنشاء',
+  updatedAt: 'تاريخ التعديل',
   resolvedAt: 'تاريخ الحل',
   reopened: 'معاد فتحها',
 };
@@ -62,6 +68,52 @@ describe('parseTicketRows', () => {
 });
 
 describe('analyzeTickets', () => {
+  it('builds monthly and cumulative SLA compliance from the uploaded ticket dates', () => {
+    const parsed = parseTicketRows([
+      { [headers.id]: 'A', [headers.priority]: 'متوسط', [headers.status]: 'تم حله', [headers.slaStatus]: 'ضمن المهلة', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '10/08/2026' },
+      { [headers.id]: 'B', [headers.priority]: 'متوسط', [headers.status]: 'تم حله', [headers.slaStatus]: 'تجاوز المهلة', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '11/08/2026' },
+      { [headers.id]: 'C', [headers.priority]: 'متوسط', [headers.status]: 'قيد التنفيذ', [headers.slaStatus]: 'تحذير', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '12/09/2026' },
+      { [headers.id]: 'D', [headers.priority]: 'متوسط', [headers.status]: 'قيد التنفيذ', [headers.slaStatus]: 'تجاوز المهلة', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '12/11/2026' },
+    ]);
+
+    const trend = buildTicketSlaTrend(parsed.tickets, '2026-11');
+    expect(trend.map(({ month, assessed, monthlyCompliancePercent }) => (
+      { month, assessed, monthlyCompliancePercent }
+    ))).toEqual([
+      { month: '2026-08', assessed: 2, monthlyCompliancePercent: 50 },
+      { month: '2026-09', assessed: 1, monthlyCompliancePercent: 100 },
+      { month: '2026-10', assessed: 0, monthlyCompliancePercent: null },
+      { month: '2026-11', assessed: 1, monthlyCompliancePercent: 0 },
+    ]);
+    expect(trend[0].cumulativeCompliancePercent).toBe(50);
+    expect(trend[1].cumulativeCompliancePercent).toBeCloseTo(200 / 3);
+    expect(trend[2].cumulativeCompliancePercent).toBeCloseTo(200 / 3);
+    expect(trend[3].cumulativeCompliancePercent).toBe(50);
+  });
+
+  it('filters current-month results while retaining prior-months for the SLA trend', () => {
+    const { tickets } = parseTicketRows([
+      { [headers.id]: 'OLD', [headers.priority]: 'متوسط', [headers.status]: 'تم حله', [headers.slaStatus]: 'ضمن المهلة', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '12/10/2026' },
+      { [headers.id]: 'CURRENT', [headers.priority]: 'متوسط', [headers.status]: 'قيد التنفيذ', [headers.slaStatus]: 'تحذير', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '12/11/2026' },
+      { [headers.id]: 'FUTURE', [headers.priority]: 'متوسط', [headers.status]: 'قيد التنفيذ', [headers.slaStatus]: 'تجاوز المهلة', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '12/12/2026' },
+    ]);
+
+    expect(filterTicketRecordsByCreatedMonth(tickets, '2026-11').map(({ id }) => id)).toEqual(['CURRENT']);
+    expect(filterTicketRecordsThroughMonth(tickets, '2026-11').map(({ id }) => id)).toEqual(['OLD', 'CURRENT']);
+  });
+
+  it('keeps the most recently updated copy of overlapping tickets and counts current-row warnings', () => {
+    const parsed = parseTicketRows([
+      { [headers.id]: 'CASE-1', [headers.priority]: 'متوسط', [headers.status]: 'قيد التنفيذ', [headers.slaStatus]: 'ضمن المهلة', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '10/11/2026', [headers.updatedAt]: '11/11/2026' },
+      { [headers.id]: 'CASE-1', [headers.priority]: 'متوسط', [headers.status]: 'قيد التنفيذ', [headers.slaStatus]: 'تجاوز المهلة', [headers.category]: 'أعمال', [headers.schoolName]: 'مدرسة', [headers.createdAt]: '10/11/2026', [headers.updatedAt]: '12/11/2026' },
+    ]);
+    const deduplicated = deduplicateTicketRecords(parsed.tickets);
+
+    expect(deduplicated).toHaveLength(1);
+    expect(deduplicated[0].slaStatus).toBe('تجاوز المهلة');
+    expect(countTicketDataWarnings(deduplicated).missingSupervisors).toBe(1);
+  });
+
   it('matches school supervisors by ministry or school number after removing the S- prefix', () => {
     const parsed = parseTicketRows([
       {

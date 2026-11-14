@@ -1259,6 +1259,47 @@ th {
 .report-export-mode .report-design-card {
   padding: 14px 16px;
 }
+.report-export-long-page {
+  width: 1056px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px;
+}
+.report-export-section-capture {
+  display: block;
+  padding: 8px 16px;
+}
+.report-export-long-page .report-design-header,
+.report-export-long-page .report-design-card {
+  padding: 12px;
+}
+.report-export-long-page .report-design-title {
+  margin-bottom: 8px;
+  font-size: 15px;
+}
+.report-export-long-page .report-summary-grid {
+  gap: 8px;
+}
+.report-export-long-page .report-summary-card {
+  min-height: 68px;
+  padding: 8px;
+}
+.report-export-long-page .report-summary-card b {
+  font-size: 20px;
+}
+.report-export-long-page .ticket-category-columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.report-export-long-page table {
+  table-layout: auto;
+  border-collapse: collapse;
+}
+.report-export-long-page th,
+.report-export-long-page td {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
 .report-export-mode .report-design-title {
   margin-bottom: 8px;
   font-size: 15px;
@@ -1289,6 +1330,13 @@ th {
   border: 1px solid #e3e8f2;
   border-radius: 16px;
   background: #fff;
+}
+.report-export-long-page .report-line-chart.ticket-sla-svg { height: 300px; }
+.ticket-category-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
 }
 .report-design-title {
   margin: 0 0 16px;

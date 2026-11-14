@@ -24,6 +24,7 @@ describe('ticket report layout', () => {
     expect(getTicketReportLayout(layout).map((section) => section.id)).toEqual([
       'repeats',
       'header',
+      'sla-trend',
       'supervisors',
       'schools',
       'categories',

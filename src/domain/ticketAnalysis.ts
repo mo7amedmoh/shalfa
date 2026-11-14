@@ -11,8 +11,21 @@ export interface TicketRecord {
   schoolName: string;
   supervisor: string;
   createdAt: Date | null;
+  updatedAt: Date | null;
   resolvedAt: Date | null;
   reopened: boolean | null;
+  qualityIssues: TicketRowQualityIssues;
+}
+
+export interface TicketRowQualityIssues {
+  missingIdentifier: boolean;
+  missingPriority: boolean;
+  missingStatus: boolean;
+  missingSlaStatus: boolean;
+  missingCategory: boolean;
+  missingSchool: boolean;
+  missingCreatedDate: boolean;
+  invalidCreatedDate: boolean;
 }
 
 export interface TicketDataWarnings {
@@ -114,6 +127,13 @@ export interface TicketAnalysis {
   hasSupervisorData: boolean;
 }
 
+export interface TicketSlaTrendPoint {
+  month: string;
+  assessed: number;
+  monthlyCompliancePercent: number | null;
+  cumulativeCompliancePercent: number | null;
+}
+
 export interface TicketSchoolSupervisorSource {
   ministryNumber: string;
   ministryKey: string | null;
@@ -131,6 +151,7 @@ type TicketField =
   | 'schoolName'
   | 'supervisor'
   | 'createdAt'
+  | 'updatedAt'
   | 'resolvedAt'
   | 'reopened';
 
@@ -145,6 +166,7 @@ const fieldAliases: Record<TicketField, readonly string[]> = {
   schoolName: ['اسم المبنى', 'اسم المدرسة', 'building name', 'school name'],
   supervisor: ['المشرف', 'اسم المشرف', 'المسؤول', 'مسؤول البلاغ', 'supervisor', 'assignee', 'assigned to'],
   createdAt: ['تاريخ الانشاء', 'تاريخ فتح البلاغ', 'created at', 'created on', 'creation date'],
+  updatedAt: ['تاريخ التعديل', 'modified at', 'modified date', 'last modified'],
   resolvedAt: ['تاريخ الحل', 'تاريخ الاغلاق', 'resolved date', 'closed date'],
   reopened: ['معاد فتحها', 'اعيد فتحها', 'reopened', 'reopened status'],
 };
@@ -304,6 +326,7 @@ export function parseTicketRows(rows: readonly Record<string, unknown>[]): Parse
       schoolName: 'اسم المدرسة أو المبنى',
       supervisor: 'المشرف',
       createdAt: 'تاريخ الإنشاء',
+      updatedAt: 'تاريخ التعديل',
       resolvedAt: 'تاريخ الحل',
       reopened: 'معاد فتحها',
     };
@@ -336,15 +359,26 @@ export function parseTicketRows(rows: readonly Record<string, unknown>[]): Parse
     const supervisor = textValue(getValue('supervisor'));
     const createdValue = getValue('createdAt');
     const createdAt = parseDate(createdValue);
+    const updatedAt = parseDate(getValue('updatedAt'));
     const resolvedAt = parseDate(getValue('resolvedAt'));
-    if (!id) warnings.missingIdentifiers += 1;
-    if (!priority) warnings.missingPriorities += 1;
-    if (!status) warnings.missingStatuses += 1;
-    if (!slaStatus) warnings.missingSlaStatuses += 1;
-    if (!category) warnings.missingCategories += 1;
-    if (!schoolName && !schoolNumber) warnings.missingSchools += 1;
-    if (!textValue(createdValue)) warnings.missingCreatedDates += 1;
-    else if (!createdAt) warnings.invalidCreatedDates += 1;
+    const qualityIssues: TicketRowQualityIssues = {
+      missingIdentifier: !id,
+      missingPriority: !priority,
+      missingStatus: !status,
+      missingSlaStatus: !slaStatus,
+      missingCategory: !category,
+      missingSchool: !schoolName && !schoolNumber,
+      missingCreatedDate: !textValue(createdValue),
+      invalidCreatedDate: Boolean(textValue(createdValue) && !createdAt),
+    };
+    if (qualityIssues.missingIdentifier) warnings.missingIdentifiers += 1;
+    if (qualityIssues.missingPriority) warnings.missingPriorities += 1;
+    if (qualityIssues.missingStatus) warnings.missingStatuses += 1;
+    if (qualityIssues.missingSlaStatus) warnings.missingSlaStatuses += 1;
+    if (qualityIssues.missingCategory) warnings.missingCategories += 1;
+    if (qualityIssues.missingSchool) warnings.missingSchools += 1;
+    if (qualityIssues.missingCreatedDate) warnings.missingCreatedDates += 1;
+    if (qualityIssues.invalidCreatedDate) warnings.invalidCreatedDates += 1;
     if (columns.supervisor && !supervisor) warnings.missingSupervisors += 1;
     return {
       id: id || `ROW-${index + 2}`,
@@ -357,11 +391,79 @@ export function parseTicketRows(rows: readonly Record<string, unknown>[]): Parse
       schoolName: schoolName || 'مدرسة غير محددة',
       supervisor,
       createdAt,
+      updatedAt,
       resolvedAt,
       reopened: booleanValue(getValue('reopened')),
+      qualityIssues,
     };
   });
   return { tickets, warnings, hasSupervisorColumn: Boolean(columns.supervisor) };
+}
+
+export function deduplicateTicketRecords(tickets: readonly TicketRecord[]): TicketRecord[] {
+  const byId = new Map<string, TicketRecord>();
+  const withoutIdentifiers: TicketRecord[] = [];
+  for (const ticket of tickets) {
+    if (ticket.qualityIssues.missingIdentifier) {
+      withoutIdentifiers.push(ticket);
+      continue;
+    }
+    const existing = byId.get(ticket.id);
+    if (!existing) {
+      byId.set(ticket.id, ticket);
+      continue;
+    }
+    const newest = (ticket.updatedAt?.getTime() ?? Number.NEGATIVE_INFINITY)
+      >= (existing.updatedAt?.getTime() ?? Number.NEGATIVE_INFINITY)
+      ? ticket
+      : existing;
+    byId.set(ticket.id, {
+      ...newest,
+      supervisor: newest.supervisor || existing.supervisor || ticket.supervisor,
+    });
+  }
+  return [...byId.values(), ...withoutIdentifiers];
+}
+
+export function countTicketDataWarnings(tickets: readonly TicketRecord[]): TicketDataWarnings {
+  const warnings: TicketDataWarnings = {
+    missingIdentifiers: 0,
+    missingPriorities: 0,
+    missingStatuses: 0,
+    missingSlaStatuses: 0,
+    missingCategories: 0,
+    missingSchools: 0,
+    missingCreatedDates: 0,
+    invalidCreatedDates: 0,
+    missingSupervisors: 0,
+  };
+  for (const ticket of tickets) {
+    const { qualityIssues } = ticket;
+    if (qualityIssues.missingIdentifier) warnings.missingIdentifiers += 1;
+    if (qualityIssues.missingPriority) warnings.missingPriorities += 1;
+    if (qualityIssues.missingStatus) warnings.missingStatuses += 1;
+    if (qualityIssues.missingSlaStatus) warnings.missingSlaStatuses += 1;
+    if (qualityIssues.missingCategory) warnings.missingCategories += 1;
+    if (qualityIssues.missingSchool) warnings.missingSchools += 1;
+    if (qualityIssues.missingCreatedDate) warnings.missingCreatedDates += 1;
+    if (qualityIssues.invalidCreatedDate) warnings.invalidCreatedDates += 1;
+    if (!ticket.supervisor.trim()) warnings.missingSupervisors += 1;
+  }
+  return warnings;
+}
+
+export function filterTicketRecordsByCreatedMonth(
+  tickets: readonly TicketRecord[],
+  month: string,
+): TicketRecord[] {
+  return tickets.filter((ticket) => ticket.createdAt?.toISOString().slice(0, 7) === month);
+}
+
+export function filterTicketRecordsThroughMonth(
+  tickets: readonly TicketRecord[],
+  month: string,
+): TicketRecord[] {
+  return tickets.filter((ticket) => Boolean(ticket.createdAt && ticket.createdAt.toISOString().slice(0, 7) <= month));
 }
 
 type TicketState = 'resolved' | 'open' | 'cancelled' | 'unknown';
@@ -381,6 +483,50 @@ function slaState(status: string): SlaState {
   if (text.includes('تحذير') || text.includes('warning')) return 'warning';
   if (text.includes('ضمن المهلة') || text.includes('within') || text.includes('compliant') || text.includes('on time')) return 'within';
   return 'unknown';
+}
+
+export function buildTicketSlaTrend(
+  tickets: readonly TicketRecord[],
+  throughMonth: string,
+): TicketSlaTrendPoint[] {
+  const [lastYear, lastMonth] = throughMonth.split('-').map(Number);
+  if (!Number.isInteger(lastYear) || !Number.isInteger(lastMonth) || lastMonth < 1 || lastMonth > 12) return [];
+  const monthly = new Map<string, { within: number; warning: number; breached: number }>();
+  for (const ticket of tickets) {
+    if (!ticket.createdAt) continue;
+    const month = ticket.createdAt.toISOString().slice(0, 7);
+    if (month > throughMonth) continue;
+    const counts = monthly.get(month) ?? { within: 0, warning: 0, breached: 0 };
+    const state = slaState(ticket.slaStatus);
+    if (state === 'within') counts.within += 1;
+    if (state === 'warning') counts.warning += 1;
+    if (state === 'breached') counts.breached += 1;
+    monthly.set(month, counts);
+  }
+  const firstMonth = [...monthly.keys()].sort()[0];
+  if (!firstMonth) return [];
+
+  const [firstYear, firstMonthNumber] = firstMonth.split('-').map(Number);
+  const cursor = new Date(Date.UTC(firstYear, firstMonthNumber - 1, 1));
+  const cumulative = { compliant: 0, assessed: 0 };
+  const trend: TicketSlaTrendPoint[] = [];
+  while (cursor.toISOString().slice(0, 7) <= throughMonth) {
+    const month = cursor.toISOString().slice(0, 7);
+    const counts = monthly.get(month) ?? { within: 0, warning: 0, breached: 0 };
+    const assessed = counts.within + counts.warning + counts.breached;
+    cumulative.compliant += counts.within + counts.warning;
+    cumulative.assessed += assessed;
+    trend.push({
+      month,
+      assessed,
+      monthlyCompliancePercent: assessed ? ((counts.within + counts.warning) / assessed) * 100 : null,
+      cumulativeCompliancePercent: cumulative.assessed
+        ? (cumulative.compliant / cumulative.assessed) * 100
+        : null,
+    });
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return trend;
 }
 
 function isCritical(priority: string): boolean {

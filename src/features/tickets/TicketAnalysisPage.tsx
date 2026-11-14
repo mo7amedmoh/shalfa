@@ -6,9 +6,15 @@ import { useDisplayFormat } from '../../app/useDisplayFormat';
 import {
   analyzeTickets,
   attachSchoolSupervisors,
+  buildTicketSlaTrend,
+  countTicketDataWarnings,
+  deduplicateTicketRecords,
+  filterTicketRecordsByCreatedMonth,
+  filterTicketRecordsThroughMonth,
   parseTicketRows,
   type TicketAnalysis,
   type TicketDataWarnings,
+  type TicketSlaTrendPoint,
   type TicketSchoolSupervisorSource,
 } from '../../domain/ticketAnalysis';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
@@ -28,6 +34,9 @@ interface TicketReportData {
   analyzedAt: Date;
   analysis: TicketAnalysis;
   warnings: TicketDataWarnings;
+  slaTrend: TicketSlaTrendPoint[];
+  currentMonth: string;
+  filesCount: number;
   unmatchedSupervisorTickets: number;
   supervisorLookupUnavailable: boolean;
 }
@@ -59,11 +68,7 @@ async function loadSchoolSupervisorSources(): Promise<TicketSchoolSupervisorSour
   }
 }
 
-async function analyzeSpreadsheet(
-  file: File,
-  schoolSources: readonly TicketSchoolSupervisorSource[],
-  supervisorLookupUnavailable: boolean,
-): Promise<TicketReportData> {
+async function parseSpreadsheet(file: File) {
   if (!/\.(csv|xls|xlsx)$/i.test(file.name)) {
     throw new Error('اختر ملف Excel بامتداد .xlsx أو .xls أو ملف CSV.');
   }
@@ -78,13 +83,40 @@ async function analyzeSpreadsheet(
     raw: false,
     blankrows: false,
   });
-  const parsed = parseTicketRows(rows);
-  const tickets = attachSchoolSupervisors(parsed.tickets, schoolSources);
+  return parseTicketRows(rows);
+}
+
+function currentUtcMonth(): string {
+  return new Date().toISOString().slice(0, 7);
+}
+
+async function analyzeSpreadsheets(
+  files: readonly File[],
+  schoolSources: readonly TicketSchoolSupervisorSource[],
+  supervisorLookupUnavailable: boolean,
+): Promise<TicketReportData> {
+  if (!files.length) throw new Error('اختر ملفًا واحدًا على الأقل.');
+  const parsedFiles = await Promise.all(files.map(async (file) => {
+    try {
+      return await parseSpreadsheet(file);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'تعذر تحليل الملف.';
+      throw new Error(`${file.name}: ${message}`);
+    }
+  }));
+  const allTickets = deduplicateTicketRecords(parsedFiles.flatMap(({ tickets }) => tickets));
+  const tickets = attachSchoolSupervisors(allTickets, schoolSources);
+  const currentMonth = currentUtcMonth();
+  const currentTickets = filterTicketRecordsByCreatedMonth(tickets, currentMonth);
+  const trendTickets = filterTicketRecordsThroughMonth(tickets, currentMonth);
   return {
     analyzedAt: new Date(),
-    analysis: analyzeTickets(tickets, parsed.hasSupervisorColumn || tickets.some((ticket) => Boolean(ticket.supervisor))),
-    warnings: parsed.warnings,
-    unmatchedSupervisorTickets: tickets.filter((ticket) => !ticket.supervisor).length,
+    analysis: analyzeTickets(currentTickets, currentTickets.some((ticket) => Boolean(ticket.supervisor))),
+    warnings: countTicketDataWarnings(currentTickets),
+    slaTrend: buildTicketSlaTrend(trendTickets, currentMonth),
+    currentMonth,
+    filesCount: files.length,
+    unmatchedSupervisorTickets: currentTickets.filter((ticket) => !ticket.supervisor).length,
     supervisorLookupUnavailable,
   };
 }
@@ -139,14 +171,14 @@ export function TicketAnalysisPage() {
     return () => { active = false; };
   }, []);
 
-  async function onFileSelected(file: File) {
+  async function onFilesSelected(files: readonly File[]) {
     setError('');
     setPdfError('');
     setReport(null);
     setIsAnalyzing(true);
     try {
-      setReport(await analyzeSpreadsheet(
-        file,
+      setReport(await analyzeSpreadsheets(
+        files,
         schoolSourcesQuery.data ?? [],
         Boolean(schoolSourcesQuery.error),
       ));
@@ -158,16 +190,18 @@ export function TicketAnalysisPage() {
   }
 
   function onUpload(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.currentTarget.files?.[0];
+    const files = Array.from(event.currentTarget.files ?? []);
     event.currentTarget.value = '';
-    if (file) void onFileSelected(file);
+    if (files.length) void onFilesSelected(files);
   }
 
   function onExportPdf() {
     if (!reportElement.current || !report || isExporting) return;
     setPdfError('');
     setIsExporting(true);
-    void exportReportPdf(reportElement.current, 'تقرير-تحليل-البلاغات.pdf', ticketReportCoreSections)
+    void exportReportPdf(reportElement.current, 'تقرير-تحليل-البلاغات.pdf', ticketReportCoreSections, {
+      singleLongPage: true,
+    })
       .catch((reason: unknown) => {
         setPdfError(reason instanceof Error ? reason.message : 'تعذر تصدير التقرير إلى PDF.');
       })
@@ -212,25 +246,36 @@ export function TicketAnalysisPage() {
         </div>
       </section>
 
-      <section className="no-print card grid gap-3 p-4 sm:flex sm:items-center sm:justify-between">
+      <section className={`no-print card grid min-w-0 gap-4 p-4 sm:items-center ${report ? 'sm:grid-cols-[minmax(0,1fr)_auto]' : ''}`}>
         <div className="min-w-0">
-          <h3 className="font-bold text-brand-900">ملف البلاغات</h3>
-          <p className="mt-1 text-xs leading-5 text-slate-500">
-            يدعم ملفات Excel وCSV المتوافقة مع أعمدة نموذج البلاغات. تتم المعالجة محليًا في المتصفح.
+          <h3 className="font-bold text-brand-900">ملفات البلاغات</h3>
+          <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-500">
+            يدعم رفع عدة ملفات Excel وCSV. يعرض التقرير بلاغات الشهر الحالي ويستخدم الأشهر السابقة لمقارنة SLA. تتم المعالجة محليًا في المتصفح.
           </p>
+          <div className="mt-3 flex min-w-0 flex-wrap items-center gap-3">
+            <label className={`inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-sm font-bold text-brand-800 transition hover:bg-brand-100 focus-within:ring-2 focus-within:ring-brand-500 ${isAnalyzing || schoolSourcesQuery.isLoading ? 'pointer-events-none opacity-50' : ''}`}>
+              <input
+                ref={fileInput}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                multiple
+                aria-label="رفع ملفات البلاغات"
+                disabled={isAnalyzing || schoolSourcesQuery.isLoading}
+                onChange={onUpload}
+                className="sr-only"
+              />
+              <FileSpreadsheet size={16} />
+              {report ? 'اختيار ملفات أخرى' : 'اختيار ملفات'}
+            </label>
+            <span className="min-w-0 text-xs leading-5 text-slate-500">
+              {report
+                ? `عدد الملفات التي تم تحليلها: ${formatNumber(report.filesCount)}`
+                : 'Excel أو CSV · يمكن اختيار عدة ملفات'}
+            </span>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            ref={fileInput}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            aria-label="رفع ملف البلاغات"
-            disabled={isAnalyzing || schoolSourcesQuery.isLoading}
-            onChange={onUpload}
-            className="block max-w-full text-xs file:me-2 file:rounded-lg file:border-0 file:bg-brand-50 file:px-3 file:py-2 file:font-semibold file:text-brand-800 disabled:opacity-50"
-          />
-          {report && (
-            <>
+        {report && (
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
               <button
                 type="button"
                 onClick={() => { setDraftLayout(layout); setCustomizing(true); }}
@@ -248,22 +293,25 @@ export function TicketAnalysisPage() {
                 <Download size={16} />
                 {isExporting ? 'جارٍ التصدير…' : 'تصدير PDF'}
               </button>
-            </>
-          )}
-        </div>
-        {schoolSourcesQuery.isLoading && <p role="status" className="text-sm text-brand-800">جارٍ تحميل بيانات المباني لمطابقة المشرفين…</p>}
-        {schoolSourcesQuery.error && <p role="alert" className="text-sm text-amber-800">تعذر تحميل المشرفين من قاعدة بيانات المباني؛ سيُستخدم عمود المشرف في الملف إن وُجد.</p>}
-        {layoutError && !customizing && <p role="alert" className="text-sm text-amber-800">{layoutError}</p>}
-        {isAnalyzing && <p role="status" className="text-sm text-brand-800">جارٍ تحليل الملف…</p>}
-        {error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
-        {pdfError && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{pdfError}</p>}
+          </div>
+        )}
+        {(schoolSourcesQuery.isLoading || schoolSourcesQuery.error || (layoutError && !customizing) || isAnalyzing || error || pdfError) && (
+          <div className={`grid min-w-0 gap-2 border-t border-slate-100 pt-3 ${report ? 'sm:col-span-2' : ''}`}>
+            {schoolSourcesQuery.isLoading && <p role="status" className="text-sm text-brand-800">جارٍ تحميل بيانات المباني لمطابقة المشرفين…</p>}
+            {schoolSourcesQuery.error && <p role="alert" className="text-sm text-amber-800">تعذر تحميل المشرفين من قاعدة بيانات المباني؛ سيُستخدم عمود المشرف في الملف إن وُجد.</p>}
+            {layoutError && !customizing && <p role="alert" className="text-sm text-amber-800">{layoutError}</p>}
+            {isAnalyzing && <p role="status" className="text-sm text-brand-800">جارٍ تحليل الملفات…</p>}
+            {error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
+            {pdfError && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{pdfError}</p>}
+          </div>
+        )}
       </section>
 
       {!report && !isAnalyzing && !error && (
         <section className="card grid justify-items-center gap-2 p-8 text-center text-slate-500">
           <FileSpreadsheet size={28} className="text-brand-600" />
-          <p className="font-semibold">ارفع ملف البلاغات لعرض التحليل.</p>
-          <p className="text-xs">يتضمن التقرير ملخص الحالة والمهلة، وأعلى المدارس والفئات، والبلاغات المتكررة.</p>
+          <p className="font-semibold">ارفع ملفًا أو أكثر من ملفات البلاغات لعرض التحليل.</p>
+          <p className="text-xs">تقتصر مؤشرات البلاغات على الشهر الحالي، مع مقارنة تراكمية للالتزام بـ SLA عبر الأشهر المتاحة.</p>
         </section>
       )}
 
@@ -331,7 +379,7 @@ function TicketReport({
           <div className="min-w-0">
             <div className="report-header-kicker">تقرير متابعة البلاغات</div>
             <h1>تحليل البلاغات المستلمة</h1>
-            <p>الفترة: {period} · عدد البلاغات: {formatNumber(analysis.total)}</p>
+            <p>الشهر: {formatMonthLabel(report.currentMonth)} · الفترة: {period} · عدد البلاغات: {formatNumber(analysis.total)}</p>
           </div>
           <div className="report-last-update">
             تاريخ التحليل
@@ -342,14 +390,14 @@ function TicketReport({
     ),
     summary: (
       <>
-        <div className="report-summary-grid">
+        <div className="report-summary-grid mb-3">
           <SummaryCard label="إجمالي البلاغات" value={formatNumber(analysis.total)} />
           <SummaryCard label="تم حلها / إغلاقها" value={formatNumber(analysis.resolved)} tone="green" />
           <SummaryCard label="البلاغات المفتوحة" value={formatNumber(analysis.open)} tone="amber" />
           <SummaryCard label="البلاغات الملغاة" value={formatNumber(analysis.cancelled)} tone="red" />
           <SummaryCard label="البلاغات الحرجة" value={formatNumber(analysis.critical)} tone="red" />
         </div>
-        <div className="report-summary-grid">
+        <div className="report-summary-grid mb-3">
           <SummaryCard label="ضمن المهلة" value={formatNumber(analysis.sla.within)} tone="green" />
           <SummaryCard label="تحذير SLA" value={formatNumber(analysis.sla.warning)} tone="amber" />
           <SummaryCard label="تجاوزت المهلة" value={formatNumber(analysis.sla.breached)} tone="red" />
@@ -391,7 +439,7 @@ function TicketReport({
                 </table>
               </div>
             </div>
-            <div className="grid content-start gap-4">
+            <div className="grid min-w-0 content-start gap-4">
               <div>
                 <h3 className="mb-2 text-sm font-bold text-brand-900">مؤشرات SLA</h3>
                 <div className="grid grid-cols-2 gap-2 text-xs">
@@ -415,6 +463,24 @@ function TicketReport({
           )}
         </section>
       </>
+    ),
+    'sla-trend': (
+      <section className="report-design-card">
+        <h2 className="report-design-title">مقارنة الالتزام التراكمي بـ SLA</h2>
+        <p className="mb-2 text-xs leading-5 text-slate-500">
+          يقارن الرسم نسبة الالتزام الشهرية بالنسبة التراكمية منذ أول شهر متاح؛ يشمل التحذير ضمن الملتزم ويستثني حالات SLA غير المحددة.
+        </p>
+        {report.slaTrend.length ? (
+          <>
+            <TicketSlaChart points={report.slaTrend} formatNumber={formatNumber} />
+            <p className="mt-1 text-[11px] text-slate-500">
+              عدد البلاغات ذات حالة SLA معروفة في الشهر الحالي: {formatNumber(report.slaTrend.at(-1)?.assessed ?? 0)}.
+            </p>
+          </>
+        ) : (
+          <p className="report-empty text-sm">لا توجد بيانات SLA مؤرخة لإنشاء المقارنة.</p>
+        )}
+      </section>
     ),
     supervisors: (
       <section className="report-design-card">
@@ -483,12 +549,17 @@ function TicketReport({
     categories: (
       <section className="report-design-card">
         <h2 className="report-design-title">تصنيف البلاغات</h2>
-        {analysis.categoryGroupAvailable ? (
-          <BreakdownBars title="حسب الطبقة الثانية للفئة" items={analysis.categoryGroups} formatNumber={formatNumber} />
-        ) : (
-          <p className="mb-4 text-xs text-slate-500">الملف لا يتضمن تصنيف الطبقة الثانية؛ يعرض التقرير التصنيف المتاح في الطبقة الثالثة.</p>
-        )}
-        <BreakdownBars title="عدد البلاغات حسب الطبقة الثالثة للفئة" items={analysis.categories} formatNumber={formatNumber} />
+        <div className="ticket-category-columns">
+          {analysis.categoryGroupAvailable ? (
+            <BreakdownBars title="الطبقة الثانية للفئة" items={analysis.categoryGroups} formatNumber={formatNumber} />
+          ) : (
+            <div className="rounded-xl bg-slate-50 p-4">
+              <h3 className="mb-2 text-sm font-bold text-brand-900">الطبقة الثانية للفئة</h3>
+              <p className="report-empty text-xs leading-6">الملف لا يتضمن هذا التصنيف؛ يعرض التقرير الطبقة الثالثة المتاحة.</p>
+            </div>
+          )}
+          <BreakdownBars title="الطبقة الثالثة للفئة" items={analysis.categories} formatNumber={formatNumber} />
+        </div>
       </section>
     ),
     repeats: (
@@ -544,6 +615,86 @@ function TicketReport({
         </div>
       ))}
     </div>
+  );
+}
+
+function TicketSlaChart({
+  points,
+  formatNumber,
+}: {
+  points: readonly TicketSlaTrendPoint[];
+  formatNumber: (value: string | number) => string;
+}) {
+  const left = 70;
+  const right = 950;
+  const top = 60;
+  const bottom = 260;
+  const lastIndex = points.length - 1;
+  const xForIndex = (index: number) => points.length === 1
+    ? (left + right) / 2
+    : left + ((right - left) * index) / lastIndex;
+  const yForValue = (value: number) => bottom - ((bottom - top) * value) / 100;
+  const linePath = (key: 'monthlyCompliancePercent' | 'cumulativeCompliancePercent') => {
+    let activeSegment = false;
+    return points.map((point, index) => {
+      const value = point[key];
+      if (value === null) {
+        activeSegment = false;
+        return '';
+      }
+      const command = activeSegment ? 'L' : 'M';
+      activeSegment = true;
+      return `${command} ${xForIndex(index)} ${yForValue(value)}`;
+    }).filter(Boolean).join(' ');
+  };
+  const tickCount = Math.min(6, points.length);
+  const tickIndices = [...new Set(Array.from({ length: tickCount }, (_, index) => (
+    Math.round((lastIndex * index) / Math.max(1, tickCount - 1))
+  )))];
+  const currentX = xForIndex(lastIndex);
+  const pillWidth = 170;
+  const pillX = Math.min(right - pillWidth, Math.max(left, currentX - pillWidth / 2));
+  const yTicks = [0, 25, 50, 75, 100];
+
+  return (
+    <>
+      <div className="report-legend report-chart-legend ticket-sla-legend">
+        <span><i className="green" /> الالتزام الشهري</span>
+        <span><i className="navy" /> الالتزام التراكمي</span>
+      </div>
+      <svg
+        className="report-line-chart ticket-sla-svg"
+        viewBox="0 0 1000 310"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label="نسبة الالتزام الشهرية والتراكمية بـ SLA"
+      >
+        <g fill="none" stroke="#e5eaf2" strokeWidth="1">
+          {yTicks.map((tick) => {
+            const y = yForValue(tick);
+            return <line key={tick} x1={left} y1={y} x2={right} y2={y} />;
+          })}
+        </g>
+        <path d={linePath('monthlyCompliancePercent')} fill="none" stroke="#2f9b72" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+        <path d={linePath('cumulativeCompliancePercent')} fill="none" stroke="#21366a" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+        <line x1={currentX} y1="42" x2={currentX} y2={bottom} fill="none" stroke="#b7c1d3" strokeWidth="1.5" strokeDasharray="4 4" />
+        <rect x={pillX} y="2" width={pillWidth} height="38" rx="19" fill="#21366a" />
+        <text x={pillX + pillWidth / 2} y="27" textAnchor="middle" fill="#ffffff" fontSize="18" fontFamily="Cairo, sans-serif">الشهر الحالي</text>
+        {yTicks.map((tick) => {
+          const y = yForValue(tick);
+          return (
+            <text key={`label-${tick}`} x="58" y={y + 6} textAnchor="end" fill="#68728a" fontSize="16" fontFamily="Cairo, sans-serif">
+              {formatNumber(tick)}%
+            </text>
+          );
+        })}
+        {tickIndices.map((index) => (
+          <text key={points[index].month} x={xForIndex(index)} y="294" textAnchor="middle" fill="#68728a" fontSize="16" fontFamily="Cairo, sans-serif">
+            {formatMonthLabel(points[index].month)}
+          </text>
+        ))}
+      </svg>
+    </>
   );
 }
 
@@ -640,14 +791,16 @@ function BreakdownBars({
 }) {
   const maxCount = Math.max(...items.map((item) => item.count), 1);
   return (
-    <div>
-      <h3 className="mb-3 text-sm font-bold text-brand-900">{title}</h3>
+    <div className="min-w-0 rounded-xl bg-slate-50 p-4">
+      <h3 className="mb-3 border-b border-slate-200 pb-2 text-sm font-bold text-brand-900">{title}</h3>
       {items.length ? (
-        <div className="grid gap-3">
+        <div className="grid gap-2">
           {items.map((item) => (
-            <div key={item.label} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1">
-              <span className="truncate text-xs font-semibold text-slate-700" title={item.label}>{item.label}</span>
-              <span className="text-xs text-slate-500">{formatNumber(item.count)} · {formatNumber(item.percent.toFixed(1))}%</span>
+            <div key={item.label} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 border-b border-slate-200/70 pb-2 last:border-0">
+              <span className="min-w-0 break-words text-xs font-semibold leading-5 text-slate-700" title={item.label}>{item.label}</span>
+              <span className="whitespace-nowrap rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-600">
+                {formatNumber(item.count)} · {formatNumber(item.percent.toFixed(1))}%
+              </span>
               <div className="report-design-bar col-span-2 mt-0">
                 <span className="report-design-fill navy" style={{ width: `${(item.count / maxCount) * 100}%` }} />
               </div>
@@ -692,7 +845,7 @@ function SchoolTable({
             <tr key={school.key} className="border-t border-slate-100">
               <th className="p-2 text-start font-semibold text-slate-700">
                 {school.name}
-                {school.schoolNumber && <small className="ms-2 text-slate-400">{school.schoolNumber}</small>}
+                {school.schoolNumber && <small className="mt-1 block font-normal text-slate-400">{school.schoolNumber}</small>}
               </th>
               <td className="p-2 text-center">{formatNumber(school.total)}</td>
               {showStatus
@@ -712,4 +865,10 @@ function SchoolTable({
 
 function formatPercent(value: number | null, formatNumber: (value: string | number) => string): string {
   return value === null ? '—' : `${formatNumber(value.toFixed(1))}%`;
+}
+
+function formatMonthLabel(month: string): string {
+  const date = new Date(`${month}-01T00:00:00.000Z`);
+  if (!Number.isFinite(date.getTime())) return month;
+  return date.toLocaleDateString('ar-SA', { month: 'short', year: 'numeric', timeZone: 'UTC' });
 }

@@ -7,7 +7,7 @@ describe('formatDashboardActivity', () => {
       action: 'bulk_update_plan_rows',
       entity: 'monthly_plan_rows',
       details: { rows: 8, visits_marked: 3, reports_marked: 2, sensitive: 'not shown' },
-    })).toBe('تحديث جماعي للخطة: 8 صف، 3 زيارة، 2 تقرير.');
+    })).toBe('تحديث جماعي للخطة: 8 صفوف، 3 زيارات، 2 تقريران.');
   });
 
   it('formats recognized approvals and ignores unrelated events', () => {
@@ -33,6 +33,19 @@ describe('formatDashboardActivity', () => {
       action: 'import_monthly_plans',
       entity: 'monthly_plan_rows',
       details: { imported: 7 },
-    })).toBe('تم استيراد 7 سجل.');
+    })).toBe('تم استيراد 7 سجلات.');
+  });
+
+  it('uses singular, dual and plural forms in activity counts', () => {
+    expect(formatDashboardActivity({
+      action: 'bulk_update_plan_rows',
+      entity: 'monthly_plan_rows',
+      details: { rows: 1, visits_marked: 2, reports_marked: 11 },
+    })).toBe('تحديث جماعي للخطة: 1 صف، 2 زيارتان، 11 تقرير.');
+    expect(formatDashboardActivity({
+      action: 'school_sync',
+      entity: 'schools',
+      details: { rows: 2 },
+    })).toBe('اكتملت مزامنة 2 مدرستين.');
   });
 });

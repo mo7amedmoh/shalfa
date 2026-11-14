@@ -43,16 +43,21 @@ describe('normalizeSheetSchoolSize', () => {
   it.each([
     ['S', 'small'],
     [' s ', 'small'],
+    ['S +', 'small_plus'],
+    ['s＋', 'small_plus'],
     ['M', 'medium'],
     [' m ', 'medium'],
+    ['M +', 'medium_plus'],
     ['L', 'large'],
     [' l ', 'large'],
+    ['L＋', 'large_plus'],
   ] as const)('normalizes %s to %s', (value, size) => {
     expect(normalizeSheetSchoolSize(value)).toBe(size);
   });
 
   it('does not infer a size from unrecognized values', () => {
     expect(normalizeSheetSchoolSize('XL')).toBeNull();
+    expect(normalizeSheetSchoolSize('')).toBeNull();
     expect(normalizeSheetSchoolSize(null)).toBeNull();
   });
 });
@@ -134,6 +139,22 @@ describe('prepareSchoolRows', () => {
       ],
       missingSchoolName: 2,
     });
+
+  });
+
+  it('warns for empty or unknown size indicators without dropping the school', () => {
+    const prepared = prepareSchoolRows(headers, [
+      row('95183', 'مدرسة بلا حجم', 'مستقل', ''),
+      row('95184', 'مدرسة بحجم غير معروف', 'مستقل', 'XL'),
+      row('95185', 'مدرسة بحجم صالح', 'مستقل', 'M＋'),
+    ], config, 'now');
+
+    expect(prepared.rows).toHaveLength(3);
+    expect(prepared.rows.map(({ size_source }) => size_source)).toEqual([null, null, 'medium_plus']);
+    expect(prepared.sizeWarnings).toEqual([
+      { sourceRow: 2, schoolName: 'مدرسة بلا حجم', value: '', reason: 'empty' },
+      { sourceRow: 3, schoolName: 'مدرسة بحجم غير معروف', value: 'XL', reason: 'unknown' },
+    ]);
   });
 
   describe('school sync preflight', () => {

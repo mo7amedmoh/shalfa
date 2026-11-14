@@ -73,6 +73,12 @@ const PlanNameLinkingPage = lazy(() =>
 const SettingsHubPage = lazy(() =>
   import('../features/admin/SettingsHubPage').then((module) => ({ default: module.SettingsHubPage })),
 );
+const StaffingRulesSettingsPage = lazy(() =>
+  import('../features/admin/StaffingRulesSettingsPage').then((module) => ({ default: module.StaffingRulesSettingsPage })),
+);
+const TicketAnalysisPage = lazy(() =>
+  import('../features/tickets/TicketAnalysisPage').then((module) => ({ default: module.TicketAnalysisPage })),
+);
 const monthlyPlanTypes: readonly PlanType[] = ['maintenance', 'cleaning', 'security_safety', 'elevators'];
 
 function MonthlyPlanRoute({ profile }: { profile: UserProfile | null }) {
@@ -130,7 +136,6 @@ const navigation = [
       ['المخرجات التعاقدية', '/kpi/deliverables'],
     ],
   },
-  { label: 'حسابي', path: '/account', icon: UserRound },
 ];
 
 const adminNavigation = [
@@ -195,6 +200,7 @@ function AppShell({
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const location = useLocation();
   const isAdmin = profile?.role === 'admin';
   const canCreateCustom = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
@@ -235,6 +241,7 @@ function AppShell({
     if (location.pathname.startsWith('/plans/')) return 'الخطط الشهرية';
     if (location.pathname.startsWith('/kpi/')) return 'مؤشرات الأداء';
     if (location.pathname.startsWith('/placement/')) return 'أعمال إدارية';
+    if (location.pathname === '/tools/ticket-analysis') return 'تحليل البلاغات';
     if (location.pathname === '/admin/settings' || location.pathname.startsWith('/admin/settings/')) return 'الإعدادات';
     if (location.pathname === '/admin/school-cleanup') return 'تنظيف المدارس';
     if (location.pathname === '/admin/users') return 'المستخدمون والصلاحيات';
@@ -243,6 +250,7 @@ function AppShell({
 
   useEffect(() => {
     setSidebarOpen(false);
+    setProfileMenuOpen(false);
     const activeGroup = visibleNavigation.find((item) =>
       'children' in item && item.children?.some(([, path]) => path === location.pathname),
     );
@@ -299,12 +307,41 @@ function AppShell({
             {canCreateCustom && <NavLink to="/settings/plans" className="nav-link"><Settings2 size={19} /><span>إدارة الخطط</span></NavLink>}
           </div> : null}
         </nav>
-        <div className="mt-6 border-t border-slate-100 pt-4">
+        <div className="relative mt-6 border-t border-slate-100 pt-4">
           {profile ? (
-            <div className="flex items-center justify-between gap-2 px-2">
-              <span className="min-w-0 truncate text-sm font-semibold">{profile.display_name}</span>
-              <button onClick={onSignOut} aria-label="تسجيل الخروج" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><LogOut size={18} /></button>
-            </div>
+            <>
+              <button
+                type="button"
+                aria-expanded={profileMenuOpen}
+                aria-controls="profile-menu"
+                onClick={() => setProfileMenuOpen((open) => !open)}
+                className="nav-link w-full justify-between"
+              >
+                <span className="min-w-0 truncate text-sm font-semibold">{profile.display_name ?? profile.username}</span>
+                <ChevronDown size={16} className={`shrink-0 transition-transform ${profileMenuOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {profileMenuOpen && (
+                <div id="profile-menu" className="absolute inset-x-0 bottom-full z-20 mb-2 grid gap-1 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                  <NavLink to="/account" className="nav-link min-h-9 text-sm" onClick={() => setProfileMenuOpen(false)}>
+                    <UserRound size={17} />
+                    <span>حسابي</span>
+                  </NavLink>
+                  {canManagePlanNames && (
+                    <div className="border-t border-slate-100 pt-2">
+                      <p className="px-3 pb-1 text-xs font-bold text-slate-500">أدواتي</p>
+                      <NavLink to="/tools/ticket-analysis" className="nav-link min-h-9 text-sm" onClick={() => setProfileMenuOpen(false)}>
+                        <FileText size={17} />
+                        <span>تحليل البلاغات</span>
+                      </NavLink>
+                    </div>
+                  )}
+                  <button type="button" onClick={onSignOut} className="nav-link min-h-9 text-sm text-rose-700">
+                    <LogOut size={17} />
+                    <span>تسجيل الخروج</span>
+                  </button>
+                </div>
+              )}
+            </>
           ) : null}
         </div>
       </aside>
@@ -336,6 +373,7 @@ function AppShell({
               <Route path="/rewards" element={<RewardsPage profile={profile} />} />
               <Route path="/kpi/:type" element={<ModulePage section="kpi" profile={profile} />} />
               <Route path="/account" element={<AccountPage profile={profile} />} />
+              <Route path="/tools/ticket-analysis" element={canManagePlanNames ? <TicketAnalysisPage /> : <Navigate to="/" replace />} />
               <Route path="/admin/users" element={isAdmin ? <AdminUsersPage /> : <Navigate to="/" replace />} />
               <Route path="/admin/audit" element={isAdmin ? <AuditLogPage /> : <Navigate to="/" replace />} />
               <Route path="/admin/school-cleanup" element={isAdmin ? <SchoolCleanupPage /> : <Navigate to="/" replace />} />
@@ -343,6 +381,7 @@ function AppShell({
               <Route path="/admin/settings" element={canManagePlanNames ? <SettingsHubPage isAdmin={isAdmin} /> : <Navigate to="/" replace />} />
               <Route path="/admin/settings/sync" element={canManagePlanNames ? <ModulePage section="admin" type="sync" /> : <Navigate to="/" replace />} />
               <Route path="/admin/settings/eligibility" element={canManagePlanNames ? <ModulePage section="admin" type="eligibility" /> : <Navigate to="/" replace />} />
+              <Route path="/admin/settings/staffing-rules" element={canManagePlanNames ? <StaffingRulesSettingsPage isAdmin={isAdmin} /> : <Navigate to="/" replace />} />
               <Route path="/admin/settings/name-linking" element={canManagePlanNames ? <PlanNameLinkingPage profile={profile} /> : <Navigate to="/" replace />} />
               <Route path="/admin/settings/school-cleanup" element={isAdmin ? <SchoolCleanupPage /> : <Navigate to="/" replace />} />
               <Route path="/admin/settings/users" element={isAdmin ? <AdminUsersPage /> : <Navigate to="/" replace />} />
@@ -413,7 +452,7 @@ export function App() {
           const duplicatesNotice = result.duplicatesWarned > 0
             ? ` يوجد ${result.duplicatesWarned} صفاً برقم وزاري مكرر.`
             : '';
-          setSyncNotice(`اكتملت المزامنة التلقائية: صفوف المصدر ${result.sourceRows}، مستبعدة لنقص الرقم الوزاري ${result.skippedRows.missingMinistryNumber} أو الاسم ${result.skippedRows.missingSchoolName}، جديد ${result.inserted}، محدث ${result.updated}، معلّم كمفقود ${result.flaggedMissing}، إحداثيات ناقصة/غير صالحة ${result.invalidCoordinates}.${duplicatesNotice}`);
+          setSyncNotice(`اكتملت المزامنة التلقائية: صفوف المصدر ${result.sourceRows}، مستبعدة لنقص الرقم الوزاري ${result.skippedRows.missingMinistryNumber} أو الاسم ${result.skippedRows.missingSchoolName}، جديد ${result.inserted}، محدث ${result.updated}، أحجام فارغة أو غير معروفة ${result.sizeWarnings.length} (تنبيه فقط)، معلّم كمفقود ${result.flaggedMissing}، إحداثيات ناقصة/غير صالحة ${result.invalidCoordinates}.${duplicatesNotice}`);
         }
       })
       .catch((error: unknown) => {

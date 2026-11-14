@@ -9,6 +9,7 @@ import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { loadXlsx } from '../../lib/xlsx';
+import { exportReportPdf } from '../../lib/reportPdf';
 import { useReportData } from './reportData';
 import { defaultReportLayout, getReportLayout, normalizeReportLayout, reportSections, type ReportLayoutItem } from './reportSections';
 
@@ -42,7 +43,7 @@ function initialReportAxis(value: string | null): ReportAxisFilter {
     : 'all';
 }
 function reportActionFilter(value: string | null): ReportActionFilter {
-  return value === 'late-visits' || value === 'visit-no-report' ? value : null;
+  return value === 'late-visits' || value === 'visit-no-report' || value === 'below-expected' ? value : null;
 }
 
 async function fetchMonthRows(month: string): Promise<ReportPlanRow[]> {
@@ -80,69 +81,6 @@ async function exportWorkbook(view: ReturnType<typeof buildPlanReportView>) {
   XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['المؤشر', 'القيمة'], ...view.cards.map((card) => [card.label, card.value])]), 'ملخص');
   XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['الخدمة', 'المخطط', 'تمت الزيارة', 'تم الرفع'], ...view.axes.map((axis) => [axis.label, axis.planned, axis.visited, axis.reportsDone])]), 'الخدمات');
   XLSX.writeFile(book, 'تقرير-الخطة-الشهرية.xlsx');
-}
-
-async function exportPdf(reportElement: HTMLElement, month: string): Promise<void> {
-  const [{ toPng }, { jsPDF }] = await Promise.all([
-    import('html-to-image'),
-    import('jspdf'),
-  ]);
-  await document.fonts.ready;
-  const clone = reportElement.cloneNode(true) as HTMLElement;
-  clone.classList.add('report-export-mode');
-  clone.querySelectorAll('.no-print').forEach((element) => element.remove());
-  const host = document.createElement('div');
-  host.className = 'report-export-host';
-  host.appendChild(clone);
-  document.body.appendChild(host);
-  try {
-    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
-    const margin = 9;
-    const pageWidth = 210 - margin * 2;
-    const pageHeight = 297 - margin * 2;
-    const renderImage = async (element: HTMLElement) => {
-      element.style.width = '1100px';
-      element.style.height = 'auto';
-      element.style.setProperty('--report-export-scale', '1');
-      const dataUrl = await toPng(element, { pixelRatio: 2, cacheBust: true, backgroundColor: '#f4f6fb' });
-      const image = new Image();
-      image.src = dataUrl;
-      await new Promise<void>((resolve, reject) => {
-        image.onload = () => resolve();
-        image.onerror = () => reject(new Error('تعذر تجهيز صورة التقرير للتصدير.'));
-      });
-      return { dataUrl, image };
-    };
-    const sections = [...clone.children] as HTMLElement[];
-    const coreIds = new Set(['header', 'services', 'summary', 'supervisors', 'cumulative', 'reports']);
-    const core = document.createElement('div');
-    core.className = 'report-design-page report-export-mode report-export-page';
-    sections.filter((section) => coreIds.has(section.dataset.sectionId ?? '') || !section.dataset.sectionId).forEach((section) => core.appendChild(section.cloneNode(true)));
-    host.appendChild(core);
-    const addImagePage = async (element: HTMLElement, forceNewPage: boolean) => {
-      const { dataUrl, image } = await renderImage(element);
-      if (forceNewPage) pdf.addPage();
-      const imageRatio = image.width / image.height;
-      const widthImageHeight = pageWidth / imageRatio;
-      const scale = Math.min(1, pageHeight / widthImageHeight);
-      const imageWidth = pageWidth * scale;
-      const imageHeight = widthImageHeight * scale;
-      pdf.addImage(dataUrl, 'PNG', (210 - imageWidth) / 2, margin, imageWidth, Math.min(pageHeight, imageHeight));
-    };
-    await addImagePage(core, false);
-    core.remove();
-    for (const section of sections.filter((item) => !coreIds.has(item.dataset.sectionId ?? '') && item.dataset.sectionId)) {
-      const page = document.createElement('div');
-      page.className = 'report-design-page report-export-mode report-export-page';
-      page.appendChild(section.cloneNode(true));
-      host.appendChild(page);
-      await addImagePage(page, true);
-      page.remove();
-    }
-    pdf.save(`تقرير-متابعة-الخطة-${month.slice(0, 4)}-${month.slice(5, 7)}.pdf`);
-  } finally {
-    host.remove();
-  }
 }
 
 export function MonthlyReportPage({ fixture }: { fixture?: LoadedReport } = {}) {
@@ -200,10 +138,17 @@ export function MonthlyReportPage({ fixture }: { fixture?: LoadedReport } = {}) 
     <FilterBar {...{ month, setMonth, asOf, setAsOf, axis, setAxis, engineerId, setEngineerId, supervisorId, setSupervisorId, neighbourhood, setNeighbourhood, engineers, supervisors, neighbourhoods }} onExcel={() => void exportWorkbook(view)} onPrint={() => window.print()} onCustomize={() => { setDraftLayout(layout); setCustomizing(true); }} onPdf={() => {
       if (!reportElementRef.current || isExporting) return;
       setIsExporting(true);
-      void exportPdf(reportElementRef.current, month).finally(() => setIsExporting(false));
+      void exportReportPdf(reportElementRef.current, `تقرير-متابعة-الخطة-${month.slice(0, 4)}-${month.slice(5, 7)}.pdf`)
+        .finally(() => setIsExporting(false));
     }} isExporting={isExporting} />
     {actionFilter && <div role="status" className="card flex flex-wrap items-center justify-between gap-2 p-3 text-sm text-brand-900">
-      <span>{actionFilter === 'late-visits' ? 'قائمة الزيارات المتأخرة' : 'قائمة الزيارات المنفذة دون تقرير'} · {filtered.length}</span>
+      <span>
+        {actionFilter === 'late-visits'
+          ? 'قائمة الزيارات التي فاتها موعدها'
+          : actionFilter === 'below-expected'
+            ? 'الزيارات غير المنجزة ضمن العجز عن المتوقع'
+            : 'قائمة الزيارات المنفذة دون تقرير'} · {filtered.length}
+      </span>
       <Link to={`/plans/report?month=${month}&service=${axis}`} className="font-bold underline">إزالة تصفية الإجراء</Link>
     </div>}
     {report.error && <StateBox tone="error">تعذر تحميل التقرير: {report.error.message}</StateBox>}

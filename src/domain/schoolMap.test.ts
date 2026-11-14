@@ -9,7 +9,7 @@ describe('school map data', () => {
       ministry_number: '10',
       latitude: 24.7,
       longitude: 46.6,
-      size_source: 'small',
+      size_source: 'small_plus',
       size_calc: 'medium',
       building_type: 'مستقل',
       plan_scope: true,
@@ -19,7 +19,7 @@ describe('school map data', () => {
       ministryNumber: '10',
       latitude: 24.7,
       longitude: 46.6,
-      size: 'medium',
+      size: 'small_plus',
       buildingType: 'مستقل',
       planScope: true,
     });

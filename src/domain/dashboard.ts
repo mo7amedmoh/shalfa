@@ -2,7 +2,7 @@ import type { PlanType } from './types';
 import { isDeliverableDueWithinDays, type DeliverableDueDates, type DeliverableRecord } from './deliverables';
 import { normalizeImportName } from './imports';
 import { summarizePlanReport, type DashboardVerdict, type ReportPlanMetricRow } from './planReport';
-import { calculateStaffing, parseClassCount, type SchoolSize, type StaffingInput, type StaffingResult } from './staffing';
+import { calculateStaffing, hasSizeClassDifference, parseClassCount, SCHOOL_SIZES, type SchoolSize, type StaffingInput, type StaffingResult, type StaffingRuleTable } from './staffing';
 import { eligibleSchoolIds, type PlanEligibilityConfig, type SchoolSourceRecord } from './planEligibility';
 
 export interface DashboardPlanRow {
@@ -30,13 +30,26 @@ export interface DashboardStaffingRow {
 
 export interface DashboardSchool extends SchoolSourceRecord {
   assignedCleaners: number;
+  schoolName?: string;
+  ministryNumber?: string | null;
   declaredSize?: string | null;
+  manualSizeOverride?: string | null;
   exception?: StaffingInput['exception'];
+}
+
+export interface DashboardCleanerShortageSchool {
+  id: string;
+  ministryNumber: string;
+  name: string;
+  required: number;
+  assigned: number;
+  shortage: number;
 }
 
 export interface DashboardEligibilityConfig extends PlanEligibilityConfig {
   classCountHeader: string;
   schoolSizeHeader: string;
+  staffingRules?: StaffingRuleTable;
 }
 
 export interface DashboardServiceProgress {
@@ -114,8 +127,9 @@ export function summarizeDashboardServices(
     const overallPercent = metrics.planned
       ? ((metrics.visited + metrics.reportsDone) / (2 * metrics.planned)) * 100
       : 0;
+    const visitPercent = metrics.planned ? (metrics.visited / metrics.planned) * 100 : 0;
     const expectedPercent = metrics.planned ? (metrics.expectedVisits / metrics.planned) * 100 : 0;
-    const gap = overallPercent - expectedPercent;
+    const gap = visitPercent - expectedPercent;
     return {
       planType,
       planned: metrics.planned,
@@ -123,7 +137,7 @@ export function summarizeDashboardServices(
       reportsDone: metrics.reportsDone,
       overallPercent,
       expectedPercent,
-      behind: Math.max(0, Math.ceil((expectedPercent - overallPercent) * metrics.planned / 100)),
+      behind: Math.max(0, metrics.expectedVisits - metrics.visited),
       status: !metrics.planned
         ? 'no-plan'
         : gap >= -5
@@ -191,9 +205,67 @@ export function staffingRowsForEligibleSchools(
     return calculateStaffing({
       classes,
       declaredSize: school.declaredSize,
+      manualSizeOverride: school.manualSizeOverride,
       assignedCleaners: school.assignedCleaners,
       exception: school.exception,
+      rules: config.staffingRules,
     });
+  });
+}
+
+export function eligibleSchoolsMissingClassCount(
+  schools: readonly DashboardSchool[],
+  config: DashboardEligibilityConfig,
+): Array<{ id: string; name: string }> {
+  const eligible = new Set(eligibleSchoolIds(schools, 'maintenance', config));
+  return schools
+    .filter((school) => eligible.has(school.id) && calculateStaffing({
+      classes: parseClassCount(school.sourceFields[config.classCountHeader]),
+      declaredSize: school.declaredSize,
+      manualSizeOverride: school.manualSizeOverride,
+      assignedCleaners: school.assignedCleaners,
+      exception: school.exception,
+      rules: config.staffingRules,
+    }).requiredCleaners === null)
+    .map((school) => ({ id: school.id, name: school.schoolName?.trim() || school.id }));
+}
+
+export function schoolsWithSizeClassDifference(
+  schools: readonly DashboardSchool[],
+  classCountHeader: string,
+): Array<{ id: string; name: string }> {
+  return schools.flatMap((school) => {
+    const classes = parseClassCount(school.sourceFields[classCountHeader]);
+    return hasSizeClassDifference(school.declaredSize, classes)
+      ? [{ id: school.id, name: school.schoolName?.trim() || school.id }]
+      : [];
+  });
+}
+
+export function cleanerShortageSchools(
+  schools: readonly DashboardSchool[],
+  config: DashboardEligibilityConfig,
+): DashboardCleanerShortageSchool[] {
+  const eligible = new Set(eligibleSchoolIds(schools, 'maintenance', config));
+  return schools.flatMap((school) => {
+    if (!eligible.has(school.id)) return [];
+    const result = calculateStaffing({
+      classes: parseClassCount(school.sourceFields[config.classCountHeader]),
+      declaredSize: school.declaredSize,
+      manualSizeOverride: school.manualSizeOverride,
+      assignedCleaners: school.assignedCleaners,
+      exception: school.exception,
+      rules: config.staffingRules,
+    });
+    if (!result.shortage || result.requiredCleaners === null) return [];
+    return [{
+      id: school.id,
+      ministryNumber: school.ministryNumber?.trim() ?? '',
+      name: school.schoolName?.trim() || school.id,
+      required: result.requiredCleaners,
+      assigned: result.assignedCleaners,
+      shortage: result.shortage,
+    }];
   });
 }
 
@@ -218,7 +290,7 @@ export interface WorkforceSummary {
     netBalance: number;
   };
   cleaners: ReturnType<typeof summarizeDashboardStaffing> & {
-    bySize: Record<'small' | 'medium' | 'large', { required: number; assigned: number; shortage: number; surplus: number }>;
+    bySize: Record<SchoolSize, { required: number; assigned: number; shortage: number; surplus: number }>;
     netBalance: number;
   };
   total: {
@@ -231,7 +303,7 @@ export interface WorkforceSummary {
 }
 
 export function summarizeWorkforce(
-  cleanerRows: readonly (DashboardStaffingRow & { size?: 'small' | 'medium' | 'large' | null })[],
+  cleanerRows: readonly (DashboardStaffingRow & { size?: SchoolSize | null })[],
   gatekeepersRequired: number,
   gatekeepersAssigned: number,
 ): WorkforceSummary {
@@ -241,7 +313,7 @@ export function summarizeWorkforce(
   }
   const cleaners = {
     ...summarizeDashboardStaffing(cleanerRows),
-    bySize: (['small', 'medium', 'large'] as const).reduce((result, size) => {
+    bySize: SCHOOL_SIZES.reduce((result, size) => {
       result[size] = cleanerRows
         .filter((row) => row.size === size)
         .reduce((summary, row) => ({
@@ -251,7 +323,7 @@ export function summarizeWorkforce(
           surplus: summary.surplus + row.surplus,
         }), { required: 0, assigned: 0, shortage: 0, surplus: 0 });
       return result;
-    }, {} as Record<'small' | 'medium' | 'large', { required: number; assigned: number; shortage: number; surplus: number }>),
+    }, {} as Record<SchoolSize, { required: number; assigned: number; shortage: number; surplus: number }>),
   };
   const gatekeepers = {
     required: gatekeepersRequired,
@@ -259,8 +331,8 @@ export function summarizeWorkforce(
     shortage: Math.max(0, gatekeepersRequired - gatekeepersAssigned),
     surplus: Math.max(0, gatekeepersAssigned - gatekeepersRequired),
   };
-  const cleanersNetBalance = cleaners.shortage - cleaners.surplus;
-  const gatekeepersNetBalance = gatekeepers.shortage - gatekeepers.surplus;
+  const cleanersNetBalance = cleaners.assigned - cleaners.required;
+  const gatekeepersNetBalance = gatekeepers.assigned - gatekeepers.required;
   return {
     gatekeepers: { ...gatekeepers, netBalance: gatekeepersNetBalance },
     cleaners: { ...cleaners, netBalance: cleanersNetBalance },
@@ -269,7 +341,7 @@ export function summarizeWorkforce(
       assigned: gatekeepers.assigned + cleaners.assigned,
       shortage: gatekeepers.shortage + cleaners.shortage,
       surplus: gatekeepers.surplus + cleaners.surplus,
-      netBalance: gatekeepersNetBalance + cleanersNetBalance,
+      netBalance: gatekeepers.assigned + cleaners.assigned - gatekeepers.required - cleaners.required,
     },
   };
 }

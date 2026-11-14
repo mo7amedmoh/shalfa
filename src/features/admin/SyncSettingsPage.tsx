@@ -78,7 +78,7 @@ export function SyncSettingsPage() {
       const missingNumberRowsNotice = missingNumberRows.length
         ? ` · العمود المقروء: ${ministryColumnHeader} (العمود ${ministryColumnPosition}) · الصفوف/المدارس والقيم المجاورة: ${missingNumberRows.map(({ sourceRow, schoolName, nearbyCells }) => `${sourceRow} (${schoolName || 'بلا اسم'}: ${nearbyCells.map(({ position, header, value }) => `#${position} ${header}=${value || '∅'}`).join(' | ')})`).join('، ')}`
         : '';
-      setMessage(`اكتملت المزامنة. صفوف المصدر: ${result.sourceRows} · مدارس مستوردة: ${result.inserted + result.updated} · مستبعدة لنقص الرقم الوزاري: ${result.skippedRows.missingMinistryNumber}${missingNumberRowsNotice}، ونقص الاسم: ${result.skippedRows.missingSchoolName} · جديد: ${result.inserted} · محدث: ${result.updated} · صفوف مكررة للتنبيه: ${result.duplicatesWarned} · معلّمة كمفقودة: ${result.flaggedMissing} · إحداثيات ناقصة/غير صالحة: ${result.invalidCoordinates}`);
+      setMessage(`اكتملت المزامنة. صفوف المصدر: ${result.sourceRows} · مدارس مستوردة: ${result.inserted + result.updated} · مستبعدة لنقص الرقم الوزاري: ${result.skippedRows.missingMinistryNumber}${missingNumberRowsNotice}، ونقص الاسم: ${result.skippedRows.missingSchoolName} · جديد: ${result.inserted} · محدث: ${result.updated} · صفوف مكررة للتنبيه: ${result.duplicatesWarned} · أحجام فارغة أو غير معروفة (تنبيه فقط): ${result.sizeWarnings.length} · معلّمة كمفقودة: ${result.flaggedMissing} · إحداثيات ناقصة/غير صالحة: ${result.invalidCoordinates}`);
       await queryClient.invalidateQueries({ queryKey: ['schools'] });
       await queryClient.invalidateQueries({ queryKey: ['school-sync-status'] });
     },
@@ -106,6 +106,19 @@ export function SyncSettingsPage() {
       </div>
       {schoolStatus.error && <p role="alert" className="text-sm text-rose-800">تعذر تحميل تنبيهات بيانات المدارس: {schoolStatus.error.message}</p>}
       <DuplicateSchoolWarning duplicates={lastReport?.duplicateNumbers ?? duplicateMinistryRows(schoolStatus.data ?? [])} />
+      {lastReport && <section role={lastReport.sizeWarnings.length ? 'status' : 'region'} className={`rounded-xl border p-4 text-sm ${lastReport.sizeWarnings.length ? 'border-amber-300 bg-amber-50 text-amber-950' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>
+        <h3 className="font-bold">مؤشرات حجم المدرسة</h3>
+        {lastReport.sizeWarnings.length
+          ? <><p className="mt-1">{lastReport.sizeWarnings.length} صفاً احتاج إلى تنبيه بسبب حجم فارغ أو غير معروف؛ لم تُوقف المزامنة، وسيُستخدم عدد الفصول احتياطياً عند الحاجة.</p>
+            <ul className="mt-2 grid gap-1">
+              {lastReport.sizeWarnings.slice(0, 30).map(({ sourceRow, schoolName, value, reason }) => <li key={sourceRow}>
+                الصف {sourceRow} · {schoolName} · {reason === 'empty' ? 'قيمة فارغة' : `قيمة غير معروفة: ${value}`}
+              </li>)}
+            </ul>
+            {lastReport.sizeWarnings.length > 30 && <p className="mt-2">وتوجد {lastReport.sizeWarnings.length - 30} تنبيهات أخرى في التقرير.</p>}
+          </>
+          : <p className="mt-1">جميع أحجام المدارس الواردة معروفة.</p>}
+      </section>}
       {isLoading ? <p role="status">جارٍ تحميل الإعدادات…</p> : (
         <div className="grid gap-4 sm:grid-cols-2">
           <Input label="اسم تبويب المصدر" value={values.tabName} onChange={(value) => update('tabName', value)} required />

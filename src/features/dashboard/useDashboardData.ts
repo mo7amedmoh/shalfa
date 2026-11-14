@@ -2,7 +2,8 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { dashboardAccessForRole } from '../../domain/dashboardAccess';
-import { countDashboardActions, staffingRowsForEligibleSchools, summarizeDashboardServices, summarizeSupervisorCompliance, summarizeWorkforce, type DashboardStaffingRow, type WorkforceSummary } from '../../domain/dashboard';
+import { cleanerShortageSchools, countDashboardActions, eligibleSchoolsMissingClassCount, schoolsWithSizeClassDifference, staffingRowsForEligibleSchools, summarizeDashboardServices, summarizeSupervisorCompliance, summarizeWorkforce, type DashboardCleanerShortageSchool, type DashboardStaffingRow, type WorkforceSummary } from '../../domain/dashboard';
+import { DEFAULT_STAFFING_RULES, SCHOOL_SIZES } from '../../domain/staffing';
 import { formatDashboardActivity } from '../../domain/dashboardActivity';
 import { summarizeDeliverables } from '../../domain/deliverables';
 import { KPI_WORK_ORDER } from '../../domain/kpi/config';
@@ -34,12 +35,14 @@ const planSchema = z.object({
 });
 const sourceSchoolSchema = z.object({
   id: z.string().uuid(),
+  school_name: z.string(),
+  ministry_number: z.string().nullable(),
   source_fields: z.record(z.string(), z.unknown()),
-  size_source: z.enum(['small', 'medium', 'large']).nullable(),
+  size_source: z.enum(SCHOOL_SIZES).nullable(),
 });
 const assignmentSchema = z.object({ school_id: z.string().uuid() });
 const gatekeeperSchema = z.object({ school_id: z.string().uuid() });
-const sizeCorrectionSchema = z.object({ school_id: z.string().uuid(), corrected_size: z.string() });
+const sizeCorrectionSchema = z.object({ school_id: z.string().uuid(), corrected_size: z.enum(SCHOOL_SIZES) });
 const exceptionSchemaRow = z.object({ school_id: z.string().uuid(), required_count: z.number().int(), reason: z.string() });
 const eligibilitySchema = z.object({
   buildingTypeHeader: z.string(),
@@ -49,6 +52,14 @@ const eligibilitySchema = z.object({
   noElevatorValues: z.array(z.string()),
   classCountHeader: z.string().default('عدد الفصول'),
   schoolSizeHeader: z.string().default(''),
+});
+const staffingRulesSchema = z.object({
+  small: z.number().int().min(0),
+  small_plus: z.number().int().min(0),
+  medium: z.number().int().min(0),
+  medium_plus: z.number().int().min(0),
+  large: z.number().int().min(0),
+  large_plus: z.number().int().min(0),
 });
 const exceptionSchema = z.object({ requiredCleaners: z.number().int().min(0), reason: z.string().trim().min(1) });
 const syncSchema = z.object({ synced_at: z.string().nullable() });
@@ -97,7 +108,11 @@ type DashboardDeliverable = {
 type StaffingData = {
   rows: DashboardStaffingRow[];
   configured: boolean;
-  workforce: WorkforceSummary | null;
+  workforce: (WorkforceSummary & {
+    missingClassCountSchools: Array<{ id: string; name: string }>;
+    cleanerShortageSchools: DashboardCleanerShortageSchool[];
+    sizeMismatchSchools: Array<{ id: string; name: string }>;
+  }) | null;
 };
 type DeliverablesData = {
   items: DashboardDeliverable[];
@@ -161,15 +176,16 @@ async function loadPlanRows(month: string): Promise<DashboardPlanRow[]> {
 
 async function loadStaffingData(): Promise<StaffingData> {
   if (!supabase) throw new Error('إعداد الاتصال بقاعدة البيانات غير مكتمل.');
-  const [schoolsResult, assignmentsResult, overridesResult, exceptionsResult, configResult, gatekeepersResult] = await Promise.all([
+  const [schoolsResult, assignmentsResult, overridesResult, exceptionsResult, configResult, gatekeepersResult, staffingRulesResult] = await Promise.all([
     supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsDashboard),
     supabase.from('cleaner_assignments').select(APP_SCHEMA_SELECT.cleanerAssignmentSchool),
     supabase.from('school_size_corrections').select(APP_SCHEMA_SELECT.schoolSizeCorrection),
     supabase.from('staffing_exceptions').select(APP_SCHEMA_SELECT.staffingException),
     supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
     supabase.from('gatekeepers').select(APP_SCHEMA_SELECT.gatekeeperDashboard),
+    supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'staffing_rules').maybeSingle(),
   ]);
-  for (const result of [schoolsResult, assignmentsResult, overridesResult, exceptionsResult, configResult, gatekeepersResult]) {
+  for (const result of [schoolsResult, assignmentsResult, overridesResult, exceptionsResult, configResult, gatekeepersResult, staffingRulesResult]) {
     if (result.error) throw result.error;
   }
   if (!configResult.data) return { rows: [], configured: false, workforce: null };
@@ -193,15 +209,20 @@ async function loadStaffingData(): Promise<StaffingData> {
     const override = overrides.get(school.id);
     return {
       id: school.id,
+      schoolName: school.school_name,
+      ministryNumber: school.ministry_number,
       sourceFields: school.source_fields,
       assignedCleaners: assignmentCounts.get(school.id) ?? 0,
-      declaredSize: override?.correctedSize
-        ?? school.size_source
+      declaredSize: school.size_source
         ?? (config.schoolSizeHeader ? String(school.source_fields[config.schoolSizeHeader] ?? '') : null),
+      manualSizeOverride: override?.correctedSize,
       exception: override?.exception,
     };
   });
-  const eligibility: EligibilitySettings = config;
+  const rules = staffingRulesResult.data
+    ? staffingRulesSchema.parse(staffingRulesResult.data.value)
+    : DEFAULT_STAFFING_RULES;
+  const eligibility: EligibilitySettings & { staffingRules: typeof rules } = { ...config, staffingRules: rules };
   const rows = staffingRowsForEligibleSchools(dashboardSchools, eligibility);
   const eligibleSchools = new Set(eligibleSchoolIds(dashboardSchools, 'maintenance', config));
   const assignedGatekeepers = new Set(z.array(gatekeeperSchema).parse(gatekeepersResult.data)
@@ -210,11 +231,12 @@ async function loadStaffingData(): Promise<StaffingData> {
   return {
     rows,
     configured: true,
-    workforce: summarizeWorkforce(
-      rows,
-      eligibleSchools.size,
-      assignedGatekeepers.size,
-    ),
+    workforce: {
+      ...summarizeWorkforce(rows, eligibleSchools.size, assignedGatekeepers.size),
+      missingClassCountSchools: eligibleSchoolsMissingClassCount(dashboardSchools, eligibility),
+      cleanerShortageSchools: cleanerShortageSchools(dashboardSchools, eligibility),
+      sizeMismatchSchools: schoolsWithSizeClassDifference(dashboardSchools, config.classCountHeader),
+    },
   };
 }
 

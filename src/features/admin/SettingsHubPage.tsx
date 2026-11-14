@@ -53,6 +53,7 @@ async function loadHubStatus(isAdmin: boolean): Promise<HubStatus> {
   const [
     latestSync, eligibility, planTypes, monthlyNames, generalNames, aliases,
     schoolsCheck, customCheck, monthlyCheck, gatekeeperCheck, employeeCategoryCheck, gatekeeperStatus,
+    staffingRulesCheck,
   ] = await Promise.all([
     supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsSyncTime)
       .not('synced_at', 'is', null).order('synced_at', { ascending: false }).limit(1).maybeSingle(),
@@ -67,6 +68,7 @@ async function loadHubStatus(isAdmin: boolean): Promise<HubStatus> {
     supabase.from('gatekeepers').select('employee_id,employee_no').limit(0),
     supabase.from('employees').select('id').eq('category', 'gatekeeper').limit(0),
     supabase.rpc('gatekeeper_employee_status'),
+    supabase.from('app_config').select('key').eq('key', 'staffing_rules').maybeSingle(),
   ]);
   for (const result of [latestSync, eligibility, planTypes]) {
     if (result.error) throw result.error;
@@ -100,6 +102,8 @@ async function loadHubStatus(isAdmin: boolean): Promise<HubStatus> {
     check('ربط سجلات البوابين بالموظفين', '202611100002_gatekeeper_employee_links.sql', gatekeeperCheck.error),
     check('فئة موظف حارس المدرسة', '202611100001_gatekeeper_category.sql', employeeCategoryCheck.error),
     check('فحص حالة ربط موظفي البوابين', '202611100002_gatekeeper_employee_links.sql', gatekeeperStatus.error),
+    check('قواعد أحجام المدارس الستة', '202611140001_school_size_model.sql',
+      staffingRulesCheck.error ?? (staffingRulesCheck.data ? null : { message: 'إعداد staffing_rules غير موجود' })),
     ...(isAdmin ? [check('قائمة تنظيف المدارس', '202611090001_school_cleanup.sql', cleanupMigrationError)] : []),
   ];
   const unlinkedNames = getUnlinkedPlanNames(
@@ -129,6 +133,7 @@ export function SettingsHubPage({ isAdmin }: { isAdmin: boolean }) {
   const cards = [
     { title: 'مزامنة المدارس', description: `آخر مزامنة: ${lastSync}`, href: '/admin/settings/sync', action: 'إعداد الربط' },
     { title: 'أهلية الخطط', description: status.data?.hasEligibility ? 'قواعد الأهلية محفوظة' : 'لم تُحفظ القواعد بعد', href: '/admin/settings/eligibility', action: 'إعداد الأهلية' },
+    { title: 'قواعد احتياج العمالة', description: 'توزيع العمال المطلوب حسب مؤشرات الأحجام الستة', href: '/admin/settings/staffing-rules', action: 'إدارة القواعد' },
     { title: 'إدارة الخطط', description: `أنواع خطط مخصصة نشطة: ${status.data?.activePlanTypes ?? '—'}`, href: '/settings/plans', action: 'إدارة الخطط' },
     { title: 'ربط الأسماء بالموظفين', description: `أسماء غير مرتبطة: ${status.data?.unlinkedNames ?? '—'}`, href: '/admin/settings/name-linking', action: 'مراجعة الأسماء' },
     { title: 'فحص المخطط والترحيلات', description: status.isLoading ? 'جارٍ الفحص…' : missingMigrations.length ? `ترحيلات ناقصة: ${missingMigrations.length}` : 'كل الفحوصات الأساسية ناجحة', href: '#schema-check', action: 'عرض الفحص' },

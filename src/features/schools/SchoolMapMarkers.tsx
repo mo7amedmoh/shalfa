@@ -4,7 +4,19 @@ import { useMap } from 'react-leaflet';
 import type { SlimMapSchool } from '../../domain/schoolMap';
 
 function markerColour(size: SlimMapSchool['size']): string {
-  return size === 'large' ? '#c43d4d' : size === 'medium' ? '#d79527' : '#2877b8';
+  if (!size) return '#64748b';
+  return ({
+    small: '#2877b8',
+    small_plus: '#26a69a',
+    medium: '#d79527',
+    medium_plus: '#8b5cf6',
+    large: '#c43d4d',
+    large_plus: '#7f1d1d',
+  } as const)[size];
+}
+
+function markerRadius(size: SlimMapSchool['size']): number {
+  return size === 'large_plus' ? 9 : size === 'large' || size === 'medium_plus' ? 8 : size === 'medium' ? 7 : 6;
 }
 
 export function SchoolMapMarkers({
@@ -21,7 +33,7 @@ export function SchoolMapMarkers({
     for (const school of schools) {
       if (school.latitude === null || school.longitude === null) continue;
       const marker = L.circleMarker([school.latitude, school.longitude], {
-        radius: school.size === 'large' ? 8 : school.size === 'medium' ? 7 : 6,
+        radius: markerRadius(school.size),
         color: markerColour(school.size),
         fillColor: markerColour(school.size),
         fillOpacity: 0.85,

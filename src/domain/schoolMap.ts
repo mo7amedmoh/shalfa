@@ -1,4 +1,5 @@
 import { normalizeMinistryNumber } from './imports';
+import type { SchoolSize } from './staffing';
 
 export interface MappableSchool {
   id: string;
@@ -12,7 +13,7 @@ export type SlimMapSchool = {
   ministryNumber: string;
   latitude: number | null;
   longitude: number | null;
-  size: 'small' | 'medium' | 'large' | null;
+  size: SchoolSize | null;
   buildingType: string | null;
   planScope: boolean;
 };
@@ -23,7 +24,7 @@ export function toSlimMapSchool(school: {
   ministry_number: string;
   latitude: number | null;
   longitude: number | null;
-  size_source: 'small' | 'medium' | 'large' | null;
+  size_source: SchoolSize | null;
   size_calc: 'small' | 'medium' | 'large' | null;
   building_type: string | null;
   plan_scope: boolean;
@@ -34,7 +35,7 @@ export function toSlimMapSchool(school: {
     ministryNumber: school.ministry_number,
     latitude: school.latitude,
     longitude: school.longitude,
-    size: school.size_calc ?? school.size_source,
+    size: school.size_source ?? school.size_calc,
     buildingType: school.building_type,
     planScope: school.plan_scope,
   };

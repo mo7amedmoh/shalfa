@@ -230,6 +230,14 @@ a {
   border-radius: inherit;
 }
 
+.dashboard-workforce-required-marker {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: calc(100% - 1px);
+  width: 2px;
+  background: #21366a;
+}
+
 .dashboard-workforce-track .emerald {
   background: #17825a;
 }
@@ -780,6 +788,8 @@ th {
 }
 
 .schools-summary-sizes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -1148,8 +1158,11 @@ th {
   border-radius: 999px;
 }
 .school-map-legend-small { background: #2877b8; }
+.school-map-legend-small_plus { background: #26a69a; }
 .school-map-legend-medium { background: #d79527; }
+.school-map-legend-medium_plus { background: #8b5cf6; }
 .school-map-legend-large { background: #c43d4d; }
+.school-map-legend-large_plus { background: #7f1d1d; }
 
 .report-design-page {
   display: grid;

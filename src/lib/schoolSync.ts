@@ -1,7 +1,7 @@
 import { loadXlsx } from './xlsx';
 import { normalizeEligibilityValue } from '../domain/planEligibility';
 import { z } from 'zod';
-import { parseClassCount } from '../domain/staffing';
+import { normalizeSchoolSize, parseClassCount, type SchoolSize } from '../domain/staffing';
 import { mapSchoolContactColumns, schoolContactsExtraKey } from '../domain/schoolContacts';
 import { normalizeImportName, normalizeMinistryNumber } from '../domain/imports';
 import { supabase } from './supabase';
@@ -37,6 +37,7 @@ export type SchoolSyncResult = {
   duplicateNumbers: DuplicateMinistryNumber[];
   flaggedMissing: number;
   invalidCoordinates: number;
+  sizeWarnings: Array<{ sourceRow: number; schoolName: string; value: string; reason: 'empty' | 'unknown' }>;
 };
 
 const sheetId = '1RQo06DqRHv24M8bh1CmJbOl4c_GmoLPXKkHK_sVIoI8';
@@ -51,7 +52,7 @@ type SyncedSchool = {
   has_elevator_contractor: boolean;
   name: string;
   extra: Record<string, unknown>;
-  size_source: 'small' | 'medium' | 'large' | null;
+  size_source: SchoolSize | null;
   class_count: number | null;
   lat: number | null;
   lng: number | null;
@@ -59,13 +60,8 @@ type SyncedSchool = {
   missing_from_sheet_at: null;
 };
 
-export function normalizeSheetSchoolSize(value: unknown): 'small' | 'medium' | 'large' | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim().toLocaleUpperCase();
-  if (normalized === 'S') return 'small';
-  if (normalized === 'M') return 'medium';
-  if (normalized === 'L') return 'large';
-  return null;
+export function normalizeSheetSchoolSize(value: unknown): SchoolSize | null {
+  return normalizeSchoolSize(value);
 }
 
 function normalizeDigits(value: string): string {
@@ -145,6 +141,7 @@ export function prepareSchoolRows(
 ): {
   rows: SyncedSchool[];
   duplicateNumbers: DuplicateMinistryNumber[];
+  sizeWarnings: SchoolSyncResult['sizeWarnings'];
   invalidCoordinates: number;
   sourceRows: number;
   skippedRows: SchoolSyncResult['skippedRows'];
@@ -159,6 +156,7 @@ export function prepareSchoolRows(
   const occurrences = new Map<string, number>();
   const duplicateRows = new Map<string, Set<number>>();
   const rows: SyncedSchool[] = [];
+  const sizeWarnings: SchoolSyncResult['sizeWarnings'] = [];
   let invalidCoordinates = 0;
   let processedSourceRows = 0;
   const skippedRows: SchoolSyncResult['skippedRows'] = {
@@ -214,6 +212,16 @@ export function prepareSchoolRows(
     if (!coordinate.valid) invalidCoordinates += 1;
     const buildingType = values[buildingTypeIndex]?.trim() ?? '';
     const elevatorContractor = values[elevatorContractorIndex];
+    const rawSize = sizeHeaderIndex < 0 ? '' : values[sizeHeaderIndex]?.trim() ?? '';
+    const normalizedSize = normalizeSheetSchoolSize(rawSize);
+    if (sizeHeaderIndex >= 0 && !normalizedSize) {
+      sizeWarnings.push({
+        sourceRow,
+        schoolName,
+        value: rawSize,
+        reason: rawSize ? 'unknown' : 'empty',
+      });
+    }
     rows.push({
       ministry_no: ministryNumber,
       source_key: `${normalizedMinistryNumber.toLowerCase()}#${occurrence}`,
@@ -224,7 +232,7 @@ export function prepareSchoolRows(
       has_elevator_contractor: Boolean(normalizedText(elevatorContractor) && normalizedText(elevatorContractor) !== normalizedText('لا ينطبق')),
       name: schoolName,
       extra,
-      size_source: sizeHeaderIndex < 0 ? null : normalizeSheetSchoolSize(values[sizeHeaderIndex]),
+      size_source: normalizedSize,
       class_count: classCountHeaderIndex < 0 ? null : parseClassCount(values[classCountHeaderIndex]),
       lat: coordinate.lat,
       lng: coordinate.lng,
@@ -236,7 +244,7 @@ export function prepareSchoolRows(
     ministryNumber,
     rows: [...rows].sort((a, b) => a - b),
   }));
-  return { rows, duplicateNumbers, invalidCoordinates, sourceRows: processedSourceRows, skippedRows };
+  return { rows, duplicateNumbers, sizeWarnings, invalidCoordinates, sourceRows: processedSourceRows, skippedRows };
 }
 
 type ExistingSchoolSyncRow = {
@@ -333,7 +341,14 @@ export async function syncSchools(configInput: SchoolSyncConfig): Promise<School
   }
   const synchronizedAt = new Date().toISOString();
   const prepared = prepareSchoolRows(headers, parsedSourceRows, config, synchronizedAt);
-  const { rows: syncRows, duplicateNumbers, invalidCoordinates, sourceRows: sourceRowCount, skippedRows } = prepared;
+  const {
+    rows: syncRows,
+    duplicateNumbers,
+    sizeWarnings,
+    invalidCoordinates,
+    sourceRows: sourceRowCount,
+    skippedRows,
+  } = prepared;
   const missingNumbersError = getMissingMinistryNumbersError(skippedRows);
   if (missingNumbersError) {
     throw new Error(
@@ -395,6 +410,7 @@ export async function syncSchools(configInput: SchoolSyncConfig): Promise<School
     duplicateNumbers,
     flaggedMissing: missingRows.length,
     invalidCoordinates,
+    sizeWarnings,
   };
 }
 

@@ -2,9 +2,11 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { CalendarClock, ClipboardList, FileCheck2, UsersRound } from 'lucide-react';
 import type { PlanType } from '../../domain/types';
+import { formatArabicCount, type ArabicCountForms } from '../../domain/arabicCount';
 import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { useDashboardData } from './useDashboardData';
+import { SCHOOL_SIZE_LABELS, SCHOOL_SIZES } from '../../domain/staffing';
 
 const serviceLabels: Record<PlanType, string> = {
   maintenance: 'الصيانة والتكييف',
@@ -14,6 +16,45 @@ const serviceLabels: Record<PlanType, string> = {
 };
 
 const serviceOrder: readonly PlanType[] = ['maintenance', 'cleaning', 'security_safety', 'elevators'];
+const visitCountForms: ArabicCountForms = { one: 'زيارة', two: 'زيارتين', few: 'زيارات', many: 'زيارة' };
+const workingDayCountForms: ArabicCountForms = { one: 'يوم عمل', two: 'يومي عمل', few: 'أيام عمل', many: 'يوم عمل' };
+const schoolShortageCountForms: ArabicCountForms = {
+  one: 'مدرسة لديها عجز في عمال النظافة',
+  two: 'مدرستان لديهما عجز في عمال النظافة',
+  few: 'مدارس لديها عجز في عمال النظافة',
+  many: 'مدرسة لديها عجز في عمال النظافة',
+};
+const gatekeeperCountForms: ArabicCountForms = { one: 'بواب', two: 'بوابين', few: 'بوابين', many: 'بواب' };
+const cleanerShortageCountForms: ArabicCountForms = {
+  one: 'عامل نظافة',
+  two: 'عاملان نظافة',
+  few: 'عمال نظافة',
+  many: 'عامل نظافة',
+};
+const overdueVisitCountForms: ArabicCountForms = {
+  one: 'زيارة فات موعدها',
+  two: 'زيارتان فات موعدهما',
+  few: 'زيارات فات موعدها',
+  many: 'زيارة فات موعدها',
+};
+const dueDeliverableCountForms: ArabicCountForms = {
+  one: 'مخرج يستحق خلال 14 يومًا',
+  two: 'مخرجان يستحقان خلال 14 يومًا',
+  few: 'مخرجات تستحق خلال 14 يومًا',
+  many: 'مخرج يستحق خلال 14 يومًا',
+};
+const visitWithoutReportCountForms: ArabicCountForms = {
+  one: 'زيارة تمت دون تقرير',
+  two: 'زيارتان تمت دون تقرير',
+  few: 'زيارات تمت دون تقرير',
+  many: 'زيارة تمت دون تقرير',
+};
+const overdueReportCountForms: ArabicCountForms = {
+  one: 'زيارة متأخرة',
+  two: 'زيارتان متأخرتان',
+  few: 'زيارات متأخرة',
+  many: 'زيارة متأخرة',
+};
 
 function currentMonth(): string {
   const date = new Date();
@@ -59,13 +100,6 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
       : dashboard.verdict.status === 'far-behind'
         ? 'border-rose-600'
         : 'border-slate-300';
-  const statusLabel = dashboard.verdict.status === 'on-track'
-    ? 'على المسار'
-    : dashboard.verdict.status === 'slightly-behind'
-      ? 'متأخرون قليلاً'
-      : dashboard.verdict.status === 'far-behind'
-        ? 'متأخرون عن الخطة'
-        : 'لا توجد خطة';
   const monthLabel = `${new Intl.DateTimeFormat('ar-SA', { month: 'long' }).format(new Date(`${dashboard.month}-01T00:00:00Z`))} ${formatNumber(dashboard.month.slice(0, 4))}`;
   const reportFilters = new URLSearchParams({
     month: dashboard.month,
@@ -75,6 +109,11 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
   const reportUrl = `/plans/report?${reportFilters.toString()}`;
   const counts = dashboard.actionCounts;
   const workforce = dashboard.workforce;
+  const largestCleanerShortages = workforce
+    ? [...workforce.cleanerShortageSchools]
+      .sort((left, right) => right.shortage - left.shortage)
+      .slice(0, 4)
+    : [];
   const serviceProgress = new Map(dashboard.services.map((service) => [service.planType, service]));
 
   return (
@@ -169,19 +208,21 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
             <div className="min-w-0">
               <p id="dashboard-verdict-title" className="text-sm font-bold text-slate-500">هل نمشي مع الخطة؟</p>
               <h3 className="mt-1 text-2xl font-extrabold text-slate-900">
-                {dashboard.verdict.status === 'on-track'
-                  ? statusLabel
-                  : `متأخرون ${formatNumber(dashboard.verdict.behind)} زيارة عن المتوقع`}
+                {dashboard.verdict.done >= dashboard.verdict.expected
+                  ? `متقدمون بـ ${formatArabicCount(dashboard.verdict.ahead, formatNumber, visitCountForms)} عن المتوقع`
+                  : `متأخرون بـ ${formatArabicCount(dashboard.verdict.behind, formatNumber, visitCountForms)} عن المتوقع`}
               </h3>
-              <p className="mt-2 text-sm leading-7 text-slate-600">
-                {dashboard.verdict.firstSlipDay
-                  ? <>بدأ التأخر يوم <b>{formatDate(dashboard.verdict.firstSlipDay)}</b></>
-                  : 'لا يوجد يوم تأخر مسجل حتى الآن'}
-                {' · '}
-                {dashboard.verdict.requiredDailyPace === null
-                  ? 'لا توجد أيام عمل متبقية'
-                  : <>المطلوب <b>{formatNumber(dashboard.verdict.requiredDailyPace.toFixed(1))}</b> زيارة يوميًا لإنجاز المتبقي</>}
-              </p>
+              {dashboard.verdict.done < dashboard.verdict.expected && (
+                <p className="mt-2 text-sm leading-7 text-slate-600">
+                  {dashboard.verdict.firstSlipDay
+                    ? <>بدأ التأخر يوم <b>{formatDate(dashboard.verdict.firstSlipDay)}</b></>
+                    : 'لا يوجد يوم تأخر مسجل حتى الآن'}
+                  {' · '}
+                  {dashboard.verdict.requiredDailyPace === null
+                    ? 'لا توجد أيام عمل متبقية'
+                    : <>المطلوب <b>{formatNumber(dashboard.verdict.requiredDailyPace.toFixed(1))}</b> زيارة يوميًا لإنجاز المتبقي</>}
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 xl:min-w-[520px]">
               <Metric label="المنجز حتى اليوم" value={dashboard.verdict.done} formatNumber={formatNumber} tone="text-emerald-700" />
@@ -189,7 +230,11 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
               <div className="col-span-2 sm:col-span-1">
                 <div className="flex justify-between gap-2 text-xs text-slate-500">
                   <span>تقدم الشهر</span>
-                  <span>{formatNumber(dashboard.verdict.elapsedWorkingDays)} من {formatNumber(dashboard.verdict.totalWorkingDays)} يوم عمل</span>
+                  <span>
+                    {formatArabicCount(dashboard.verdict.elapsedWorkingDays, formatNumber, workingDayCountForms)}
+                    {' من '}
+                    {formatArabicCount(dashboard.verdict.totalWorkingDays, formatNumber, workingDayCountForms)}
+                  </span>
                 </div>
                 <div
                   className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-100"
@@ -217,17 +262,20 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
         <div className="dashboard-content-enter dashboard-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <ActionTile
             to={`${reportUrl}&action=late-visits`}
-            title="زيارات متأخرة"
+            title="زيارات فاتها موعدها"
+            titleForms={overdueVisitCountForms}
             value={counts?.lateVisits}
             loading={dashboard.plansLoading}
             formatNumber={formatNumber}
             action="عرض القائمة"
             icon={<CalendarClock size={18} />}
             tone="text-rose-700"
+            tooltip="لم تُنجز الزيارة حتى تاريخها المخطط."
           />
           <ActionTile
             to={`${reportUrl}&action=visit-no-report`}
             title="تمت بدون تقرير"
+            titleForms={visitWithoutReportCountForms}
             value={counts?.visitedWithoutReport}
             loading={dashboard.plansLoading}
             formatNumber={formatNumber}
@@ -238,6 +286,8 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
           <ActionTile
             to="/placement/cleaners?shortage=true"
             title="عجز عمالة نظافة"
+            titleForms={cleanerShortageCountForms}
+            titlePrefix="العجز: "
             value={dashboard.staffingConfigured ? counts?.cleanerShortage : undefined}
             loading={dashboard.staffingConfigured && dashboard.staffingLoading}
             formatNumber={formatNumber}
@@ -253,6 +303,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
             <ActionTile
               to="/kpi/deliverables?filter=due-soon"
               title="مخرجات تستحق خلال 14 يومًا"
+              titleForms={dueDeliverableCountForms}
               value={counts?.deliverablesDueSoon}
               loading={dashboard.deliverablesLoading}
               formatNumber={formatNumber}
@@ -294,23 +345,36 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
               </article>
             );
           }
-          const chip = progress.status === 'on-track'
+          const chip = progress.behind === 0
             ? { label: 'على المسار', tone: 'bg-emerald-100 text-emerald-800' }
             : {
-              label: `متأخر ${formatNumber(progress.behind)}`,
+              label: `أقل من المتوقع بـ ${formatArabicCount(progress.behind, formatNumber, visitCountForms)}`,
               tone: progress.status === 'far-behind' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800',
             };
           return (
             <article key={type} className="card dashboard-card-enter p-4 sm:p-5">
               <div className="flex items-start justify-between gap-2">
                 <h3 className="font-bold text-slate-800">{serviceLabels[type]}</h3>
-                <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${chip.tone}`}>{chip.label}</span>
+                {progress.behind > 0 ? (
+                  <Link
+                    to={`/plans/report?${new URLSearchParams({
+                      month: dashboard.month,
+                      service: type,
+                      ...(supervisorId ? { supervisor: supervisorId } : {}),
+                      action: 'below-expected',
+                    }).toString()}`}
+                    title="المنجز أقل من المتوقع حتى التاريخ المحدد."
+                    className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${chip.tone}`}
+                  >{chip.label}</Link>
+                ) : (
+                  <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${chip.tone}`} title="المنجز بلغ المتوقع حتى التاريخ المحدد.">{chip.label}</span>
+                )}
               </div>
               <p className="mt-4 text-3xl font-extrabold text-slate-900">{formatNumber(progress.overallPercent.toFixed(1))}%</p>
               <p className="mt-1 text-xs text-slate-500">
-                زيارات {formatNumber(progress.visited)}/{formatNumber(progress.planned)}
+                الزيارات: {formatNumber(progress.visited)} من {formatNumber(progress.planned)}
                 {' · '}
-                تقارير {formatNumber(progress.reportsDone)}/{formatNumber(progress.planned)}
+                التقارير: {formatNumber(progress.reportsDone)} من {formatNumber(progress.planned)}
               </p>
               <div
                 className="relative mt-4 h-2.5 rounded-full bg-slate-100"
@@ -351,7 +415,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
                     <div className="flex items-center justify-between gap-3 text-sm">
                       <span className="font-semibold text-slate-700">{supervisor.name}</span>
                       <span className="shrink-0 text-slate-500">
-                        {formatNumber(supervisor.completedOnTime)}/{formatNumber(supervisor.planned)}
+                        {formatNumber(supervisor.completedOnTime)} من {formatNumber(supervisor.planned)}
                         {' · '}
                         {formatNumber(supervisor.percent.toFixed(0))}%
                       </span>
@@ -388,19 +452,75 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
               <WorkforceProgressLine label="الإجمالي المطلوب" assigned={workforce.total.assigned}
                 required={workforce.total.required} formatNumber={formatNumber} tone="brand" />
               <p className="mt-1 text-xs text-slate-500">
-                {formatNumber(workforce.cleaners.shortageSchools)} مدرسة لديها عجز في عمال النظافة
+                <Link to="/placement/cleaners?shortage=true" className="font-semibold text-brand-800 underline">
+                  {formatArabicCount(workforce.cleaners.shortageSchools, formatNumber, schoolShortageCountForms)}
+                </Link>
                 {' · '}
                 {workforce.gatekeepers.shortage > 0
-                  ? `عجز ${formatNumber(workforce.gatekeepers.shortage)} بواب`
+                  ? `عجز ${formatArabicCount(workforce.gatekeepers.shortage, formatNumber, gatekeeperCountForms)}`
                   : 'لا عجز في البوابين'}
               </p>
-              <p className={`text-xs font-bold ${workforce.total.netBalance > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
-                {workforce.total.netBalance > 0
-                  ? `عجز صافي ${formatNumber(workforce.total.netBalance)}`
-                  : workforce.total.netBalance < 0
-                    ? `فائض صافي ${formatNumber(Math.abs(workforce.total.netBalance))}`
+              <p className={`text-xs font-bold ${workforce.total.netBalance < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                {workforce.total.netBalance < 0
+                  ? `عجز صافي ${formatNumber(Math.abs(workforce.total.netBalance))}`
+                  : workforce.total.netBalance > 0
+                    ? `فائض صافي ${formatNumber(workforce.total.netBalance)}`
                     : 'التغطية مكتملة'}
               </p>
+              <div className="mt-2 table-scroll">
+                <table className="w-full text-xs">
+                  <thead><tr className="text-slate-500"><th className="py-1 text-start">حجم المدرسة</th><th className="py-1 text-start">مطلوب</th><th className="py-1 text-start">مسند</th></tr></thead>
+                  <tbody>
+                    {SCHOOL_SIZES.map((size) => (
+                      <tr key={size} className="border-t border-slate-100">
+                        <th scope="row" className="py-1 text-start font-semibold text-slate-700">{SCHOOL_SIZE_LABELS[size]}</th>
+                        <td className="py-1">{formatNumber(workforce.cleaners.bySize[size].required)}</td>
+                        <td className="py-1">{formatNumber(workforce.cleaners.bySize[size].assigned)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-xs text-amber-800">
+                <Link to="/schools?sizeDiff=true" className="font-semibold underline">
+                  {formatNumber(workforce.sizeMismatchSchools.length)} مدرسة يختلف مؤشر حجمها عن عدد الفصول
+                </Link>
+              </p>
+              <section className="mt-2 grid gap-2" aria-label="المدارس التي لديها عجز في عمال النظافة">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-xs font-bold text-slate-700">أكثر المدارس عجزًا</h4>
+                  {workforce.cleanerShortageSchools.length > 0 && (
+                    <Link to="/placement/cleaners?shortage=true" className="shrink-0 text-xs font-semibold text-brand-800 underline">
+                      عرض الكل ({formatNumber(workforce.cleanerShortageSchools.length)})
+                    </Link>
+                  )}
+                </div>
+                {workforce.cleanerShortageSchools.length ? (
+                  <ul className="grid gap-1 text-xs">
+                    {largestCleanerShortages.map((school) => (
+                      <li key={school.id} className="flex min-w-0 items-center justify-between gap-2 border-b border-slate-100 py-1">
+                        <Link
+                          to="/placement/cleaners?shortage=true"
+                          className="min-w-0 truncate font-medium text-brand-800 hover:underline"
+                          title={school.name}
+                        >
+                          {school.name}
+                        </Link>
+                        <span className="shrink-0 font-bold text-rose-700">عجز {formatNumber(school.shortage)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-1 text-xs text-slate-500">لا توجد مدارس لديها عجز.</p>
+                )}
+              </section>
+              {workforce.missingClassCountSchools.length > 0 && (
+                <p className="mt-2 text-xs leading-5 text-amber-800">
+                  لا يمكن حساب احتياج عمال النظافة لغياب عدد الفصول:
+                  {' '}
+                  {workforce.missingClassCountSchools.map((school) => school.name).join('، ')}
+                </p>
+              )}
               <p className="dashboard-workforce-note text-xs text-slate-500">
                 الحالة الحالية للمدارس المؤهلة؛ لا تتغير بفلاتر الخدمة أو المشرف.
               </p>
@@ -422,7 +542,10 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
       )}
 
       {dashboard.access.kpi && (
-        <section className="dashboard-stagger grid gap-4 lg:grid-cols-2" aria-label="مؤشرات الأداء والمخرجات">
+        <section
+          className={`dashboard-stagger grid gap-4 lg:grid-cols-2 ${dashboard.access.activity ? 'xl:grid-cols-3' : ''}`}
+          aria-label="مؤشرات الأداء والمخرجات"
+        >
           <article className="card dashboard-glass dashboard-card-enter dashboard-scorecard-card p-5">
             <h3 className="font-extrabold text-brand-900">بطاقة أداء الشهر المحدد</h3>
             {dashboard.kpiLoading ? <CardSkeleton /> : dashboard.kpiError
@@ -477,10 +600,26 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
               : dashboard.deliverableSummary ? (
               <div className="dashboard-content-enter">
                 <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                  <DeliverableCount label="معتمد" value={dashboard.deliverableSummary.approved} formatNumber={formatNumber} />
-                  <DeliverableCount label="بانتظار الاعتماد" value={dashboard.deliverableSummary.delivered - dashboard.deliverableSummary.approved} formatNumber={formatNumber} />
-                  <DeliverableCount label="غير مسلّم" value={dashboard.deliverableSummary.total - dashboard.deliverableSummary.delivered} formatNumber={formatNumber} />
-                  <DeliverableCount label="متأخر" value={dashboard.deliverableSummary.late} formatNumber={formatNumber} />
+                  <DeliverableCount
+                    label="معتمد"
+                    value={dashboard.deliverableSummary.approved}
+                    formatNumber={formatNumber}
+                  />
+                  <DeliverableCount
+                    label="بانتظار الاعتماد"
+                    value={dashboard.deliverableSummary.delivered - dashboard.deliverableSummary.approved}
+                    formatNumber={formatNumber}
+                  />
+                  <DeliverableCount
+                    label="غير مسلّم"
+                    value={dashboard.deliverableSummary.total - dashboard.deliverableSummary.delivered}
+                    formatNumber={formatNumber}
+                  />
+                  <DeliverableCount
+                    label="متأخر"
+                    value={dashboard.deliverableSummary.late}
+                    formatNumber={formatNumber}
+                  />
                 </div>
                 <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-slate-100" role="progressbar"
                   aria-label="نسبة المخرجات المسلّمة" aria-valuemin={0} aria-valuemax={100}
@@ -488,7 +627,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
                   <div className="dashboard-progress-fill h-full rounded-full bg-emerald-600" style={{ width: `${dashboard.deliverableSummary.progressPercent}%` }} />
                 </div>
                 <p className="mt-2 text-xs text-slate-500">
-                  {formatNumber(dashboard.deliverableSummary.delivered)} من {formatNumber(dashboard.deliverableSummary.total)} مخرج مسلّم
+                  المخرجات المسلّمة: {formatNumber(dashboard.deliverableSummary.delivered)} من {formatNumber(dashboard.deliverableSummary.total)}
                 </p>
               </div>
             ) : (
@@ -497,16 +636,16 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
           </article>
 
           {dashboard.access.activity && (
-            <article className="card dashboard-card-enter p-5 lg:col-span-2">
+            <article className="card dashboard-card-enter p-5 lg:col-span-2 xl:col-span-1">
               <h3 className="font-extrabold text-brand-900">آخر النشاطات خلال الشهر المحدد</h3>
               <p className="mt-1 text-xs text-slate-500">سجل التدقيق لا يصنف الأحداث حسب الخدمة أو المشرف.</p>
               {dashboard.activityLoading ? <CardSkeleton /> : dashboard.activityError
                 ? <CardError title="تعذر تحميل النشاطات" message={dashboard.activityError.message} />
                 : dashboard.recentActivity.length ? (
-                <ol className="dashboard-content-enter mt-4 grid gap-3">
+                <ol className="dashboard-content-enter mt-3 grid gap-2">
                   {dashboard.recentActivity.map((event) => (
-                    <li key={event.id} className="flex flex-col justify-between gap-1 border-b border-slate-100 pb-3 text-sm sm:flex-row sm:items-center">
-                      <span className="font-medium text-slate-700">{event.message}</span>
+                    <li key={event.id} className="flex flex-col justify-between gap-1 border-b border-slate-100 pb-2 text-xs sm:flex-row sm:items-center sm:gap-3">
+                      <span className="min-w-0 truncate font-medium text-slate-700 sm:flex-1" title={event.message}>{event.message}</span>
                       <time className="shrink-0 text-xs text-slate-400" dateTime={event.at}><bdi dir="ltr">{formatDateTime(event.at)}</bdi></time>
                     </li>
                   ))}
@@ -642,10 +781,11 @@ function ReportFollowerDashboard({
       </Link>
       <article className="card dashboard-glass dashboard-card-enter min-w-0 p-5">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="font-extrabold text-brand-900">زيارات متأخرة</h3>
-          <span className="rounded-full bg-rose-50 px-3 py-1 text-sm font-bold text-rose-700">
-            {loading ? '…' : error ? '—' : formatNumber(lateCount)}
-          </span>
+          <h3 className="font-extrabold text-brand-900">
+            {loading || error
+              ? 'زيارات متأخرة'
+              : formatArabicCount(lateCount, formatNumber, overdueReportCountForms)}
+          </h3>
         </div>
         {loading ? <CardSkeleton />
           : error ? <CardError title="تعذر تحميل الزيارات المتأخرة" message={error.message} />
@@ -689,11 +829,13 @@ function WorkforceProgressLine({ label, assigned, required, formatNumber, tone }
     <div className="dashboard-workforce-row">
       <div className="flex items-center justify-between gap-3 text-sm font-semibold text-slate-700">
         <span>{label}</span>
-        <span dir="ltr" className="shrink-0 text-slate-500">{formatNumber(assigned)} / {formatNumber(required)}</span>
+        <span className="shrink-0 text-slate-500">مسند {formatNumber(assigned)} · مطلوب {formatNumber(required)}</span>
       </div>
       <div className="dashboard-workforce-track" role="progressbar" aria-label={label}
-        aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
+        aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}
+        aria-valuetext={`مسند ${formatNumber(assigned)} من مطلوب ${formatNumber(required)}`}>
         <div className={`dashboard-progress-fill ${tone}`} style={{ width: `${percent}%` }} />
+        {required > 0 && <span className="dashboard-workforce-required-marker" title={`مستوى المطلوب: ${formatNumber(required)}`} />}
       </div>
     </div>
   );
@@ -733,10 +875,12 @@ function DeliverableCount({ label, value, formatNumber }: {
 }
 
 function ActionTile({
-  to, title, value, loading = false, formatNumber, action, icon, tone, detail,
+  to, title, titleForms, titlePrefix, value, loading = false, formatNumber, action, icon, tone, detail, tooltip,
 }: {
   to: string;
   title: string;
+  titleForms?: ArabicCountForms;
+  titlePrefix?: string;
   value: number | undefined;
   loading?: boolean;
   formatNumber: (value: number) => string;
@@ -744,11 +888,16 @@ function ActionTile({
   icon: ReactNode;
   tone: string;
   detail?: string;
+  tooltip?: string;
 }) {
   return (
-    <Link to={to} className="card dashboard-glass dashboard-card-enter group block min-h-32 p-4">
+    <Link to={to} title={tooltip} className="card dashboard-glass dashboard-card-enter group block min-h-32 p-4">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-semibold leading-5 text-slate-500">{title}</p>
+        <p className="text-xs font-semibold leading-5 text-slate-500">
+          {titleForms && value !== undefined
+            ? `${titlePrefix ?? ''}${formatArabicCount(value, formatNumber, titleForms)}`
+            : title}
+        </p>
         <span className={`shrink-0 ${tone}`}>{icon}</span>
       </div>
       <p className={`mt-2 text-3xl font-extrabold ${tone}`}>

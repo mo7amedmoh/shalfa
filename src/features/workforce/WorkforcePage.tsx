@@ -9,7 +9,7 @@ import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
-import { employeeCategorySchema } from '../../domain/workforce';
+import { analyzeResidenceNumbers, employeeCategorySchema, type ResidenceEmployee } from '../../domain/workforce';
 
 const employeeSchema = z.object({
   id: z.string().uuid(),
@@ -25,6 +25,16 @@ const employeeSchema = z.object({
   manager_id: z.string().uuid().nullable(),
 });
 const ratingSchema = z.object({ employee_id: z.string().uuid(), rating: z.number().nullable() });
+const residenceEmployeeSchema = z.object({
+  id: z.string().uuid(),
+  full_name: z.string(),
+  employee_number: z.string().nullable(),
+});
+const residenceRowSchema = z.object({ id: z.string().uuid(), residence_no: z.string().nullable() });
+const residenceAssignmentSchema = z.object({
+  employee_id: z.string().uuid().nullable(),
+  school: z.object({ id: z.string().uuid(), name: z.string() }).nullable(),
+});
 const employeeInputSchema = z.object({
   full_name: z.string().trim().min(2).max(120),
   employee_number: z.string().trim().min(1).max(60),
@@ -82,6 +92,49 @@ async function loadRatings(): Promise<Map<string, number | null>> {
   if (error) throw error;
   const ratings = z.array(ratingSchema).parse(data);
   return new Map(ratings.map((item) => [item.employee_id, item.rating]));
+}
+
+async function loadResidenceQuality() {
+  if (!supabase) return analyzeResidenceNumbers([]);
+  const [employeesResult, cleanerAssignmentsResult, gatekeepersResult] = await Promise.all([
+    supabase.from('employees').select('id,full_name,employee_number:employee_no').order('full_name'),
+    supabase.from('cleaner_assignments').select('employee_id,school:schools(id,name)'),
+    supabase.from('gatekeepers').select('employee_id,school:schools(id,name)'),
+  ]);
+  for (const result of [employeesResult, cleanerAssignmentsResult, gatekeepersResult]) {
+    if (result.error) throw result.error;
+  }
+  const employees = z.array(residenceEmployeeSchema).parse(employeesResult.data);
+  const schoolNames = new Map<string, Map<string, string>>();
+  const assignments = [
+    ...z.array(residenceAssignmentSchema).parse(cleanerAssignmentsResult.data),
+    ...z.array(residenceAssignmentSchema).parse(gatekeepersResult.data),
+  ];
+  for (const assignment of assignments) {
+    if (!assignment.employee_id || !assignment.school) continue;
+    const employeeSchools = schoolNames.get(assignment.employee_id) ?? new Map<string, string>();
+    employeeSchools.set(assignment.school.id, assignment.school.name);
+    schoolNames.set(assignment.employee_id, employeeSchools);
+  }
+  const residenceById = new Map<string, string | null>();
+  for (let index = 0; index < employees.length; index += 500) {
+    const ids = employees.slice(index, index + 500).map(({ id }) => id);
+    const { data, error } = await supabase.rpc('reveal_residence', { p_kind: 'employees', p_ids: ids });
+    if (error) throw error;
+    for (const row of z.array(residenceRowSchema).parse(data)) {
+      residenceById.set(row.id, row.residence_no);
+    }
+  }
+  const records: ResidenceEmployee[] = employees.map((employee) => ({
+    id: employee.id,
+    fullName: employee.full_name,
+    employeeNumber: employee.employee_number,
+    residenceNumber: residenceById.get(employee.id) ?? null,
+    schools: [...(schoolNames.get(employee.id) ?? new Map())]
+      .map(([id, name]) => ({ id, name }))
+      .sort((left, right) => left.name.localeCompare(right.name, 'ar')),
+  }));
+  return analyzeResidenceNumbers(records);
 }
 
 function cellText(value: unknown): string {
@@ -145,6 +198,12 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
   const canManage = Boolean(isPrivileged);
   const employees = useQuery({ queryKey: ['employees'], queryFn: loadEmployees, enabled: Boolean(profile) });
   const ratings = useQuery({ queryKey: ['employee-ratings'], queryFn: loadRatings, enabled: Boolean(profile && isPrivileged) });
+  const residenceQuality = useQuery({
+    queryKey: ['workforce-residence-quality'],
+    queryFn: loadResidenceQuality,
+    enabled: Boolean(profile && isPrivileged),
+    refetchInterval: 30_000,
+  });
   const { register, handleSubmit, reset, formState: { isSubmitting } } = useForm<EmployeeInput>({
     defaultValues: { full_name: '', employee_number: '', job_title: '', employee_category: 'technician', department: '', phone: '', manager_id: null },
   });
@@ -273,6 +332,38 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
     setMessage('تم تصدير البيانات المعروضة دون أرقام الإقامة.');
   }
 
+  async function exportResidenceQuality() {
+    const report = residenceQuality.data;
+    if (!report) return setMessage('لا توجد بيانات جودة أرقام الإقامة للتصدير.');
+    const XLSX = await loadXlsx();
+    const protectCell = (value: string | null) => {
+      const text = value ?? '';
+      return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+    };
+    const issueRows = report.issues.map((employee) => ({
+      'نوع التنبيه': employee.issue === 'missing'
+        ? 'رقم غير مسجل'
+        : employee.issue === 'passport-like'
+          ? 'رقم شبيه بجواز السفر'
+          : 'رقم ليس من 10 خانات',
+      'اسم الموظف': protectCell(employee.fullName),
+      'الرقم الوظيفي': protectCell(employee.employeeNumber),
+      'رقم الإقامة/الوثيقة': protectCell(employee.residenceNumber),
+      'المدارس': protectCell(employee.schools.map(({ name }) => name).join('، ')),
+    }));
+    const sharedRows = report.shared.flatMap(({ residenceNumber, employees: matched }) => matched.map((employee) => ({
+      'رقم الإقامة/الوثيقة': protectCell(residenceNumber),
+      'اسم الموظف': protectCell(employee.fullName),
+      'الرقم الوظيفي': protectCell(employee.employeeNumber),
+      'المدارس': protectCell(employee.schools.map(({ name }) => name).join('، ')),
+    })));
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(issueRows), 'أرقام تحتاج مراجعة');
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sharedRows), 'أرقام مشتركة');
+    XLSX.writeFile(workbook, 'جودة-أرقام-الإقامة.xlsx');
+    setMessage('تم تصدير تقرير جودة أرقام الإقامة.');
+  }
+
   return (
     <div className="grid gap-5">
       <section><p className="text-sm text-slate-500">سجل الموظفين والصلاحيات</p><h2 className="mt-1 text-2xl font-bold text-brand-900">القوى العاملة</h2></section>
@@ -305,6 +396,58 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
           <span className="text-xs text-slate-500">يجب أن تتضمن الأعمدة: اسم، الرقم الوظيفي، الوظيفة، الفئة الوظيفية، القسم. التقييم منفصل، ورقم الإقامة لا يُخزّن في جدول الموظفين.</span>
         </div>
         {message && <p role="status" className="text-sm text-slate-700">{message}</p>}
+      </section>}
+
+      {isPrivileged && <section className="card grid gap-4 p-5" aria-labelledby="residence-quality-title">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 id="residence-quality-title" className="font-bold">جودة أرقام الإقامة والوثائق</h3>
+            <p className="mt-1 text-xs leading-5 text-slate-500">الأرقام الظاهرة تُقرأ عبر الإجراء الآمن المسجل في سجل التدقيق. تُحدّث القائمة تلقائياً كل 30 ثانية.</p>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => void residenceQuality.refetch()} disabled={residenceQuality.isFetching} className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-50">
+              {residenceQuality.isFetching ? 'جارٍ التحديث…' : 'تحديث'}
+            </button>
+            <button type="button" onClick={() => void exportResidenceQuality()} disabled={!residenceQuality.data} className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-50">تصدير Excel</button>
+          </div>
+        </div>
+        {residenceQuality.error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">تعذر تحميل بيانات الجودة: {residenceQuality.error.message}</p>}
+        {residenceQuality.isLoading ? <p role="status">جارٍ فحص أرقام الإقامة…</p> : residenceQuality.data && <>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {[
+              ['أرقام غير قياسية / شبيهة بجواز', residenceQuality.data.issues.filter(({ issue }) => issue !== 'missing').length],
+              ['أرقام غير مسجلة', residenceQuality.data.issues.filter(({ issue }) => issue === 'missing').length],
+              ['مجموعات أرقام مشتركة', residenceQuality.data.shared.length],
+            ].map(([label, count]) => <article key={label} className="rounded-xl border border-slate-100 p-4">
+              <p className="text-xs text-slate-500">{label}</p>
+              <p className="mt-1 text-2xl font-bold text-brand-900">{formatNumber(Number(count))}</p>
+            </article>)}
+          </div>
+          {residenceQuality.data.issues.length > 0 && <div>
+            <h4 className="mb-2 text-sm font-bold text-amber-900">أرقام تحتاج مراجعة</h4>
+            <div className="table-scroll"><table className="text-sm">
+              <thead><tr><th>التنبيه</th><th>الموظف</th><th>الرقم الوظيفي</th><th>رقم الإقامة/الوثيقة</th><th>المدارس</th></tr></thead>
+              <tbody>{residenceQuality.data.issues.map((employee) => <tr key={employee.id}>
+                <td>{employee.issue === 'missing' ? 'غير مسجل' : employee.issue === 'passport-like' ? 'شبيه بجواز سفر' : 'ليس 10 خانات'}</td>
+                <td>{employee.fullName}</td>
+                <td>{employee.employeeNumber ?? '—'}</td>
+                <td dir="ltr" className="font-mono">{employee.residenceNumber ?? '—'}</td>
+                <td>{employee.schools.map(({ name }) => name).join('، ') || '—'}</td>
+              </tr>)}</tbody>
+            </table></div>
+          </div>}
+          {residenceQuality.data.shared.length > 0 && <div>
+            <h4 className="mb-2 text-sm font-bold text-rose-900">أرقام مستخدمة لموظفين متعددين والمدارس المسندة لهم</h4>
+            <div className="table-scroll"><table className="text-sm">
+              <thead><tr><th>رقم الإقامة/الوثيقة</th><th>الموظفون والمدارس</th></tr></thead>
+              <tbody>{residenceQuality.data.shared.map(({ residenceNumber, employees: matched }) => <tr key={residenceNumber}>
+                <td dir="ltr" className="font-mono">{residenceNumber}</td>
+                <td>{matched.map((employee) => `${employee.fullName} (${employee.schools.map(({ name }) => name).join('، ') || 'دون مدرسة مسندة'})`).join('؛ ')}</td>
+              </tr>)}</tbody>
+            </table></div>
+          </div>}
+          {!residenceQuality.data.issues.length && !residenceQuality.data.shared.length && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">لا توجد مشكلات في أرقام الإقامة أو الوثائق.</p>}
+        </>}
       </section>}
 
       <section className="card overflow-hidden">

@@ -119,10 +119,9 @@ CRUD, Excel import, search, filters. Residence numbers are sensitive: mask in li
 Table: school (independent + primary shared) · ministry number · neighbourhood · school size · class count · assigned cleaners (name · residence number · labour source/مصدر العمالة).
 
 **Business rules (single source of truth in `src/domain/staffing.ts`, unit-tested):**
-- Small: 1–12 classes → 1 cleaner
-- Medium: 13–21 classes → 2 cleaners
-- Large: 22+ classes (more than 21) → 3 cleaners
-- If the database's size label disagrees with the class count, **the app corrects the size from the class count** and flags the row ("تم تصحيح الحجم").
+- Six explicit school indicators: S = 1 cleaner, S+ = 2, M = 2, M+ = 3, L = 3, L+ = 4 by default; the rules are editable by the system admin.
+- The explicit sheet indicator is authoritative. Class-count bands (1–12 small, 13–21 medium, 22+ large) are fallback only when the indicator is missing. A disagreement is informational and flagged; it does not replace the explicit indicator.
+- Staffing priority: manual school-size correction > per-school required-count exception > explicit sheet indicator > class-count fallback.
 - Occasional per-school exceptions are allowed (override required headcount with a reason, kept in an `exceptions` field); the contract standard itself is not editable from the UI.
 - Summary panel: required vs assigned totals, **shortage (عجز)** and surplus per school and in total, by size and by neighbourhood; export to Excel.
 

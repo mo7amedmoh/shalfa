@@ -1,6 +1,5 @@
 import type { SchoolRecord } from './schoolTypes';
-
-const sizeLabels = { small: 'صغير', medium: 'متوسط', large: 'كبير' } as const;
+import { SCHOOL_SIZE_LABELS } from '../../domain/staffing';
 
 function display(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—';
@@ -20,8 +19,8 @@ export function SchoolDetails({ school }: { school: SchoolRecord }) {
       </dl>
       <dl className="grid gap-1 border-t border-slate-200 pt-2">
         <div><dt className="inline font-bold">ضمن نطاق الخطط: </dt><dd className="inline">{school.plan_scope ? 'نعم' : 'لا'}</dd></div>
-        <div><dt className="inline font-bold">الحجم حسب المدرسة: </dt><dd className="inline">{school.size_source ? sizeLabels[school.size_source] : 'غير محدد'}</dd></div>
-        <div><dt className="inline font-bold">الحجم المحسوب من الفصول: </dt><dd className="inline">{school.size_calc ? sizeLabels[school.size_calc] : 'غير محدد'}</dd></div>
+        <div><dt className="inline font-bold">الحجم حسب المدرسة: </dt><dd className="inline">{school.size_source ? SCHOOL_SIZE_LABELS[school.size_source] : 'غير محدد'}</dd></div>
+        <div><dt className="inline font-bold">الحجم المرجعي من الفصول: </dt><dd className="inline">{school.size_calc ? SCHOOL_SIZE_LABELS[school.size_calc] : 'غير محدد'}</dd></div>
         <div><dt className="inline font-bold">عدد الفصول: </dt><dd className="inline">{display(school.class_count)}</dd></div>
         <div><dt className="inline font-bold">مقاول مصاعد: </dt><dd className="inline">{school.has_elevator_contractor ? 'موجود' : 'غير موجود'}</dd></div>
         {school.missing_from_sheet_at && <div className="font-bold text-amber-800">هذا السجل غير موجود في آخر نسخة من الورقة.</div>}

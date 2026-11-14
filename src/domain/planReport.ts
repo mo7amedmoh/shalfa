@@ -41,7 +41,7 @@ export type ReportFilters = {
   neighbourhood: string;
 };
 
-export type ReportActionFilter = 'late-visits' | 'visit-no-report' | null;
+export type ReportActionFilter = 'late-visits' | 'visit-no-report' | 'below-expected' | null;
 
 export type ReportMetrics = {
   planned: number;
@@ -284,6 +284,28 @@ export function expectedVisitCount(rows: readonly ReportPlanMetricRow[], month: 
   return expected;
 }
 
+export function belowExpectedVisitRows<T extends ReportPlanMetricRow>(
+  rows: readonly T[],
+  month: string,
+  asOf: string,
+): Set<T> {
+  const matching = new Set<T>();
+  for (const planRows of groupByPlan(rows).values()) {
+    const performancePlan = planRows[0]?.lateByPlannedDate === false;
+    const planExpected = performancePlan
+      ? performanceTarget(planRows.length, month, asOf)
+      : planRows.filter((row) => row.plannedDate <= asOf).length;
+    const completed = planRows.filter((row) => isCompleteAt(row, asOf, 'visit')).length;
+    const deficit = Math.max(0, planExpected - completed);
+    const candidates = planRows
+      .filter((row) => (performancePlan || row.plannedDate <= asOf) && !isCompleteAt(row, asOf, 'visit'))
+      .sort((left, right) => left.plannedDate.localeCompare(right.plannedDate)
+        || (left.id ?? '').localeCompare(right.id ?? ''));
+    for (const row of candidates.slice(0, deficit)) matching.add(row);
+  }
+  return matching;
+}
+
 export function lateVisitRows<T extends ReportPlanMetricRow>(rows: readonly T[], asOf: string): Set<T> {
   const late = new Set<T>();
   for (const planRows of groupByPlan(rows).values()) {
@@ -324,9 +346,14 @@ export function filterPlanReportActionRows(
   if (!action) return [...rows];
   assertDate(asOf);
   const lateVisits = action === 'late-visits' ? lateVisitRows(rows, asOf) : null;
+  const belowExpected = action === 'below-expected'
+    ? rows.length ? belowExpectedVisitRows(rows, rows[0].month, asOf) : new Set<ReportPlanRow>()
+    : null;
   return rows.filter((row) => action === 'late-visits'
     ? lateVisits!.has(row)
-    : isCompleteAt(row, asOf, 'visit') && !isCompleteAt(row, asOf, 'report'))
+    : action === 'below-expected'
+      ? belowExpected!.has(row)
+      : isCompleteAt(row, asOf, 'visit') && !isCompleteAt(row, asOf, 'report'))
     .map((row) => action === 'late-visits' ? { ...row, lateVisitOverride: true } : row);
 }
 
@@ -381,6 +408,7 @@ export interface DashboardVerdict {
   expected: number;
   done: number;
   behind: number;
+  ahead: number;
   firstSlipDay: string | null;
   requiredDailyPace: number | null;
   remainingWorkingDays: number;
@@ -429,6 +457,7 @@ export function summarizeDashboardVerdict(
     }
   }
   const behind = Math.max(0, metrics.expectedVisits - metrics.visited);
+  const ahead = Math.max(0, metrics.visited - metrics.expectedVisits);
   const status = !metrics.planned
     ? 'no-plan'
     : behind / metrics.planned <= 0.05
@@ -441,6 +470,7 @@ export function summarizeDashboardVerdict(
     expected: metrics.expectedVisits,
     done: metrics.visited,
     behind,
+    ahead,
     firstSlipDay,
     requiredDailyPace: remainingWorkingDays ? Math.max(0, metrics.planned - metrics.visited) / remainingWorkingDays : null,
     remainingWorkingDays,

@@ -1,8 +1,18 @@
+import { formatArabicCount, type ArabicCountForms } from './arabicCount';
+
 export interface DashboardActivityEvent {
   action: string;
   entity: string | null;
   details: Record<string, unknown> | null;
 }
+
+const countForms: Record<'row' | 'visit' | 'report' | 'school' | 'record', ArabicCountForms> = {
+  row: { one: 'صف', two: 'صفان', few: 'صفوف', many: 'صف' },
+  visit: { one: 'زيارة', two: 'زيارتان', few: 'زيارات', many: 'زيارة' },
+  report: { one: 'تقرير', two: 'تقريران', few: 'تقارير', many: 'تقرير' },
+  school: { one: 'مدرسة', two: 'مدرستين', few: 'مدارس', many: 'مدرسة' },
+  record: { one: 'سجل', two: 'سجلان', few: 'سجلات', many: 'سجل' },
+};
 
 function detailsObject(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -27,15 +37,15 @@ export function formatDashboardActivity(event: DashboardActivityEvent): string |
     const visits = countDetail(details, 'visits_marked');
     const reports = countDetail(details, 'reports_marked');
     const parts = [
-      rows === null ? null : `${rows} صف`,
-      visits === null ? null : `${visits} زيارة`,
-      reports === null ? null : `${reports} تقرير`,
+      rows === null ? null : formatArabicCount(rows, String, countForms.row),
+      visits === null ? null : formatArabicCount(visits, String, countForms.visit),
+      reports === null ? null : formatArabicCount(reports, String, countForms.report),
     ].filter((part): part is string => part !== null);
     return `تحديث جماعي للخطة${parts.length ? `: ${parts.join('، ')}` : ''}.`;
   }
   if (['sync', 'school_sync', 'schools_sync'].includes(action) && event.entity === 'schools') {
     const rows = countDetail(details, 'rows', 'schools', 'count');
-    return rows === null ? 'اكتملت مزامنة المدارس.' : `اكتملت مزامنة ${rows} مدرسة.`;
+    return rows === null ? 'اكتملت مزامنة المدارس.' : `اكتملت مزامنة ${formatArabicCount(rows, String, countForms.school)}.`;
   }
   if (action === 'approve' || action.startsWith('approve_') ||
       (action === 'update' && ['kpi_months', 'deliverables'].includes(event.entity ?? '') &&
@@ -47,7 +57,7 @@ export function formatDashboardActivity(event: DashboardActivityEvent): string |
   }
   if (action === 'import' || action.startsWith('import_') || action === 'bulk_import') {
     const rows = countDetail(details, 'rows', 'imported', 'count');
-    return rows === null ? 'اكتمل استيراد البيانات.' : `تم استيراد ${rows} سجل.`;
+    return rows === null ? 'اكتمل استيراد البيانات.' : `تم استيراد ${formatArabicCount(rows, String, countForms.record)}.`;
   }
   return null;
 }

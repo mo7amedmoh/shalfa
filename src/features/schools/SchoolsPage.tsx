@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Link, useSearchParams } from 'react-router-dom';
 import { MapContainer, TileLayer, useMap } from 'react-leaflet';
 import { Download, List, Map as MapIcon, Pencil, Search, SlidersHorizontal } from 'lucide-react';
 import { z } from 'zod';
@@ -14,6 +15,7 @@ import { SchoolDetails } from './SchoolDetails';
 import { SchoolMapMarkers } from './SchoolMapMarkers';
 import { selectSchoolOnMap } from './schoolMapView';
 import type { SchoolRecord } from './schoolTypes';
+import { hasSizeClassDifference, normalizeSchoolSize, SCHOOL_SIZE_CODES, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize } from '../../domain/staffing';
 import 'leaflet/dist/leaflet.css';
 
 const sourceColumnSchema = z.object({ header: z.string(), value: z.unknown() });
@@ -28,7 +30,7 @@ const schoolSchema = z.object({
   synced_at: z.string().nullable(),
   missing_from_sheet_at: z.string().nullable(),
   plan_scope: z.boolean(),
-  size_source: z.enum(['small', 'medium', 'large']).nullable(),
+  size_source: z.enum(SCHOOL_SIZES).nullable(),
   size_calc: z.enum(['small', 'medium', 'large']).nullable(),
   class_count: z.number().int().nullable(),
   building_type: z.string().nullable(),
@@ -122,14 +124,8 @@ function normalizedSchoolValue(value: string): string {
   return value.trim().toLocaleLowerCase().replace(/\s+/g, '');
 }
 
-function isSchoolSize(value: string, size: 'large' | 'medium' | 'small'): boolean {
-  const normalized = normalizedSchoolValue(value);
-  const values = {
-    large: ['كبير', 'كبيرة', 'large'],
-    medium: ['متوسط', 'متوسطة', 'medium'],
-    small: ['صغير', 'صغيرة', 'small'],
-  }[size];
-  return values.some((item) => normalized.includes(item));
+function schoolSizeFor(school: SchoolRecord): SchoolSize | null {
+  return school.size_source ?? school.size_calc ?? normalizeSchoolSize(cellValue(school, 'حجم المدرسة'));
 }
 
 function MapViewport({
@@ -176,6 +172,7 @@ function MapSelectionViewport({ school }: { school: SchoolRecord | null }) {
 }
 
 export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
+  const [searchParams] = useSearchParams();
   const [search, setSearch] = useState('');
   const [displayMode, setDisplayMode] = useState<'table' | 'map'>('table');
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -217,13 +214,15 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
   }, []);
 
   const filterHeaders = categoricalHeaders.filter((header) => columns.some((column) => column.header === header));
+  const sizeDiffOnly = searchParams.get('sizeDiff') === 'true';
   const filtered = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
     return schools.filter((school) => {
+      if (sizeDiffOnly && !hasSizeClassDifference(school.size_source, school.class_count)) return false;
       if (needle && !school.source_columns.some(({ value }) => displayValue(value).toLocaleLowerCase().includes(needle))) return false;
       return filterHeaders.every((header) => !filters[header] || cellValue(school, header) === filters[header]);
     });
-  }, [schools, search, filters, filterHeaders]);
+  }, [schools, search, filters, filterHeaders, sizeDiffOnly]);
   const mappableSchools = useMemo(() => schoolsWithMapCoordinates(filtered), [filtered]);
   const slimMapSchools = useMemo(() => mappableSchools.map(toSlimMapSchool), [mappableSchools]);
   const coordinateIssues = useMemo(() => filtered.filter((school) =>
@@ -244,19 +243,20 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
       const value = normalizedSchoolValue(cellValue(school, 'النوع'));
       return type === 'boys' ? value.includes('بنين') || value.includes('boys') : value.includes('بنات') || value.includes('girls');
     }).length;
-    const countSize = (size: 'large' | 'medium' | 'small') => filtered.filter((school) => (
-      isSchoolSize(school.size_calc ?? school.size_source ?? cellValue(school, 'حجم المدرسة'), size)
-    )).length;
+    const countSize = (size: SchoolSize) => filtered.filter((school) => schoolSizeFor(school) === size).length;
+    const sizeMismatches = schools.filter((school) => hasSizeClassDifference(school.size_source, school.class_count)).length;
     return {
       schools: filtered.length,
       buildings: buildingKeys.size,
       boys: countType('boys'),
       girls: countType('girls'),
-      large: countSize('large'),
-      medium: countSize('medium'),
-      small: countSize('small'),
+      bySize: SCHOOL_SIZES.reduce((result, size) => {
+        result[size] = countSize(size);
+        return result;
+      }, {} as Record<SchoolSize, number>),
+      sizeMismatches,
     };
-  }, [filtered, resolvedBuildingNames]);
+  }, [filtered, resolvedBuildingNames, schools]);
   const selectedSchool = schools.find((school) => school.id === selectedSchoolId) ?? null;
   const mapSelection = schools.find((school) => school.id === mapSelectionId) ?? null;
   const mapTarget = mappableSchools.find((school) => school.id === mapTargetId) ?? null;
@@ -380,12 +380,23 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
         <article className="schools-summary-card">
           <p>حسب حجم المدرسة</p>
           <div className="schools-summary-split schools-summary-sizes">
-            <span><strong>{formatNumber(schoolSummary.large)}</strong> كبيرة</span>
-            <span><strong>{formatNumber(schoolSummary.medium)}</strong> متوسطة</span>
-            <span><strong>{formatNumber(schoolSummary.small)}</strong> صغيرة</span>
+            {SCHOOL_SIZES.map((size) => <span key={size} title={SCHOOL_SIZE_LABELS[size]}>
+              <strong>{formatNumber(schoolSummary.bySize[size])}</strong> {SCHOOL_SIZE_CODES[size]}
+            </span>)}
           </div>
         </article>
+        <article className="schools-summary-card">
+          <p>الحجم يختلف عن عدد الفصول</p>
+          <Link to="/schools?sizeDiff=true" className="schools-summary-values text-brand-800 underline">
+            <strong>{formatNumber(schoolSummary.sizeMismatches)}</strong>
+            <span>مدرسة · عرض القائمة</span>
+          </Link>
+        </article>
       </section>
+      {sizeDiffOnly && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+        تعرض القائمة المدارس التي يختلف فيها مؤشر الحجم الصريح عن الحجم المرجعي المحسوب من عدد الفصول.
+        {' '}<Link to="/schools" className="font-semibold underline">إلغاء التصفية</Link>
+      </p>}
 
       <section className="schools-toolbar card p-3">
         <div className="schools-search-row">
@@ -480,9 +491,9 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
                 <SchoolMapMarkers schools={slimMapSchools} onSelect={handleMapMarkerSelect} />
               </MapContainer>
               <div className="flex flex-wrap gap-3 px-2 pt-3 text-xs text-slate-600" aria-label="دليل أحجام المدارس">
-                <span><i className="school-map-legend-dot school-map-legend-small" /> صغيرة</span>
-                <span><i className="school-map-legend-dot school-map-legend-medium" /> متوسطة</span>
-                <span><i className="school-map-legend-dot school-map-legend-large" /> كبيرة</span>
+                {SCHOOL_SIZES.map((size) => <span key={size}>
+                  <i className={`school-map-legend-dot school-map-legend-${size}`} /> {SCHOOL_SIZE_LABELS[size]}
+                </span>)}
               </div>
               <p className="px-2 pt-3 text-xs text-slate-500">تظهر أسماء المدارس عند التحويم فقط. انقر على علامة لعرض التفاصيل.</p>
             </div>
@@ -541,8 +552,12 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
                       </td>
                     );
                   })() : (
-                    <td key={index} style={styleForColumn(index, header, false)} title={formatPhoneValue(school.source_columns[index]?.value, header)}>
-                      {formatPhoneValue(school.source_columns[index]?.value, header)}
+                    <td key={index} style={styleForColumn(index, header, false)} title={header === 'حجم المدرسة' && schoolSizeFor(school)
+                      ? SCHOOL_SIZE_LABELS[schoolSizeFor(school)!]
+                      : formatPhoneValue(school.source_columns[index]?.value, header)}>
+                      {header === 'حجم المدرسة' && schoolSizeFor(school)
+                        ? SCHOOL_SIZE_CODES[schoolSizeFor(school)!]
+                        : formatPhoneValue(school.source_columns[index]?.value, header)}
                     </td>
                   )
                 ))}

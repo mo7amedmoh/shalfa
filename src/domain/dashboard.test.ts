@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { countDashboardActions, staffingRowsForEligibleSchools, summarizeDashboardPlans, summarizeDashboardServices, summarizeDashboardStaffing, summarizeDashboardVisits, summarizeSupervisorCompliance, summarizeWorkforce } from './dashboard';
-import { summarizeDashboardVerdict, type ReportPlanMetricRow } from './planReport';
+import { cleanerShortageSchools, countDashboardActions, eligibleSchoolsMissingClassCount, schoolsWithSizeClassDifference, staffingRowsForEligibleSchools, summarizeDashboardPlans, summarizeDashboardServices, summarizeDashboardStaffing, summarizeDashboardVisits, summarizeSupervisorCompliance, summarizeWorkforce } from './dashboard';
+import { DEFAULT_STAFFING_RULES } from './staffing';
+import { filterPlanReportActionRows, summarizeDashboardVerdict, type ReportPlanMetricRow, type ReportPlanRow } from './planReport';
 import type { DeliverableRecord } from './deliverables';
 
 const metricRow = (values: Partial<ReportPlanMetricRow> = {}): ReportPlanMetricRow => ({
@@ -48,7 +49,7 @@ describe('dashboard summaries', () => {
     ])).toEqual({ schools: 2, required: 2, assigned: 1, shortage: 1, surplus: 0, shortageSchools: 1, missingClassCount: 1 });
   });
 
-  it('applies configured eligibility and class-count staffing in the domain layer', () => {
+  it('uses the explicit size before class-count fallback in the domain layer', () => {
     const schools = [
       { id: 'independent', sourceFields: { 'نوع المبنى': 'مستقل', 'عدد الفصول': '13', 'حجم المدرسة': 'صغير' }, assignedCleaners: 1, declaredSize: 'صغير' },
       { id: 'other', sourceFields: { 'نوع المبنى': 'ملحق', 'عدد الفصول': '22' }, assignedCleaners: 0 },
@@ -61,7 +62,62 @@ describe('dashboard summaries', () => {
       noElevatorValues: [],
       classCountHeader: 'عدد الفصول',
       schoolSizeHeader: 'حجم المدرسة',
-    })).toMatchObject([{ requiredCleaners: 2, assignedCleaners: 1, shortage: 1, sizeCorrected: true }]);
+    })).toMatchObject([{ size: 'small', requiredCleaners: 1, assignedCleaners: 1, shortage: 0, sizeDiffersFromClassCount: true }]);
+    expect(staffingRowsForEligibleSchools([
+      { id: 'fallback', sourceFields: { 'نوع المبنى': 'مستقل', 'عدد الفصول': '13' }, assignedCleaners: 1 },
+    ], {
+      buildingTypeHeader: 'نوع المبنى',
+      independentBuildingValues: ['مستقل'],
+      primarySharedValues: [],
+      elevatorContractorHeader: 'مقاول المصاعد',
+      noElevatorValues: [],
+      classCountHeader: 'عدد الفصول',
+      schoolSizeHeader: 'حجم المدرسة',
+      staffingRules: DEFAULT_STAFFING_RULES,
+    })).toMatchObject([{ size: 'medium', requiredCleaners: 2 }]);
+  });
+
+  it('lists eligible schools whose class count is missing', () => {
+    expect(eligibleSchoolsMissingClassCount([
+      { id: 'known', schoolName: 'مدرسة معلومة', sourceFields: { 'نوع المبنى': 'مستقل', 'عدد الفصول': '13' }, assignedCleaners: 1 },
+      { id: 'missing', schoolName: 'مدرسة بلا فصول', sourceFields: { 'نوع المبنى': 'مستقل' }, assignedCleaners: 0 },
+      { id: 'ineligible', schoolName: 'مدرسة ملحقة', sourceFields: { 'نوع المبنى': 'ملحق' }, assignedCleaners: 0 },
+    ], {
+      buildingTypeHeader: 'نوع المبنى',
+      independentBuildingValues: ['مستقل'],
+      primarySharedValues: [],
+      elevatorContractorHeader: 'مقاول المصاعد',
+      noElevatorValues: [],
+      classCountHeader: 'عدد الفصول',
+      schoolSizeHeader: 'حجم المدرسة',
+    })).toEqual([{ id: 'missing', name: 'مدرسة بلا فصول' }]);
+  });
+
+  it('lists all schools whose explicit indicator differs from class count', () => {
+    expect(schoolsWithSizeClassDifference([
+      { id: 'matches', schoolName: 'متطابقة', sourceFields: { الفصول: '13' }, declaredSize: 'M', assignedCleaners: 0 },
+      { id: 'differs', schoolName: 'مختلفة', sourceFields: { الفصول: '13' }, declaredSize: 'S+', assignedCleaners: 0 },
+      { id: 'missing', schoolName: 'بلا حجم', sourceFields: { الفصول: '13' }, assignedCleaners: 0 },
+    ], 'الفصول')).toEqual([{ id: 'differs', name: 'مختلفة' }]);
+  });
+
+  it('lists eligible cleaner-shortage schools with placement counts', () => {
+    expect(cleanerShortageSchools([
+      { id: 'short', schoolName: 'مدرسة العجز', ministryNumber: '1001', sourceFields: { 'نوع المبنى': 'مستقل', 'عدد الفصول': '13' }, assignedCleaners: 1 },
+      { id: 'covered', schoolName: 'مدرسة مكتملة', ministryNumber: '1002', sourceFields: { 'نوع المبنى': 'مستقل', 'عدد الفصول': '13' }, assignedCleaners: 2 },
+      { id: 'unknown', schoolName: 'مدرسة بلا فصول', ministryNumber: '1003', sourceFields: { 'نوع المبنى': 'مستقل' }, assignedCleaners: 0 },
+      { id: 'ineligible', schoolName: 'مدرسة ملحقة', ministryNumber: '1004', sourceFields: { 'نوع المبنى': 'ملحق', 'عدد الفصول': '13' }, assignedCleaners: 0 },
+    ], {
+      buildingTypeHeader: 'نوع المبنى',
+      independentBuildingValues: ['مستقل'],
+      primarySharedValues: [],
+      elevatorContractorHeader: 'مقاول المصاعد',
+      noElevatorValues: [],
+      classCountHeader: 'عدد الفصول',
+      schoolSizeHeader: 'حجم المدرسة',
+    })).toEqual([{
+      id: 'short', ministryNumber: '1001', name: 'مدرسة العجز', required: 2, assigned: 1, shortage: 1,
+    }]);
   });
 
   it('aggregates all current monthly plan rows', () => {
@@ -83,11 +139,21 @@ describe('dashboard summaries', () => {
     expect(summarizeWorkforce([
       { size: 'large', requiredCleaners: 3, assignedCleaners: 2, shortage: 1, surplus: 0 },
       { size: 'small', requiredCleaners: 1, assignedCleaners: 2, shortage: 0, surplus: 1 },
-    ], 182, 180).cleaners.bySize).toEqual({
+    ], 182, 180    ).cleaners.bySize).toEqual({
       small: { required: 1, assigned: 2, shortage: 0, surplus: 1 },
+      small_plus: { required: 0, assigned: 0, shortage: 0, surplus: 0 },
       medium: { required: 0, assigned: 0, shortage: 0, surplus: 0 },
+      medium_plus: { required: 0, assigned: 0, shortage: 0, surplus: 0 },
       large: { required: 3, assigned: 2, shortage: 1, surplus: 0 },
+      large_plus: { required: 0, assigned: 0, shortage: 0, surplus: 0 },
     });
+    const workforce = summarizeWorkforce([
+      { size: 'small_plus', requiredCleaners: 2, assignedCleaners: 1, shortage: 1, surplus: 0 },
+      { size: 'large_plus', requiredCleaners: 4, assignedCleaners: 4, shortage: 0, surplus: 0 },
+    ], 3, 3);
+    expect(workforce.total.required).toBe(workforce.gatekeepers.required + workforce.cleaners.required);
+    expect(workforce.cleaners.bySize.small_plus.required).toBe(2);
+    expect(workforce.cleaners.bySize.large_plus.assigned).toBe(4);
   });
 
   it('distinguishes schools with shortages from net cleaner balance', () => {
@@ -97,11 +163,11 @@ describe('dashboard summaries', () => {
     ], 0, 0);
 
     expect(workforce.cleaners.shortageSchools).toBe(1);
-    expect(workforce.cleaners.netBalance).toBe(workforce.cleaners.shortage - workforce.cleaners.surplus);
-    expect(workforce.cleaners.netBalance).toBe(-1);
+    expect(workforce.cleaners.netBalance).toBe(workforce.cleaners.surplus - workforce.cleaners.shortage);
+    expect(workforce.cleaners.netBalance).toBe(1);
   });
 
-  it('uses a positive net balance for deficits and a negative one for surpluses', () => {
+  it('uses assigned minus required for net balance: deficit is negative and surplus is positive', () => {
     const deficit = summarizeWorkforce([
       { requiredCleaners: 4, assignedCleaners: 1, shortage: 3, surplus: 0 },
     ], 0, 0);
@@ -109,8 +175,17 @@ describe('dashboard summaries', () => {
       { requiredCleaners: 1, assignedCleaners: 4, shortage: 0, surplus: 3 },
     ], 0, 0);
 
-    expect(deficit.cleaners.netBalance).toBe(3);
-    expect(surplus.cleaners.netBalance).toBe(-3);
+    expect(deficit.cleaners.netBalance).toBe(-3);
+    expect(surplus.cleaners.netBalance).toBe(3);
+  });
+
+  it('keeps net balance equal to assigned minus calculable required when class counts are missing', () => {
+    const workforce = summarizeWorkforce([
+      { requiredCleaners: 2, assignedCleaners: 1, shortage: 1, surplus: 0 },
+      { requiredCleaners: null, assignedCleaners: 3, shortage: 0, surplus: 0 },
+    ], 4, 5);
+
+    expect(workforce.total.netBalance).toBe(workforce.total.assigned - workforce.total.required);
   });
 
   it('returns an empty verdict before a month with no plan rows', () => {
@@ -143,6 +218,56 @@ describe('dashboard summaries', () => {
       elapsedWorkingDays: 7,
       status: 'far-behind',
     });
+  });
+
+  it('reports the amount ahead when completed visits meet or exceed the expected count', () => {
+    const rows = [
+      metricRow({ plannedDate: '2026-11-02', visited: true, visitedDate: '2026-11-02' }),
+      metricRow({ plannedDate: '2026-11-03', visited: true, visitedDate: '2026-11-03' }),
+      metricRow({ plannedDate: '2026-11-20', visited: true, visitedDate: '2026-11-03' }),
+    ];
+    expect(summarizeDashboardVerdict(rows, '2026-11', '2026-11-03')).toMatchObject({
+      expected: 2,
+      done: 3,
+      behind: 0,
+      ahead: 1,
+      firstSlipDay: null,
+    });
+  });
+
+  it('filters a below-expected list independently from overdue visits', () => {
+    const rows: ReportPlanRow[] = [
+      { id: 'due', month: '2026-11', planType: 'maintenance', plannedDate: '2026-11-02', visited: false, visitedDate: null, reportDone: false, reportCompletedDate: null, engineerId: null, engineerName: null, supervisorId: null, supervisorName: null, contractorName: null, schoolId: 's1', schoolName: 'مستحقة', ministryNumber: '', neighbourhood: '', hasCleaner: true },
+      { id: 'future', month: '2026-11', planType: 'maintenance', plannedDate: '2026-11-20', visited: false, visitedDate: null, reportDone: false, reportCompletedDate: null, engineerId: null, engineerName: null, supervisorId: null, supervisorName: null, contractorName: null, schoolId: 's2', schoolName: 'لاحقة', ministryNumber: '', neighbourhood: '', hasCleaner: true },
+    ];
+    expect(filterPlanReportActionRows(rows, 'below-expected', '2026-11-03').map((row) => row.id)).toEqual(['due']);
+    expect(filterPlanReportActionRows(rows, 'late-visits', '2026-11-03').map((row) => row.id)).toEqual(['due']);
+  });
+
+  it('uses the expected performance target for unscheduled plans without marking rows overdue', () => {
+    const rows: ReportPlanRow[] = ['a', 'b', 'c'].map((id) => ({
+      id,
+      lateByPlannedDate: false,
+      month: '2026-11',
+      planType: 'cleaning',
+      plannedDate: '2026-11-20',
+      visited: false,
+      visitedDate: null,
+      reportDone: false,
+      reportCompletedDate: null,
+      engineerId: null,
+      engineerName: null,
+      supervisorId: null,
+      supervisorName: null,
+      contractorName: null,
+      schoolId: id,
+      schoolName: id,
+      ministryNumber: '',
+      neighbourhood: '',
+      hasCleaner: true,
+    }));
+    expect(filterPlanReportActionRows(rows, 'below-expected', '2026-11-03')).toHaveLength(1);
+    expect(filterPlanReportActionRows(rows, 'late-visits', '2026-11-03')).toHaveLength(0);
   });
 
   it('does not count weekends as month-progress days and counts the full month before it starts', () => {

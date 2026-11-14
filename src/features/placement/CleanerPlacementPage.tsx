@@ -5,13 +5,14 @@ import { Eye, EyeOff } from 'lucide-react';
 import { z } from 'zod';
 import { loadXlsx } from '../../lib/xlsx';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
-import { calculateStaffing, parseClassCount, type StaffingResult } from '../../domain/staffing';
+import { calculateStaffing, DEFAULT_STAFFING_RULES, normalizeSchoolSize, parseClassCount, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize, type StaffingResult, type StaffingRuleTable } from '../../domain/staffing';
 import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { preferencesContext } from '../../app/preferencesContext';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
+import { Link } from 'react-router-dom';
 
 const configSchema = z.object({
   buildingTypeHeader: z.string(),
@@ -27,7 +28,7 @@ const schoolSchema = z.object({
   school_name: z.string(),
   ministry_number: z.string(),
   source_fields: z.record(z.string(), z.unknown()),
-  size_source: z.enum(['small', 'medium', 'large']).nullable(),
+  size_source: z.enum(SCHOOL_SIZES).nullable(),
 });
 const employeeSchema = z.object({ id: z.string().uuid(), full_name: z.string(), employee_number: z.string().nullable(), job_title: z.string().nullable(), phone: z.string().nullable() });
 const assignmentSchema = z.object({
@@ -39,36 +40,47 @@ const assignmentSchema = z.object({
 });
 const schoolSizeSchema = z.object({
   school_id: z.string().uuid(),
-  corrected_size: z.string(),
+  corrected_size: z.enum(SCHOOL_SIZES),
 });
 const exceptionRowSchema = z.object({ school_id: z.string().uuid(), required_count: z.number().int(), reason: z.string() });
 const exceptionSchema = z.object({ requiredCleaners: z.number().int().min(0), reason: z.string().trim().min(1) });
 type School = z.infer<typeof schoolSchema>;
 type Assignment = z.infer<typeof assignmentSchema>;
-type StaffingConfig = PlanEligibilityConfig & { classCountHeader: string; schoolSizeHeader: string };
+type StaffingConfig = PlanEligibilityConfig & {
+  classCountHeader: string;
+  schoolSizeHeader: string;
+  staffingRules: StaffingRuleTable;
+};
 type SchoolData = {
   schools: School[];
   employees: z.infer<typeof employeeSchema>[];
   assignments: Assignment[];
-  overrides: Map<string, { correctedSize: string | null; exception: z.infer<typeof exceptionSchema> | null }>;
+  overrides: Map<string, { correctedSize: SchoolSize | null; exception: z.infer<typeof exceptionSchema> | null }>;
   config: StaffingConfig | null;
 };
-type SchoolSummary = { school: School; staffing: StaffingResult; neighborhood: string; exception: z.infer<typeof exceptionSchema> | null };
+type SchoolSummary = {
+  school: School;
+  staffing: StaffingResult;
+  neighborhood: string;
+  exception: z.infer<typeof exceptionSchema> | null;
+  correctedSize: SchoolSize | null;
+};
 
 async function loadPlacementData(): Promise<SchoolData> {
   if (!supabase) return { schools: [], employees: [], assignments: [], overrides: new Map(), config: null };
-  const [schoolsResult, employeeResult, assignmentResult, sizesResult, exceptionResult, configResult] = await Promise.all([
+  const [schoolsResult, employeeResult, assignmentResult, sizesResult, exceptionResult, configResult, rulesResult] = await Promise.all([
     supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsWithSize).order('name'),
     supabase.from('employees').select(APP_SCHEMA_SELECT.employeesBasic).eq('category', 'cleaner').order('full_name'),
     supabase.from('cleaner_assignments').select(APP_SCHEMA_SELECT.cleanerAssignments),
     supabase.from('school_size_corrections').select(APP_SCHEMA_SELECT.schoolSizeCorrection),
     supabase.from('staffing_exceptions').select(APP_SCHEMA_SELECT.staffingException),
     supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
+    supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'staffing_rules').maybeSingle(),
   ]);
-  for (const result of [schoolsResult, employeeResult, assignmentResult, sizesResult, exceptionResult, configResult]) {
+  for (const result of [schoolsResult, employeeResult, assignmentResult, sizesResult, exceptionResult, configResult, rulesResult]) {
     if (result.error) throw result.error;
   }
-  const overrides = new Map<string, { correctedSize: string | null; exception: z.infer<typeof exceptionSchema> | null }>();
+  const overrides = new Map<string, { correctedSize: SchoolSize | null; exception: z.infer<typeof exceptionSchema> | null }>();
   const sizeRows = z.array(schoolSizeSchema).parse(sizesResult.data);
   const exceptions = new Map(z.array(exceptionRowSchema).parse(exceptionResult.data)
     .map((item) => [item.school_id, { requiredCleaners: item.required_count, reason: item.reason }]));
@@ -81,12 +93,22 @@ async function loadPlacementData(): Promise<SchoolData> {
   for (const [schoolId, exception] of exceptions) {
     if (!overrides.has(schoolId)) overrides.set(schoolId, { correctedSize: null, exception });
   }
+  const staffingRules = rulesResult.data ? z.object({
+    small: z.number().int().min(0),
+    small_plus: z.number().int().min(0),
+    medium: z.number().int().min(0),
+    medium_plus: z.number().int().min(0),
+    large: z.number().int().min(0),
+    large_plus: z.number().int().min(0),
+  }).parse(rulesResult.data.value) : DEFAULT_STAFFING_RULES;
   return {
     schools: z.array(schoolSchema).parse(schoolsResult.data),
     employees: z.array(employeeSchema).parse(employeeResult.data),
     assignments: z.array(assignmentSchema).parse(assignmentResult.data),
     overrides,
-    config: configResult.data ? configSchema.parse(configResult.data.value) : null,
+    config: configResult.data
+      ? { ...configSchema.parse(configResult.data.value), staffingRules }
+      : null,
   };
 }
 
@@ -101,6 +123,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   const [newCleaner, setNewCleaner] = useState<Record<string, string>>({});
   const [labourSource, setLabourSource] = useState<Record<string, string>>({});
   const [exceptions, setExceptions] = useState<Record<string, { requiredCleaners: string; reason: string }>>({});
+  const [correctedSizes, setCorrectedSizes] = useState<Record<string, SchoolSize | ''>>({});
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [message, setMessage] = useState('');
   const data = useQuery({ queryKey: ['cleaner-placement-data'], queryFn: loadPlacementData, enabled: Boolean(profile) });
@@ -121,31 +144,20 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
       const sourceDeclaredSize = school.size_source ?? (data.data!.config!.schoolSizeHeader
         ? String(school.source_fields[data.data!.config!.schoolSizeHeader] ?? '')
         : null);
-      const sourceStaffing = classes === null
-        ? {
-            size: null, requiredCleaners: null, assignedCleaners: currentAssignments.length,
-            shortage: 0, surplus: 0, sizeCorrected: false, exceptionApplied: Boolean(override?.exception),
-          } satisfies StaffingResult
-        : calculateStaffing({
-            classes,
-            declaredSize: sourceDeclaredSize,
-            assignedCleaners: currentAssignments.length,
-            exception: override?.exception,
-          });
-      const staffing = classes === null || !override?.correctedSize
-        ? sourceStaffing
-        : calculateStaffing({
-            classes,
-            declaredSize: override.correctedSize,
-            assignedCleaners: currentAssignments.length,
-            exception: override.exception,
-          });
-      staffing.sizeCorrected = sourceStaffing.sizeCorrected || Boolean(override?.correctedSize && override.correctedSize === staffing.size);
+      const staffing = calculateStaffing({
+        classes,
+        declaredSize: sourceDeclaredSize,
+        manualSizeOverride: override?.correctedSize,
+        assignedCleaners: currentAssignments.length,
+        exception: override?.exception,
+        rules: data.data!.config!.staffingRules,
+      });
       return {
         school,
         staffing,
         neighborhood: String(school.source_fields['الحي'] ?? 'غير محدد'),
         exception: override?.exception ?? null,
+        correctedSize: override?.correctedSize ?? null,
       };
     });
   }, [data.data, eligibleIds]);
@@ -205,8 +217,13 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   });
 
   const saveCorrection = useMutation({
-    mutationFn: async ({ schoolId, correctedSize }: { schoolId: string; correctedSize: string }) => {
+    mutationFn: async ({ schoolId, correctedSize }: { schoolId: string; correctedSize: SchoolSize | null }) => {
       if (!supabase || !profile || !canManageStaffingRules) throw new Error('لا تملك صلاحية تصحيح الحجم.');
+      if (correctedSize === null) {
+        const { error } = await supabase.from('school_size_corrections').delete().eq('school_id', schoolId);
+        if (error) throw error;
+        return;
+      }
       const { error } = await supabase.from('school_size_corrections').upsert({
         school_id: schoolId,
         corrected_size: correctedSize,
@@ -242,7 +259,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
       'الرقم الوزاري': school.ministry_number,
       'اسم المدرسة': school.school_name,
       'الحي': neighborhood,
-      'الحجم المحسوب': staffing.size ?? '',
+      'الحجم المعتمد': sizeLabel(staffing.size),
       'عدد الفصول': parseClassCount(school.source_fields[data.data?.config?.classCountHeader ?? '']) ?? '',
       'المطلوب': staffing.requiredCleaners ?? '',
       'المسند': staffing.assignedCleaners,
@@ -253,7 +270,8 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, sheet, 'تسكين العمالة');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(groupedBySize.map((row) => ({
-      'الحجم': sizeLabel(row.label === 'small' ? 'small' : row.label === 'medium' ? 'medium' : row.label === 'large' ? 'large' : null),
+      'الحجم': row.label,
+      'عدد المدارس': row.schools,
       'المطلوب': row.required, 'المسند': row.assigned, 'العجز': row.shortage, 'الفائض': row.surplus,
     }))), 'حسب الحجم');
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(groupedByNeighborhood.map((row) => ({
@@ -268,7 +286,13 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
     shortage: result.shortage + row.staffing.shortage,
     surplus: result.surplus + row.staffing.surplus,
   }), { required: 0, assigned: 0, shortage: 0, surplus: 0 });
-  const groupedBySize = groupTotal(filtered, (row) => row.staffing.size ?? 'غير محدد');
+  const allSizeGroups = groupTotal(filtered, (row) => row.staffing.size ? SCHOOL_SIZE_LABELS[row.staffing.size] : 'غير محدد');
+  const groupedBySize = [
+    ...SCHOOL_SIZES.map((size) => allSizeGroups.find((row) => row.label === SCHOOL_SIZE_LABELS[size])
+      ?? { label: SCHOOL_SIZE_LABELS[size], schools: 0, required: 0, assigned: 0, shortage: 0, surplus: 0 }),
+    ...allSizeGroups.filter((row) => row.label === 'غير محدد'),
+  ];
+  const sizeMismatchCount = summaries.filter((row) => row.staffing.sizeDiffersFromClassCount).length;
   const groupedByNeighborhood = groupTotal(filtered, (row) => row.neighborhood);
   const saveViewMode = useMutation({
     mutationFn: async (next: 'editable' | 'compact') => {
@@ -293,11 +317,17 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
       {data.error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">تعذر تحميل بيانات التسكين: {data.error.message}</div>}
       {shortageOnly && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">تصفية مفعلة: المدارس التي لديها عجز في عمالة النظافة.</p>}
       {!data.data?.config && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-7 text-amber-950">يلزم إعداد مطابقة أهلية المدارس في إعدادات النظام قبل عرض المدارس المستقلة والمشترك الأساسي.</div>}
-      <section className="grid gap-3 sm:grid-cols-4">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Metric label="المطلوب" value={totals.required} formatNumber={formatNumber} />
         <Metric label="المسند" value={totals.assigned} formatNumber={formatNumber} />
         <Metric label="العجز" value={totals.shortage} formatNumber={formatNumber} />
         <Metric label="الفائض" value={totals.surplus} formatNumber={formatNumber} />
+        <article className="card p-4">
+          <p className="text-xs text-slate-500">الحجم يختلف عن عدد الفصول</p>
+          <Link to="/schools?sizeDiff=true" className="mt-1 inline-block text-2xl font-bold text-brand-900 underline">
+            {formatNumber(sizeMismatchCount)}
+          </Link>
+        </article>
       </section>
       <section className="card grid gap-4 p-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
@@ -343,12 +373,13 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
               </table>
             </div>
           ) : <div className="grid gap-3">
-            {filtered.map(({ school, staffing, neighborhood, exception }) => <article key={school.id} className="rounded-xl border border-slate-200 p-4">
+            {filtered.map(({ school, staffing, neighborhood, exception, correctedSize }) => <article key={school.id} className="rounded-xl border border-slate-200 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div><h3 className="font-bold">{school.school_name}</h3><p className="mt-1 text-xs text-slate-500">الرقم الوزاري: {school.ministry_number} · الحي: {neighborhood}</p></div>
                 <div className="flex flex-wrap gap-2 text-xs">
                   <span className="rounded-full bg-brand-50 px-2.5 py-1 text-brand-900">الحجم: {sizeLabel(staffing.size)}</span>
-                  {staffing.sizeCorrected && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-900">تم تصحيح الحجم</span>}
+                  {staffing.sizeDiffersFromClassCount && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-900">الحجم يختلف عن عدد الفصول</span>}
+                  {correctedSize && <span className="rounded-full bg-violet-50 px-2.5 py-1 text-violet-900">تصحيح يدوي: {sizeLabel(correctedSize)}</span>}
                   {exception && <span className="rounded-full bg-violet-50 px-2.5 py-1 text-violet-900">استثناء معتمد</span>}
                 </div>
               </div>
@@ -370,7 +401,26 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
                 <select value={labourSource[school.id] ?? 'org_structure'} onChange={(event) => setLabourSource((current) => ({ ...current, [school.id]: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="org_structure">الهيكل التنظيمي</option><option value="ajeer">أجير</option></select>
                 <button type="button" onClick={() => persistAssignment.mutate({ schoolId: school.id, employeeId: newCleaner[school.id] ?? '', source: labourSource[school.id] ?? '' })} disabled={persistAssignment.isPending} className="rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50">إضافة عامل</button>
               </div>}
-              {canManageStaffingRules && staffing.sizeCorrected && staffing.size && <button type="button" onClick={() => saveCorrection.mutate({ schoolId: school.id, correctedSize: staffing.size! })} disabled={saveCorrection.isPending} className="mt-3 rounded-lg border border-amber-300 px-3 py-2 text-sm text-amber-900 disabled:opacity-50">حفظ تصحيح الحجم</button>}
+              {canManageStaffingRules && <details className="mt-3 rounded-lg border border-slate-200 p-3">
+                <summary className="cursor-pointer text-sm font-semibold">تصحيح يدوي للحجم</summary>
+                <div className="mt-3 flex flex-wrap items-end gap-2">
+                  <label className="grid gap-1 text-xs font-semibold text-slate-600">الحجم المعتمد يدوياً
+                    <select value={correctedSizes[school.id] ?? correctedSize ?? ''} onChange={(event) => setCorrectedSizes((current) => ({
+                      ...current,
+                      [school.id]: normalizeSchoolSize(event.target.value) ?? '',
+                    }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                      <option value="">دون تصحيح يدوي</option>
+                      {SCHOOL_SIZES.map((size) => <option key={size} value={size}>{SCHOOL_SIZE_LABELS[size]}</option>)}
+                    </select>
+                  </label>
+                  <button type="button" onClick={() => saveCorrection.mutate({
+                    schoolId: school.id,
+                    correctedSize: correctedSizes[school.id] === undefined
+                      ? correctedSize
+                      : correctedSizes[school.id] || null,
+                  })} disabled={saveCorrection.isPending} className="rounded-lg border border-amber-300 px-3 py-2 text-sm text-amber-900 disabled:opacity-50">حفظ التصحيح</button>
+                </div>
+              </details>}
               {canManageStaffingRules && staffing.requiredCleaners !== null && <details className="mt-3 rounded-lg border border-slate-200 p-3">
                 <summary className="cursor-pointer text-sm font-semibold">استثناء لهذه المدرسة</summary>
                 <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_2fr_auto]">
@@ -393,14 +443,15 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
 }
 
 function sizeLabel(size: StaffingResult['size']): string {
-  return size === 'small' ? 'صغير' : size === 'medium' ? 'متوسط' : size === 'large' ? 'كبير' : 'غير محدد';
+  return size ? SCHOOL_SIZE_LABELS[size] : 'غير محدد';
 }
 
 function groupTotal(rows: SchoolSummary[], key: (row: SchoolSummary) => string) {
-  const groups = new Map<string, { required: number; assigned: number; shortage: number; surplus: number }>();
+  const groups = new Map<string, { schools: number; required: number; assigned: number; shortage: number; surplus: number }>();
   for (const row of rows) {
     const label = key(row);
-    const current = groups.get(label) ?? { required: 0, assigned: 0, shortage: 0, surplus: 0 };
+    const current = groups.get(label) ?? { schools: 0, required: 0, assigned: 0, shortage: 0, surplus: 0 };
+    current.schools += 1;
     current.required += row.staffing.requiredCleaners ?? 0;
     current.assigned += row.staffing.assignedCleaners;
     current.shortage += row.staffing.shortage;
@@ -415,5 +466,5 @@ function Metric({ label, value, formatNumber }: { label: string; value: number; 
 }
 
 function TotalsTable({ title, rows, formatNumber }: { title: string; rows: ReturnType<typeof groupTotal>; formatNumber: (value: string | number) => string }) {
-  return <section className="card p-4"><h3 className="font-bold">{title}</h3><div className="mt-3 table-scroll"><table><thead><tr><th>التصنيف</th><th>مطلوب</th><th>مسند</th><th>عجز</th><th>فائض</th></tr></thead><tbody>{rows.map((row) => <tr key={row.label}><td>{row.label}</td><td>{formatNumber(row.required)}</td><td>{formatNumber(row.assigned)}</td><td>{formatNumber(row.shortage)}</td><td>{formatNumber(row.surplus)}</td></tr>)}</tbody></table></div></section>;
+  return <section className="card p-4"><h3 className="font-bold">{title}</h3><div className="mt-3 table-scroll"><table><thead><tr><th>التصنيف</th><th>المدارس</th><th>مطلوب</th><th>مسند</th><th>عجز</th><th>فائض</th></tr></thead><tbody>{rows.map((row) => <tr key={row.label}><td>{row.label}</td><td>{formatNumber(row.schools)}</td><td>{formatNumber(row.required)}</td><td>{formatNumber(row.assigned)}</td><td>{formatNumber(row.shortage)}</td><td>{formatNumber(row.surplus)}</td></tr>)}</tbody></table></div></section>;
 }

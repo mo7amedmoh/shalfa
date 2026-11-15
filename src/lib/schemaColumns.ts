@@ -103,7 +103,7 @@ export const APP_SCHEMA_SELECT = {
   monthlyPlanDashboard: 'id,plan_type,late_by_planned_date,monthly_plan_rows(id,school:schools(name),planned_date,visited,visited_at:visited_date,report_done,report_completed_at:report_done_date,supervisor_id,supervisor_name)',
   gatekeeperDashboard: 'school_id',
   kpiDashboardTotals: 'month,work_order,status,contract_month,total_score,payable_factor',
-  generalPlanRows: 'id,school_id,planned_date,status,execution_date,report_done,report_done_date,supervisor_name,engineer_name,notes,contractor_name,school:schools(school_name:name,ministry_number:ministry_no)',
+  generalPlanRows: 'id,plan_id,school_id,planned_date,status,execution_date,report_done,report_done_date,supervisor_name,engineer_name,notes,contractor_name,school:schools(school_name:name,ministry_number:ministry_no)',
   generalPlanId: 'id',
   rewardPools: 'id,month,engineer_id,amount,status',
   rewardAllocations: 'id,employee_id,amount,note,employee:employees(full_name)',

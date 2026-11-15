@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Download } from 'lucide-react';
 import { z } from 'zod';
 import { loadXlsx } from '../../lib/xlsx';
 import { customPlanTypeSchema, type CustomPlanType } from '../../domain/customPlans';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { CustomPlanTypeDialog } from '../plans/CustomPlanTypeDialog';
+import { exportAllPlans } from './exportAllPlans';
 
 const typeListSchema = z.array(customPlanTypeSchema);
 
@@ -21,7 +23,26 @@ export function PlanManagementPage({ profile }: { profile: UserProfile }) {
   const queryClient = useQueryClient();
   const [dialogGroup, setDialogGroup] = useState<'monthly' | 'general' | null>(null);
   const [message, setMessage] = useState('');
+  const [exportMessage, setExportMessage] = useState('');
+  const [exporting, setExporting] = useState(false);
   const types = useQuery({ queryKey: ['custom-plan-types'], queryFn: loadTypes });
+
+  async function handleExportAllPlans() {
+    setExporting(true);
+    setExportMessage('جارٍ تحميل جميع الخطط وتجهيز ملف Excel…');
+    try {
+      const counts = await exportAllPlans();
+      setExportMessage(
+        `تم التصدير: ${counts.monthlyPlans} خطة شهرية و${counts.monthlyRows} سجل، `
+        + `${counts.generalPlans} خطة عامة و${counts.generalRows} سجل، `
+        + `${counts.customTypes} نوع مخصص و${counts.customPlans} فترة و${counts.customRows} سجل.`,
+      );
+    } catch (error) {
+      setExportMessage(`تعذر تصدير الخطط: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   async function updateType(type: CustomPlanType, active: boolean) {
     if (!supabase) return;
@@ -69,6 +90,23 @@ export function PlanManagementPage({ profile }: { profile: UserProfile }) {
       <button type="button" onClick={() => void checkSchema()} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">فحص المخطط</button>
     </div>
     {message && <p role="status" className="rounded-lg bg-slate-50 p-3 text-sm">{message}</p>}
+    <section className="card flex flex-wrap items-center justify-between gap-4 p-5">
+      <div>
+        <h3 className="font-bold">تصدير جميع الخطط</h3>
+        <p className="mt-1 text-sm text-slate-500">يشمل الخطط الشهرية والعامة والخطط المخصصة، مع جميع الفترات والسجلات.</p>
+        {exportMessage && <p role="status" aria-live="polite" className="mt-2 text-sm text-slate-700">{exportMessage}</p>}
+      </div>
+      <button
+        type="button"
+        onClick={() => void handleExportAllPlans()}
+        disabled={exporting}
+        aria-busy={exporting}
+        className="inline-flex items-center gap-2 rounded-lg bg-brand-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+      >
+        <Download size={17} aria-hidden="true" />
+        {exporting ? 'جارٍ التصدير…' : 'تصدير Excel'}
+      </button>
+    </section>
     <section className="card grid gap-3 p-5">
       <h3 className="font-bold">إنشاء خطة مخصصة</h3>
       <div className="flex flex-wrap gap-2">

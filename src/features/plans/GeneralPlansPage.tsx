@@ -11,6 +11,7 @@ import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
+import { GeneralPlanBulkUpdates } from './GeneralPlanBulkUpdates';
 
 const planTypes = ['gardening', 'landscaping', 'sewage_waste', 'water_supply', 'tank_washing', 'pest_control', 'annual_readiness'] as const;
 const planLabels: Record<GeneralPlanType, string> = {
@@ -37,6 +38,7 @@ const sourceSchoolSchema = z.object({
 });
 const rowSchema = z.object({
   id: z.string().uuid(),
+  plan_id: z.string().uuid(),
   school_id: z.string().uuid(),
   planned_date: z.string().nullable(),
   status: z.enum(['planned', 'in_progress', 'done', 'cancelled']),
@@ -47,7 +49,7 @@ const rowSchema = z.object({
   contractor_name: z.string().nullable(),
   school: z.object({ school_name: z.string(), ministry_number: z.string() }).nullable(),
 });
-type GeneralRow = Omit<z.infer<typeof rowSchema>, 'status'> & { status: 'pending' | 'in_progress' | 'complete'; completed_at: string | null };
+type GeneralRow = Omit<z.infer<typeof rowSchema>, 'status'> & { status: 'pending' | 'in_progress' | 'complete' | 'cancelled'; completed_at: string | null };
 type CandidateData = { schools: z.infer<typeof sourceSchoolSchema>[]; eligibility: PlanEligibilityConfig | null };
 
 async function loadCandidates(): Promise<CandidateData> {
@@ -76,7 +78,7 @@ async function loadGeneralRows(type: GeneralPlanType): Promise<GeneralRow[]> {
   if (error) throw error;
   return z.array(rowSchema).parse(data).map((row) => ({
     ...row,
-    status: row.status === 'done' ? 'complete' : row.status === 'in_progress' ? 'in_progress' : 'pending',
+    status: row.status === 'done' ? 'complete' : row.status === 'in_progress' ? 'in_progress' : row.status === 'cancelled' ? 'cancelled' : 'pending',
     completed_at: row.execution_date,
   }));
 }
@@ -89,6 +91,7 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   const today = new Date();
   const [plannedDate, setPlannedDate] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [message, setMessage] = useState('');
   const schools = useQuery({ queryKey: ['schools-for-general-plans'], queryFn: loadCandidates, enabled: Boolean(planType) });
@@ -97,6 +100,7 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
     queryFn: () => planType ? loadGeneralRows(planType) : Promise.resolve([]),
     enabled: Boolean(planType),
   });
+  useEffect(() => setSelectedRowIds([]), [planType]);
   const canManage = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
   const localToday = () => {
     const date = new Date();
@@ -209,8 +213,21 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   });
 
   if (!planType) return <section className="card p-6 text-center">نوع الخطة غير معروف.</section>;
-  const progress = summarizeGeneralPlanProgress((rows.data ?? []).map((row) => row.status));
+  const progress = summarizeGeneralPlanProgress((rows.data ?? []).map((row) => row.status === 'cancelled' ? 'pending' : row.status));
   const { complete: completeCount, total: totalCount } = progress;
+  const bulkRows = (rows.data ?? []).map((row) => ({
+    id: row.id,
+    planId: row.plan_id,
+    schoolName: row.school?.school_name ?? row.school_id,
+    ministryNumber: row.school?.ministry_number ?? '',
+    status: row.status === 'complete' ? 'done' as const : row.status === 'pending' ? 'planned' as const : row.status,
+    executionDate: row.completed_at,
+    reportDone: row.report_done,
+    reportDoneDate: row.report_done_date,
+  }));
+  const selectedBulkRows = bulkRows.filter((row) => selectedRowIds.includes(row.id));
+  const allRowIds = (rows.data ?? []).map((row) => row.id);
+  const allRowsSelected = allRowIds.length > 0 && allRowIds.every((id) => selectedRowIds.includes(id));
 
   return (
     <div className="grid gap-5">
@@ -246,26 +263,54 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
           <p className="mt-1 text-xs text-slate-500">{formatNumber(progress.completionPercent.toFixed(1))}% إنجاز</p>
         </div>
         {rows.isLoading ? <p role="status">جارٍ تحميل السجلات…</p> : totalCount === 0 ? <p className="rounded-lg bg-slate-50 p-5 text-center text-sm text-slate-500">لا توجد مهام مسجلة لهذه الخطة.</p> : (
-          <div className="table-scroll"><table>
-            <thead><tr><th>المدرسة</th><th>التاريخ المخطط</th><th>المقاول</th><th>حالة التنفيذ</th><th>تاريخ الإنجاز</th><th>حالة التقرير</th><th>تاريخ إنجاز التقرير</th><th>الملاحظات</th><th>إجراء</th></tr></thead>
-            <tbody>{(rows.data ?? []).map((row) => <GeneralPlanRow key={row.id} row={row} onSave={(status, notes, reportDone) => updateRow.mutate({ row, status, notes, reportDone })} onDelete={() => deletePlan.mutate({ rowId: row.id })} disabled={!canManage || updateRow.isPending} />)}</tbody>
-          </table></div>
+          <>
+            <GeneralPlanBulkUpdates
+              rows={bulkRows}
+              allSchools={(schools.data?.schools ?? []).map((school) => ({
+                id: school.id,
+                schoolName: school.school_name,
+                ministryNumber: school.ministry_number,
+              }))}
+              selectedRows={selectedBulkRows}
+              disabled={!canManage}
+              onUpdated={() => queryClient.invalidateQueries({ queryKey: ['general-plan-rows', planType] }).then(() => undefined)}
+              onClearSelected={() => setSelectedRowIds([])}
+            />
+            <div className="table-scroll general-plan-table-scroll"><table className="general-plan-table">
+              <thead><tr>
+                <th><input type="checkbox" aria-label="تحديد جميع صفوف الخطة" checked={allRowsSelected} onChange={(event) => setSelectedRowIds(event.target.checked ? allRowIds : [])} disabled={!canManage} /></th>
+                <th>المدرسة</th><th>التاريخ المخطط</th><th>المقاول</th><th>حالة التنفيذ</th><th>تاريخ الإنجاز</th><th>حالة التقرير</th><th>تاريخ إنجاز التقرير</th><th>الملاحظات</th><th>إجراء</th>
+              </tr></thead>
+              <tbody>{(rows.data ?? []).map((row) => <GeneralPlanRow
+                key={row.id}
+                row={row}
+                selected={selectedRowIds.includes(row.id)}
+                onSelect={(checked) => setSelectedRowIds((current) => checked
+                  ? [...current, row.id]
+                  : current.filter((id) => id !== row.id))}
+                onSave={(status, notes, reportDone) => updateRow.mutate({ row, status, notes, reportDone })}
+                onDelete={() => deletePlan.mutate({ rowId: row.id })}
+                disabled={!canManage || updateRow.isPending}
+              />)}</tbody>
+            </table></div>
+          </>
         )}
       </section>
     </div>
   );
 }
 
-function GeneralPlanRow({ row, onSave, onDelete, disabled }: { row: GeneralRow; onSave: (status: GeneralRow['status'], notes: string, reportDone: boolean) => void; onDelete?: () => void; disabled: boolean }) {
+function GeneralPlanRow({ row, selected, onSelect, onSave, onDelete, disabled }: { row: GeneralRow; selected: boolean; onSelect: (checked: boolean) => void; onSave: (status: GeneralRow['status'], notes: string, reportDone: boolean) => void; onDelete?: () => void; disabled: boolean }) {
   const [status, setStatus] = useState(row.status);
   const [notes, setNotes] = useState(row.notes ?? '');
   const [reportDone, setReportDone] = useState(row.report_done);
   useEffect(() => setReportDone(row.report_done), [row.report_done]);
   return <tr>
+    <td><input type="checkbox" aria-label={`تحديد ${row.school?.school_name ?? row.school_id}`} checked={selected} onChange={(event) => onSelect(event.target.checked)} disabled={disabled} /></td>
     <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small></td>
     <td>{row.planned_date}</td>
     <td>{row.contractor_name ?? '—'}</td>
-    <td><select value={status} onChange={(event) => { if (event.target.value === 'pending' || event.target.value === 'in_progress' || event.target.value === 'complete') setStatus(event.target.value); }} disabled={disabled} className="rounded border border-slate-300 px-2 py-1"><option value="pending">لم يبدأ</option><option value="in_progress">جارٍ</option><option value="complete">مكتمل</option></select></td>
+    <td><select value={status} onChange={(event) => { if (event.target.value === 'pending' || event.target.value === 'in_progress' || event.target.value === 'complete' || event.target.value === 'cancelled') setStatus(event.target.value); }} disabled={disabled} className="rounded border border-slate-300 px-2 py-1"><option value="pending">لم يبدأ</option><option value="in_progress">جارٍ</option><option value="complete">مكتمل</option><option value="cancelled">ملغى</option></select></td>
     <td>{row.completed_at ?? '—'}</td>
     <td><select value={reportDone ? 'done' : 'pending'} onChange={(event) => setReportDone(event.target.value === 'done')} disabled={disabled} className="rounded border border-slate-300 px-2 py-1"><option value="pending">لم ينجز</option><option value="done">تم إنجاز التقرير</option></select></td>
     <td>{row.report_done_date ?? '—'}</td>

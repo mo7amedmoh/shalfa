@@ -1,0 +1,1105 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>تصور مطوّر للوحة التحكم</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap");
+      :root {
+        --ink: #172943;
+        --muted: #738198;
+        --line: #e5eaf0;
+        --bg: #f4f6f9;
+        --white: #fff;
+        --navy: #173c70;
+        --blue: #3568a8;
+        --green: #13865e;
+        --lime: #dcf4e9;
+        --amber: #b76c10;
+        --orange: #e8a12a;
+        --red: #be3451;
+        --pink: #ffedf0;
+        --shadow: 0 5px 20px #182b4910;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        font-family: "Cairo", Tahoma, Arial, sans-serif;
+        color: var(--ink);
+      }
+      .shell {
+        display: grid;
+        grid-template-columns: 238px minmax(1fr, 0);
+        min-height: 100vh;
+      }
+      .side {
+        grid-column: 2;
+        grid-row: 1;
+        background: #fff;
+        border-left: 1px solid var(--line);
+        height: 100vh;
+        position: sticky;
+        top: 0;
+        padding: 24px 16px;
+      }
+      .logo {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+        color: var(--navy);
+        padding: 2px 9px 26px;
+      }
+      .brandmark {
+        width: 36px;
+        height: 36px;
+        border-radius: 12px;
+        background: var(--navy);
+        color: white;
+        display: grid;
+        place-items: center;
+      }
+      .nav small {
+        display: block;
+        color: #a2acba;
+        font-size: 10px;
+        padding: 12px 12px 5px;
+      }
+      .nav a {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        text-decoration: none;
+        color: #64738a;
+        padding: 10px 12px;
+        border-radius: 9px;
+        font-size: 13px;
+        margin: 2px 0;
+      }
+      .nav a.on {
+        color: var(--navy);
+        background: #edf3fa;
+        font-weight: 700;
+        border-right: 3px solid var(--blue);
+      }
+      .nav i {
+        font-style: normal;
+        width: 20px;
+        text-align: center;
+        font-size: 16px;
+      }
+      .main {
+        grid-column: 1;
+        max-width: 1680px;
+        width: 100%;
+        margin: auto;
+        padding: 25px 32px 38px;
+      }
+      .top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 18px;
+      }
+      .eyebrow {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      h1 {
+        font-size: 25px;
+        margin: 1px 0;
+      }
+      .topright {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+      }
+      .profile {
+        padding: 7px 12px;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 30px;
+        font-size: 11px;
+      }
+      .crumb {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .filterbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        margin-bottom: 15px;
+      }
+      .filters {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .filter {
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 8px;
+        padding: 7px 10px;
+        color: var(--ink);
+        font: inherit;
+        font-size: 11px;
+        min-width: 135px;
+      }
+      .filter.month {
+        min-width: 155px;
+      }
+      .filtercaption {
+        font-size: 10px;
+        color: var(--muted);
+        margin-left: 4px;
+      }
+      .sync {
+        font-size: 10px;
+        color: #8794a7;
+      }
+      .box {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 13px;
+        box-shadow: var(--shadow);
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        overflow: hidden;
+        margin-bottom: 14px;
+      }
+      .hero-left {
+        background: linear-gradient(110deg, #f7fbff, #fff);
+        padding: 20px 22px;
+        display: flex;
+        align-items: center;
+        gap: 22px;
+      }
+      .hero-copy {
+        flex: 1;
+      }
+      .tag {
+        font-size: 10px;
+        font-weight: 700;
+        color: var(--green);
+        background: var(--lime);
+        border-radius: 20px;
+        padding: 5px 9px;
+        display: inline-block;
+      }
+      .hero h2 {
+        font-size: 21px;
+        margin: 9px 0 4px;
+      }
+      .hero p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .gauge {
+        width: 105px;
+        height: 105px;
+        border-radius: 50%;
+        background: conic-gradient(var(--green) 0 52.8%, #e8edf2 52.8%);
+        display: grid;
+        place-items: center;
+        flex: none;
+      }
+      .gauge:after {
+        content: "52.8%";
+        width: 79px;
+        height: 79px;
+        border-radius: 50%;
+        background: white;
+        display: grid;
+        place-items: center;
+        font-size: 18px;
+        font-weight: 700;
+      }
+      .hero-stats {
+        padding: 20px;
+        border-right: 1px solid var(--line);
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        align-content: center;
+      }
+      .stat label {
+        font-size: 10px;
+        color: var(--muted);
+        display: block;
+      }
+      .stat b {
+        font-size: 23px;
+      }
+      .stat .positive {
+        color: var(--green);
+      }
+      .mini-note {
+        grid-column: 1/-1;
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .section {
+        margin-top: 17px;
+      }
+      .secthead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 0 0 9px;
+      }
+      .secthead h2 {
+        font-size: 15px;
+        margin: 0;
+      }
+      .secthead small {
+        font-size: 10px;
+        color: var(--muted);
+      }
+      .issues {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 9px;
+      }
+      .issue {
+        padding: 12px 14px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 4px 10px;
+        min-height: 72px;
+      }
+      .issue .title {
+        font-size: 11px;
+        font-weight:bold;
+        color: var(--muted);
+      }
+      .issue strong {
+        font-size: 21px;
+        grid-row: span 2;
+      }
+      .issue a {
+        font-size: 10px;
+        text-decoration: none;
+        color: var(--navy);
+        font-weight: 600;
+      }
+      .issue.hot strong {
+        color: var(--red);
+      }
+      .issue.attn strong {
+        color: var(--amber);
+      }
+      .svcwrap {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 9px;
+      }
+      .svc {
+        padding: 14px 15px;
+      }
+      .svctop {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 5px;
+      }
+      .svctop h3 {
+        font-size: 12px;
+        margin: 0;
+      }
+      .pill {
+        white-space: nowrap;
+        font-size: 9px;
+        padding: 4px 8px;
+        border-radius: 20px;
+        color: var(--green);
+        background: var(--lime);
+      }
+      .pill.warn {
+        color: var(--amber);
+        background: #fff2dc;
+      }
+      .pill.bad {
+        color: var(--red);
+        background: var(--pink);
+      }
+      .svcdata {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        margin: 12px 0 5px;
+      }
+      .pct {
+        font-weight: 700;
+        font-size: 23px;
+      }
+      .target {
+        font-size: 9px;
+        color: var(--muted);
+      }
+      .compare {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .track {
+        height: 6px;
+        background: #edf1f5;
+        border-radius: 8px;
+        position: relative;
+        flex: 1;
+      }
+      .track em {
+        height: 100%;
+        display: block;
+        border-radius: 8px;
+        background: var(--green);
+      }
+      .track i {
+        position: absolute;
+        top: -3px;
+        height: 12px;
+        width: 2px;
+        background: var(--navy);
+      }
+      .compare small {
+        font-size: 9px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .twocol {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 10px;
+      }
+      .panel {
+        padding: 15px 17px;
+      }
+      .paneltitle {
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+      }
+      .paneltitle h2 {
+        font-size: 14px;
+        margin: 0;
+      }
+      .paneltitle small {
+        font-size: 10px;
+        color: var(--muted);
+      }
+      .people {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px 18px;
+        margin-top: 12px;
+      }
+      .person {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 3px 8px;
+        align-items: center;
+      }
+      .person b {
+        font-size: 10px;
+      }
+      .person span {
+        font-size: 9px;
+        color: var(--muted);
+      }
+      .person .track {
+        grid-column: 1/-1;
+        height: 5px;
+      }
+      .labor {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 7px;
+        margin: 11px 0;
+      }
+      .labstat {
+        padding: 9px;
+        background: #f7f9fb;
+        border-radius: 8px;
+      }
+      .labstat span {
+        display: block;
+        color: var(--muted);
+        font-size: 9px;
+      }
+      .labstat b {
+        font-size: 17px;
+      }
+      .labstat.red b {
+        color: var(--red);
+      }
+      .shortrows {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0 14px;
+      }
+      .shortrow {
+        display: flex;
+        justify-content: space-between;
+        padding: 7px 0;
+        border-bottom: 1px solid #eef1f4;
+        font-size: 10px;
+      }
+      .shortrow span {
+        color: var(--muted);
+      }
+      .lower {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 10px;
+        margin-top: 10px;
+      }
+      .schools,
+      .contract,
+      .activity {
+        padding: 15px 17px;
+      }
+      .schools h2,
+      .contract h2,
+      .activity h2 {
+        font-size: 14px;
+        margin: 0;
+      }
+      .schoollist {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 3px 14px;
+        margin-top: 8px;
+      }
+      .school {
+        display: flex;
+        justify-content: space-between;
+        padding: 5px 0;
+        border-bottom: 1px solid #eff2f5;
+        font-size: 10px;
+      }
+      .school b {
+        color: var(--red);
+      }
+      .contractbody {
+        display: grid;
+        grid-template-columns: 1fr 90px;
+        gap: 10px;
+        align-items: center;
+        margin-top: 10px;
+      }
+      .contractnums {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        text-align: center;
+      }
+      .contractnums span {
+        font-size: 9px;
+        color: var(--muted);
+      }
+      .contractnums b {
+        display: block;
+        font-size: 17px;
+      }
+      .donut {
+        width: 76px;
+        height: 76px;
+        border-radius: 50%;
+        background: conic-gradient(var(--green) 0 96.9%, #e9eef3 96.9%);
+        display: grid;
+        place-items: center;
+      }
+      .donut:after {
+        content: "96.9%";
+        background: #fff;
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .activity {
+        margin-top: 10px;
+      }
+      .activitylist {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 10px;
+        margin-top: 10px;
+      }
+      .event {
+        border-right: 2px solid #dce7f2;
+        padding: 2px 8px;
+      }
+      .event p {
+        font-size: 11px;
+        margin: 0 0 4px;
+      }
+      .event time {
+        font-size: 10px;
+        color: var(--muted);
+      }
+      .foot {
+        text-align: center;
+        color: #9ba7b7;
+        font-size: 9px;
+        margin-top: 18px;
+      }
+      @media (max-width: 1050px) {
+        .main {
+          padding: 20px;
+        }
+        .issues {
+          grid-template-columns: repeat(3, 1fr);
+        }
+        .twocol {
+          grid-template-columns: 1fr;
+        }
+        .lower {
+          grid-template-columns: 1fr;
+        }
+        .activitylist {
+          grid-template-columns: repeat(3, 1fr);
+        }
+      }
+      @media (max-width: 700px) {
+        .shell {
+          display: block;
+        }
+        .side {
+          position: static;
+          height: auto;
+          padding: 11px 13px;
+          border: 0;
+          border-bottom: 1px solid var(--line);
+        }
+        .logo {
+          padding: 0 3px 9px;
+        }
+        .nav {
+          display: flex;
+          overflow: auto;
+        }
+        .nav a {
+          white-space: nowrap;
+          padding: 7px 9px;
+        }
+        .nav a:not(.on) {
+          display: none;
+        }
+        .nav small {
+          display: none;
+        }
+        .main {
+          padding: 14px 12px 26px;
+        }
+        .top {
+          margin-bottom: 12px;
+        }
+        h1 {
+          font-size: 21px;
+        }
+        .filterbar {
+          display: block;
+          padding: 10px;
+          margin-bottom: 11px;
+        }
+        .filters {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+        }
+        .filter {
+          min-width: 0;
+          width: 100%;
+        }
+        .sync {
+          margin-top: 8px;
+        }
+        .hero {
+          grid-template-columns: 1fr;
+        }
+        .hero-left {
+          padding: 15px;
+          gap: 12px;
+        }
+        .hero h2 {
+          font-size: 17px;
+        }
+        .gauge {
+          width: 82px;
+          height: 82px;
+        }
+        .gauge:after {
+          width: 62px;
+          height: 62px;
+          font-size: 14px;
+        }
+        .hero-stats {
+          border-right: 0;
+          border-top: 1px solid var(--line);
+          padding: 12px 16px;
+        }
+        .stat b {
+          font-size: 20px;
+        }
+        .issues {
+          grid-template-columns: 1fr 1fr;
+          gap: 7px;
+        }
+        .issue {
+          padding: 9px 10px;
+          min-height: 65px;
+        }
+        .issue strong {
+          font-size: 19px;
+        }
+        .svcwrap {
+          grid-template-columns: 1fr 1fr;
+          gap: 7px;
+        }
+        .svc {
+          padding: 11px;
+        }
+        .svctop {
+          display: block;
+        }
+        .svctop h3 {
+          margin-bottom: 5px;
+        }
+        .pct {
+          font-size: 21px;
+        }
+        .target {
+          font-size: 8px;
+        }
+        .twocol {
+          gap: 8px;
+        }
+        .people {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+        .shortrows {
+          grid-template-columns: 1fr;
+        }
+        .lower {
+          gap: 8px;
+        }
+        .contractbody {
+          grid-template-columns: 1fr 75px;
+        }
+        .contractnums span {
+          font-size: 8px;
+        }
+        .contractnums b {
+          font-size: 15px;
+        }
+        .donut {
+          width: 68px;
+          height: 68px;
+        }
+        .donut:after {
+          width: 54px;
+          height: 54px;
+        }
+        .activitylist {
+          grid-template-columns: 1fr 1fr;
+        }
+        .event:last-child {
+          display: none;
+        }
+        .secthead {
+          margin-top: 14px;
+        }
+        .secthead h2 {
+          font-size: 14px;
+        }
+      }
+      h1 {
+        font-size: 22px;
+      }
+      .hero h2 {
+        font-size: 19px;
+      }
+      .secthead h2 {
+        font-size: 14px;
+      }
+      .svctop h3 {
+        font-size: 11px;
+      }
+      .pct {
+        font-size: 21px;
+      }
+      .stat b {
+        font-size: 21px;
+      }
+      .issue strong {
+        font-size: 19px;
+      }
+      .nav a {
+        font-size: 12px;
+      }
+      .filter {
+        font-size: 10px;
+      }
+      .crumb,
+      .eyebrow,
+      .sync {
+        font-size: 10px;
+      }
+      .paneltitle h2,
+      .schools h2,
+      .contract h2,
+      .activity h2 {
+        font-size: 13px;
+      }
+      .person b,
+      .person span,
+      .shortrow,
+      .school {
+        font-size: 11px;
+      }
+      .event p,
+      .event time {
+        font-size: 10px;
+      }
+      @media (max-width: 700px) {
+        h1 {
+          font-size: 19px;
+        }
+        .hero h2 {
+          font-size: 16px;
+        }
+        .secthead h2 {
+          font-size: 13px;
+        }
+        .pct {
+          font-size: 19px;
+        }
+        .stat b {
+          font-size: 19px;
+        }
+        .issue strong {
+          font-size: 18px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <main class="main">
+        <header class="top">
+          <div>
+            <div class="eyebrow">شركة شلفا لإدارة المرافق</div>
+            <h1>لوحة التحكم</h1>
+          </div>
+          <div class="topright">
+            <span class="crumb">آخر مزامنة: 15/11/2026 · 07:24</span
+            ><span class="profile">مدير النظام　⌄</span>
+          </div>
+        </header>
+        <section class="filterbar box">
+          <div class="filters">
+            <span class="filtercaption">الفترة والفلاتر</span
+            ><select class="filter month">
+              <option>نوفمبر 2026</option></select
+            ><select class="filter">
+              <option>كل المشرفين</option></select
+            ><select class="filter">
+              <option>كل الخدمات</option></select
+            ><button class="filter">إعادة ضبط</button>
+          </div>
+        </section>
+        <section class="hero box">
+          <div class="hero-left">
+            <div class="hero-copy">
+              <span class="tag">متقدمون على الخطة</span>
+              <h2>إنجاز الشهر يسير أفضل من المتوقع</h2>
+              <p>تم تنفيذ 319 زيارة من أصل 602 زيارة مخططة حتى اليوم.</p>
+            </div>
+            <div class="gauge"></div>
+          </div>
+          <div class="hero-stats">
+            <div class="stat">
+              <label>المنجز حتى اليوم</label><b class="positive">319</b>
+            </div>
+            <div class="stat"><label>المتوقع حتى اليوم</label><b>311</b></div>
+            <div class="mini-note">
+              الفارق عن المستهدف:
+              <b style="color: var(--green)">+8 زيارات</b>　·　11 من 22 يوم عمل
+            </div>
+          </div>
+        </section>
+        <section class="section">
+          <div class="secthead">
+            <h2>متابعة اليوم</h2>
+            <small>الإجراءات التي تحتاج انتباهك</small>
+          </div>
+          <div class="issues">
+            <article class="issue box hot">
+              <span class="title">زيارات فات موعدها</span><strong>8</strong
+              ><a href="#">مراجعة الزيارات ←</a>
+            </article>
+            <article class="issue box attn">
+              <span class="title">زيارات دون تقرير</span><strong>69</strong
+              ><a href="#">استكمال التقارير ←</a>
+            </article>
+            <article class="issue box attn">
+              <span class="title">عجز عمال النظافة</span><strong>16</strong
+              ><a href="#">معالجة العجز ←</a>
+            </article>
+            <article class="issue box">
+              <span class="title">مخرجات خلال 14 يومًا</span><strong>0</strong
+              ><a href="#">عرض المخرجات ←</a>
+            </article>
+            <article class="issue box hot">
+              <span class="title">بطاقات تأمين غير معتمدة</span
+              ><strong>1</strong><a href="#">اعتماد البطاقة ←</a>
+            </article>
+          </div>
+        </section>
+        <section class="section">
+          <div class="secthead">
+            <h2>أداء الخدمات</h2>
+            <small>المنجز مقارنة بمستهدف الشهر</small>
+          </div>
+          <div class="svcwrap">
+            <article class="svc box">
+              <div class="svctop">
+                <h3>الصيانة والتكييف</h3>
+                <span class="pill warn">متأخر 11 زيارة</span>
+              </div>
+              <div class="svcdata">
+                <b class="pct">49.5%</b
+                ><span class="target">المستهدف 55.5%</span>
+              </div>
+              <div class="compare">
+                <div class="track">
+                  <em style="width: 49.5%"></em><i style="right: 55.5%"></i>
+                </div>
+                <small>90 / 182</small>
+              </div>
+            </article>
+            <article class="svc box">
+              <div class="svctop">
+                <h3>النظافة</h3>
+                <span class="pill">على المسار</span>
+              </div>
+              <div class="svcdata">
+                <b class="pct">58.8%</b
+                ><span class="target">المستهدف 39.8%</span>
+              </div>
+              <div class="compare">
+                <div class="track">
+                  <em style="width: 58.8%"></em><i style="right: 39.8%"></i>
+                </div>
+                <small>107 / 182</small>
+              </div>
+            </article>
+            <article class="svc box">
+              <div class="svctop">
+                <h3>الأمن والسلامة</h3>
+                <span class="pill">على المسار</span>
+              </div>
+              <div class="svcdata">
+                <b class="pct">65.4%</b><span class="target">المستهدف 50%</span>
+              </div>
+              <div class="compare">
+                <div class="track">
+                  <em style="width: 65.4%"></em><i style="right: 50%"></i>
+                </div>
+                <small>119 / 182</small>
+              </div>
+            </article>
+            <article class="svc box">
+              <div class="svctop">
+                <h3>المصاعد</h3>
+                <span class="pill bad">متأخر 25 زيارة</span>
+              </div>
+              <div class="svcdata">
+                <b class="pct">5.4%</b><span class="target">المستهدف 50%</span>
+              </div>
+              <div class="compare">
+                <div class="track">
+                  <em style="width: 5.4%; background: var(--red)"></em
+                  ><i style="right: 50%"></i>
+                </div>
+                <small>3 / 56</small>
+              </div>
+            </article>
+          </div>
+        </section>
+        <section class="section twocol">
+          <article class="panel box">
+            <div class="paneltitle">
+              <div>
+                <h2>التزام مشرفي الصيانة</h2>
+                <small>الأعلى والأقل إنجازًا حتى اليوم</small>
+              </div>
+              <a href="#" class="crumb">عرض الجميع ←</a>
+            </div>
+            <div class="people">
+              <div class="person">
+                <b>محمود طالع</b><span>10 من 11 · 91%</span>
+                <div class="track"><em style="width: 91%"></em></div>
+              </div>
+              <div class="person">
+                <b>محمد سيف</b><span>9 من 10 · 90%</span>
+                <div class="track"><em style="width: 90%"></em></div>
+              </div>
+              <div class="person">
+                <b>نزار الأمير</b><span>9 من 10 · 90%</span>
+                <div class="track"><em style="width: 90%"></em></div>
+              </div>
+              <div class="person">
+                <b>هاني عراقي</b><span>8 من 10 · 80%</span>
+                <div class="track"><em style="width: 80%"></em></div>
+              </div>
+              <div class="person">
+                <b>محمود مرشد</b><span>6 من 9 · 67%</span>
+                <div class="track">
+                  <em style="width: 67%; background: var(--orange)"></em>
+                </div>
+              </div>
+              <div class="person">
+                <b>عِماد الدحش</b><span>7 من 11 · 64%</span>
+                <div class="track">
+                  <em style="width: 64%; background: var(--orange)"></em>
+                </div>
+              </div>
+            </div>
+          </article>
+          <article class="panel box">
+            <div class="paneltitle">
+              <div>
+                <h2>تغطية القوى العاملة</h2>
+                <small>التوزيع الحالي والاحتياج</small>
+              </div>
+              <a href="#" class="crumb">التفاصيل ←</a>
+            </div>
+            <div class="labor">
+              <div class="labstat"><span>المطلوب</span><b>564</b></div>
+              <div class="labstat"><span>المسند</span><b>527</b></div>
+              <div class="labstat red"><span>العجز</span><b>37</b></div>
+            </div>
+            <div class="shortrows">
+              <div class="shortrow">
+                <b>عمال النظافة</b><span>345 / 382</span>
+              </div>
+              <div class="shortrow"><b>البوابون</b><span>182 / 182</span></div>
+            </div>
+            <div
+              style="
+                height: 6px;
+                background: #edf1f5;
+                border-radius: 8px;
+                margin-top: 12px;
+              "
+            >
+              <div
+                style="
+                  height: 100%;
+                  width: 93.4%;
+                  background: var(--green);
+                  border-radius: 8px;
+                "
+              ></div>
+            </div>
+          </article>
+        </section>
+        <section class="section lower">
+          <article class="schools box">
+            <div class="paneltitle">
+              <div>
+                <h2>المدارس التي تحتاج دعمًا</h2>
+                <small>12 مدرسة لديها عجز · إجمالي النقص 37</small>
+              </div>
+              <a href="#" class="crumb">كل المدارس ←</a>
+            </div>
+            <div class="schoollist">
+              <div class="school">
+                <span>ابتدائية سلمان الفارسي</span><b>عجز 3</b>
+              </div>
+              <div class="school">
+                <span>ابتدائية عوف بن مالك</span><b>عجز 2</b>
+              </div>
+              <div class="school">
+                <span>ثانوية الأمير فيصل</span><b>عجز 2</b>
+              </div>
+              <div class="school">
+                <span>ابتدائية الوليد بن عمار</span><b>عجز 1</b>
+              </div>
+            </div>
+          </article>
+          <article class="contract box">
+            <div class="paneltitle">
+              <div>
+                <h2>العقود والمخرجات</h2>
+                <small>نظرة سريعة على الشهر التعاقدي 5</small>
+              </div>
+              <a href="#" class="crumb">التفاصيل ←</a>
+            </div>
+            <div class="contractbody">
+              <div>
+                <div class="contractnums">
+                  <div><span>معتمد</span><b>22</b></div>
+                  <div><span>بانتظار</span><b>0</b></div>
+                  <div><span>غير مستلم</span><b>6</b></div>
+                  <div><span>متأخر</span><b>0</b></div>
+                </div>
+                <p class="crumb" style="margin: 12px 0 0">
+                  تقييم الشهر: <b style="color: var(--green)">ممتاز</b> ·
+                  استحقاق الفاتورة 100%
+                </p>
+              </div>
+              <div class="donut"></div>
+            </div>
+          </article>
+        </section>
+        <section class="activity box">
+          <div class="paneltitle">
+            <div>
+              <h2>آخر النشاطات</h2>
+              <small>أحدث التحديثات على الخطط والتقارير</small>
+            </div>
+            <a href="#" class="crumb">سجل النشاط ←</a>
+          </div>
+          <div class="activitylist">
+            <div class="event">
+              <p>تحديث جماعي للخطة · 12 زيارة و12 تقريرًا</p>
+              <time>14 نوفمبر · 19:12</time>
+            </div>
+            <div class="event">
+              <p>تحديث جماعي للخطة · 15 زيارة و15 تقريرًا</p>
+              <time>14 نوفمبر · 14:53</time>
+            </div>
+            <div class="event">
+              <p>تحديث جماعي للخطة · 9 زيارات و9 تقارير</p>
+              <time>14 نوفمبر · 10:50</time>
+            </div>
+            <div class="event">
+              <p>تحديث جماعي للخطة · 7 زيارات و7 تقارير</p>
+              <time>14 نوفمبر · 09:19</time>
+            </div>
+            <div class="event">
+              <p>تحديث جماعي للخطة · زيارة وتقرير</p>
+              <time>12 نوفمبر · 12:05</time>
+            </div>
+          </div>
+        </section>
+        <footer class="foot">منصة إدارة مشروع إدارة المرافق المدرسية</footer>
+      </main>
+    </div>
+  </body>
+</html>

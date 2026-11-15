@@ -10,6 +10,8 @@ import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { analyzeResidenceNumbers, employeeCategorySchema, type ResidenceEmployee } from '../../domain/workforce';
+import { paginateRows, TABLE_PAGE_SIZE } from '../../lib/pagination';
+import { TablePagination } from '../../components/TablePagination';
 
 const employeeSchema = z.object({
   id: z.string().uuid(),
@@ -192,6 +194,9 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
   const queryClient = useQueryClient();
   const { formatNumber } = useDisplayFormat();
   const [search, setSearch] = useState('');
+  const [employeePage, setEmployeePage] = useState(1);
+  const [issuesPage, setIssuesPage] = useState(1);
+  const [sharedPage, setSharedPage] = useState(1);
   const [revealedIds, setRevealedIds] = useState<Record<string, string>>({});
   const [message, setMessage] = useState('');
   const isPrivileged = profile?.role === 'admin' || profile?.role === 'project_manager';
@@ -213,6 +218,11 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
       `${employee.full_name} ${employee.employee_number ?? ''} ${employee.job_title ?? ''} ${employee.department ?? ''}`.toLocaleLowerCase().includes(query),
     );
   }, [employees.data, search]);
+  const pagedEmployees = paginateRows(visibleEmployees, employeePage);
+  const residenceIssues = residenceQuality.data?.issues ?? [];
+  const sharedResidenceRecords = residenceQuality.data?.shared ?? [];
+  const pagedResidenceIssues = paginateRows(residenceIssues, issuesPage);
+  const pagedSharedResidenceRecords = paginateRows(sharedResidenceRecords, sharedPage);
 
   async function saveEmployee(values: EmployeeInput) {
     setMessage('');
@@ -425,26 +435,48 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
           </div>
           {residenceQuality.data.issues.length > 0 && <div>
             <h4 className="mb-2 text-sm font-bold text-amber-900">أرقام تحتاج مراجعة</h4>
-            <div className="table-scroll workforce-table-scroll"><table className="workforce-table workforce-quality-table">
-              <thead><tr><th>التنبيه</th><th>الموظف</th><th>الرقم الوظيفي</th><th>رقم الإقامة/الوثيقة</th><th>المدارس</th></tr></thead>
-              <tbody>{residenceQuality.data.issues.map((employee) => <tr key={employee.id}>
-                <td>{employee.issue === 'missing' ? 'غير مسجل' : employee.issue === 'passport-like' ? 'شبيه بجواز سفر' : 'ليس 10 خانات'}</td>
-                <td>{employee.fullName}</td>
-                <td>{employee.employeeNumber ?? '—'}</td>
-                <td dir="ltr" className="font-mono">{employee.residenceNumber ?? '—'}</td>
-                <td>{employee.schools.map(({ name }) => name).join('، ') || '—'}</td>
-              </tr>)}</tbody>
-            </table></div>
+            <div className="grid gap-3">
+              <div className="table-scroll workforce-table-scroll" role="region" aria-label="جدول أرقام الإقامة والوثائق التي تحتاج مراجعة" tabIndex={0}><table className="workforce-table workforce-quality-table">
+                <thead><tr><th scope="col">التنبيه</th><th scope="col">الموظف</th><th scope="col">الرقم الوظيفي</th><th scope="col">رقم الإقامة/الوثيقة</th><th scope="col">المدارس</th></tr></thead>
+                <tbody>{pagedResidenceIssues.rows.map((employee) => <tr key={employee.id}>
+                  <td data-label="التنبيه">{employee.issue === 'missing' ? 'غير مسجل' : employee.issue === 'passport-like' ? 'شبيه بجواز سفر' : 'ليس 10 خانات'}</td>
+                  <td data-label="الموظف">{employee.fullName}</td>
+                  <td data-label="الرقم الوظيفي">{employee.employeeNumber ?? '—'}</td>
+                  <td data-label="رقم الإقامة/الوثيقة"><span dir="ltr" className="font-mono">{employee.residenceNumber ?? '—'}</span></td>
+                  <td data-label="المدارس">{employee.schools.map(({ name }) => name).join('، ') || '—'}</td>
+                </tr>)}</tbody>
+              </table></div>
+              <TablePagination
+                label="جدول أرقام الإقامة التي تحتاج مراجعة"
+                totalRows={residenceIssues.length}
+                pageSize={TABLE_PAGE_SIZE}
+                currentPage={pagedResidenceIssues.currentPage}
+                pageCount={pagedResidenceIssues.pageCount}
+                onPageChange={setIssuesPage}
+                formatNumber={formatNumber}
+              />
+            </div>
           </div>}
           {residenceQuality.data.shared.length > 0 && <div>
             <h4 className="mb-2 text-sm font-bold text-rose-900">أرقام مستخدمة لموظفين متعددين والمدارس المسندة لهم</h4>
-            <div className="table-scroll workforce-table-scroll"><table className="workforce-table workforce-shared-table">
-              <thead><tr><th>رقم الإقامة/الوثيقة</th><th>الموظفون والمدارس</th></tr></thead>
-              <tbody>{residenceQuality.data.shared.map(({ residenceNumber, employees: matched }) => <tr key={residenceNumber}>
-                <td dir="ltr" className="font-mono">{residenceNumber}</td>
-                <td>{matched.map((employee) => `${employee.fullName} (${employee.schools.map(({ name }) => name).join('، ') || 'دون مدرسة مسندة'})`).join('؛ ')}</td>
-              </tr>)}</tbody>
-            </table></div>
+            <div className="grid gap-3">
+              <div className="table-scroll workforce-table-scroll" role="region" aria-label="جدول أرقام الإقامة المشتركة" tabIndex={0}><table className="workforce-table workforce-shared-table">
+                <thead><tr><th scope="col">رقم الإقامة/الوثيقة</th><th scope="col">الموظفون والمدارس</th></tr></thead>
+                <tbody>{pagedSharedResidenceRecords.rows.map(({ residenceNumber, employees: matched }) => <tr key={residenceNumber}>
+                  <td data-label="رقم الإقامة/الوثيقة"><span dir="ltr" className="font-mono">{residenceNumber}</span></td>
+                  <td data-label="الموظفون والمدارس">{matched.map((employee) => `${employee.fullName} (${employee.schools.map(({ name }) => name).join('، ') || 'دون مدرسة مسندة'})`).join('؛ ')}</td>
+                </tr>)}</tbody>
+              </table></div>
+              <TablePagination
+                label="جدول أرقام الإقامة المشتركة"
+                totalRows={sharedResidenceRecords.length}
+                pageSize={TABLE_PAGE_SIZE}
+                currentPage={pagedSharedResidenceRecords.currentPage}
+                pageCount={pagedSharedResidenceRecords.pageCount}
+                onPageChange={setSharedPage}
+                formatNumber={formatNumber}
+              />
+            </div>
           </div>}
           {!residenceQuality.data.issues.length && !residenceQuality.data.shared.length && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">لا توجد مشكلات في أرقام الإقامة أو الوثائق.</p>}
         </>}
@@ -452,18 +484,38 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
 
       <section className="card min-w-0 overflow-hidden">
         <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between">
-          <label className="relative min-w-0 flex-1"><Search size={17} className="absolute inset-inline-start-3 top-1/2 -translate-y-1/2 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ابحث بالاسم أو الرقم الوظيفي أو الوظيفة" className="w-full min-w-0 rounded-lg border border-slate-300 py-2 pe-3 ps-10 text-sm" /></label>
+          <label className="relative min-w-0 flex-1"><Search size={17} className="absolute inset-inline-start-3 top-1/2 -translate-y-1/2 text-slate-400" /><input value={search} onChange={(event) => { setSearch(event.target.value); setEmployeePage(1); }} placeholder="ابحث بالاسم أو الرقم الوظيفي أو الوظيفة" className="w-full min-w-0 rounded-lg border border-slate-300 py-2 pe-3 ps-10 text-sm" /></label>
           <span className="shrink-0 text-xs text-slate-500 sm:text-sm">عدد الموظفين: {formatNumber(visibleEmployees.length)}</span>
         </div>
         {employees.isLoading ? <p role="status" className="p-8 text-center text-slate-500">جارٍ تحميل السجل…</p> : visibleEmployees.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">لا توجد سجلات مطابقة.</p> : (
-          <div className="table-scroll workforce-table-scroll"><table className="workforce-table workforce-employee-table">
-            <thead><tr><th>الاسم</th><th>الرقم الوظيفي</th><th>الوظيفة</th><th>الفئة الوظيفية</th><th>القسم</th><th>رقم الإقامة</th>{isPrivileged && <th>التقييم</th>}</tr></thead>
-            <tbody>{visibleEmployees.map((employee) => <tr key={employee.id}>
-              <td className="font-semibold">{employee.full_name}</td><td>{employee.employee_number ?? '—'}</td><td>{employee.job_title ?? '—'}</td><td>{employeeCategoryLabels[employee.employee_category] ?? '—'}</td><td>{employee.department ?? '—'}</td>
-              <td><span>{revealedIds[employee.id] ?? '••••••'}</span>{profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role) && <button type="button" onClick={() => void toggleResidence(employee.id)} aria-label={revealedIds[employee.id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="me-2 rounded p-1 text-brand-700">{revealedIds[employee.id] ? <EyeOff size={16} /> : <Eye size={16} />}</button>}</td>
-              {isPrivileged && <td>{ratings.data?.get(employee.id) ?? '—'}</td>}
-            </tr>)}</tbody>
-          </table></div>
+          <div className="grid gap-3 p-3 sm:p-4">
+            <div className="table-scroll workforce-table-scroll" role="region" aria-label="جدول الموظفين" tabIndex={0}><table className="workforce-table workforce-employee-table">
+              <thead><tr><th scope="col">الاسم</th><th scope="col">الرقم الوظيفي</th><th scope="col">الوظيفة</th><th scope="col">الفئة الوظيفية</th><th scope="col">القسم</th><th scope="col">رقم الإقامة</th>{isPrivileged && <th scope="col">التقييم</th>}</tr></thead>
+              <tbody>{pagedEmployees.rows.map((employee) => <tr key={employee.id}>
+                <td data-label="الاسم" className="font-semibold">{employee.full_name}</td>
+                <td data-label="الرقم الوظيفي">{employee.employee_number ?? '—'}</td>
+                <td data-label="الوظيفة">{employee.job_title ?? '—'}</td>
+                <td data-label="الفئة الوظيفية">{employeeCategoryLabels[employee.employee_category] ?? '—'}</td>
+                <td data-label="القسم">{employee.department ?? '—'}</td>
+                <td data-label="رقم الإقامة">
+                  <span className="workforce-identity-value">
+                    <span dir="ltr" className="font-mono">{revealedIds[employee.id] ?? '••••••'}</span>
+                    {profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role) && <button type="button" onClick={() => void toggleResidence(employee.id)} aria-label={revealedIds[employee.id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="rounded p-1 text-brand-700">{revealedIds[employee.id] ? <EyeOff size={16} /> : <Eye size={16} />}</button>}
+                  </span>
+                </td>
+                {isPrivileged && <td data-label="التقييم">{ratings.data?.get(employee.id) ?? '—'}</td>}
+              </tr>)}</tbody>
+            </table></div>
+            <TablePagination
+              label="جدول الموظفين"
+              totalRows={visibleEmployees.length}
+              pageSize={TABLE_PAGE_SIZE}
+              currentPage={pagedEmployees.currentPage}
+              pageCount={pagedEmployees.pageCount}
+              onPageChange={setEmployeePage}
+              formatNumber={formatNumber}
+            />
+          </div>
         )}
       </section>
       {message && !canManage && <p role="status" className="text-sm text-slate-700">{message}</p>}

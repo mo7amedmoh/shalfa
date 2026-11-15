@@ -13,6 +13,8 @@ import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { preferencesContext } from '../../app/preferencesContext';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
 import { Link } from 'react-router-dom';
+import { paginateRows, TABLE_PAGE_SIZE } from '../../lib/pagination';
+import { TablePagination } from '../../components/TablePagination';
 
 const configSchema = z.object({
   buildingTypeHeader: z.string(),
@@ -120,6 +122,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   const preferences = useContext(preferencesContext);
   const [viewMode, setViewMode] = useState(preferences.cleaner_placement_view);
   const [search, setSearch] = useState('');
+  const [tablePage, setTablePage] = useState(1);
   const [newCleaner, setNewCleaner] = useState<Record<string, string>>({});
   const [labourSource, setLabourSource] = useState<Record<string, string>>({});
   const [exceptions, setExceptions] = useState<Record<string, { requiredCleaners: string; reason: string }>>({});
@@ -168,6 +171,8 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
       && `${school.school_name} ${school.ministry_number} ${neighborhood}`.toLocaleLowerCase().includes(query),
     );
   }, [summaries, search, shortageOnly]);
+  useEffect(() => setTablePage(1), [shortageOnly]);
+  const pagedSchools = paginateRows(filtered, tablePage);
 
   const persistAssignment = useMutation({
     mutationFn: async ({ schoolId, employeeId, source }: { schoolId: string; employeeId: string; source: string }) => {
@@ -331,13 +336,14 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
       </section>
       <section className="card grid gap-4 p-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <label className="min-w-60 flex-1 text-sm font-semibold">بحث باسم المدرسة أو الرقم الوزاري أو الحي<input value={search} onChange={(event) => setSearch(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+          <label className="min-w-60 flex-1 text-sm font-semibold">بحث باسم المدرسة أو الرقم الوزاري أو الحي<input value={search} onChange={(event) => { setSearch(event.target.value); setTablePage(1); }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
           <div className="flex flex-wrap gap-2">
             <label className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm">
               <span>طريقة العرض</span>
               <select value={viewMode} disabled={saveViewMode.isPending} onChange={(event) => {
                 const next = event.target.value === 'compact' ? 'compact' : 'editable';
                 setViewMode(next);
+                setTablePage(1);
                 saveViewMode.mutate(next);
               }} className="rounded border border-slate-300 px-2 py-1">
                 <option value="editable">تفصيلي قابل للتعديل</option>
@@ -349,10 +355,14 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
         </div>
         {data.isLoading ? <p role="status">جارٍ تحميل السجلات…</p> : filtered.length === 0 ? <p className="rounded-lg bg-slate-50 p-5 text-center text-sm text-slate-500">لا توجد مدارس مؤهلة أو سجلات مطابقة.</p> : (
           viewMode === 'compact' ? (
-            <div className="table-scroll">
-              <table className="min-w-full text-start text-sm">
-                <thead><tr><th>الرقم الوزاري</th><th>المدرسة</th><th>الحجم</th><th>مطلوب / مسند</th><th>أسماء العمال</th><th>الحالة</th></tr></thead>
-                <tbody>{filtered.map(({ school, staffing }) => {
+            <div className="grid gap-3">
+              <div className="table-scroll cleaner-placement-table-scroll" role="region" aria-label="جدول التسكين المختصر" tabIndex={0}>
+                <table className="cleaner-placement-table cleaner-placement-compact-table">
+                  <thead><tr>
+                    <th scope="col">الرقم الوزاري</th><th scope="col">المدرسة</th><th scope="col">الحجم</th>
+                    <th scope="col">مطلوب / مسند</th><th scope="col">أسماء العمال</th><th scope="col">الحالة</th>
+                  </tr></thead>
+                  <tbody>{pagedSchools.rows.map(({ school, staffing }) => {
                   const assignments = data.data?.assignments.filter((item) => item.school_id === school.id) ?? [];
                   const balance = staffing.requiredCleaners === null
                     ? { label: 'الاحتياج غير محدد', style: 'bg-slate-100 text-slate-700' }
@@ -361,19 +371,29 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
                       : staffing.surplus > 0
                         ? { label: `فائض ${staffing.surplus}`, style: 'bg-amber-50 text-amber-900' }
                         : { label: 'مكتمل', style: 'bg-emerald-50 text-emerald-800' };
-                  return <tr key={school.id} className="border-t border-slate-100">
-                    <td dir="ltr">{school.ministry_number}</td>
-                    <td>{school.school_name}</td>
-                    <td>{sizeLabel(staffing.size)}</td>
-                    <td>{staffing.requiredCleaners ?? '—'} / {staffing.assignedCleaners}</td>
-                    <td className="min-w-56">{assignments.map((item) => item.employee?.full_name ?? item.employee_id).join('، ') || '—'}</td>
-                    <td><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${balance.style}`}>{balance.label}</span></td>
-                  </tr>;
-                })}</tbody>
-              </table>
+                    return <tr key={school.id}>
+                        <td data-label="الرقم الوزاري"><span dir="ltr">{school.ministry_number}</span></td>
+                        <td data-label="المدرسة" className="cleaner-placement-school-name">{school.school_name}</td>
+                        <td data-label="الحجم">{sizeLabel(staffing.size)}</td>
+                        <td data-label="مطلوب / مسند">{formatNumber(staffing.requiredCleaners ?? '—')} / {formatNumber(staffing.assignedCleaners)}</td>
+                        <td data-label="أسماء العمال">{assignments.map((item) => item.employee?.full_name ?? item.employee_id).join('، ') || '—'}</td>
+                        <td data-label="الحالة"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${balance.style}`}>{balance.label}</span></td>
+                    </tr>;
+                  })}</tbody>
+                </table>
+              </div>
+              <TablePagination
+                label="جدول التسكين المختصر"
+                totalRows={filtered.length}
+                pageSize={TABLE_PAGE_SIZE}
+                currentPage={pagedSchools.currentPage}
+                pageCount={pagedSchools.pageCount}
+                onPageChange={setTablePage}
+                formatNumber={formatNumber}
+              />
             </div>
           ) : <div className="grid gap-3">
-            {filtered.map(({ school, staffing, neighborhood, exception, correctedSize }) => <article key={school.id} className="rounded-xl border border-slate-200 p-4">
+            {pagedSchools.rows.map(({ school, staffing, neighborhood, exception, correctedSize }) => <article key={school.id} className="rounded-xl border border-slate-200 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div><h3 className="font-bold">{school.school_name}</h3><p className="mt-1 text-xs text-slate-500">الرقم الوزاري: {school.ministry_number} · الحي: {neighborhood}</p></div>
                 <div className="flex flex-wrap gap-2 text-xs">
@@ -430,11 +450,20 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
                 </div>
               </details>}
             </article>)}
+            <TablePagination
+              label="قائمة المدارس المسندة"
+              totalRows={filtered.length}
+              pageSize={TABLE_PAGE_SIZE}
+              currentPage={pagedSchools.currentPage}
+              pageCount={pagedSchools.pageCount}
+              onPageChange={setTablePage}
+              formatNumber={formatNumber}
+            />
           </div>
         )}
         {message && <p role="status" className="text-sm text-slate-700">{message}</p>}
       </section>
-      <section className="grid gap-4 md:grid-cols-2">
+      <section className="grid items-start gap-4 lg:grid-cols-2">
         <TotalsTable title="الملخص حسب حجم المدرسة" rows={groupedBySize} formatNumber={formatNumber} />
         <TotalsTable title="الملخص حسب الحي" rows={groupedByNeighborhood} formatNumber={formatNumber} />
       </section>
@@ -466,5 +495,23 @@ function Metric({ label, value, formatNumber }: { label: string; value: number; 
 }
 
 function TotalsTable({ title, rows, formatNumber }: { title: string; rows: ReturnType<typeof groupTotal>; formatNumber: (value: string | number) => string }) {
-  return <section className="card p-4"><h3 className="font-bold">{title}</h3><div className="mt-3 table-scroll"><table><thead><tr><th>التصنيف</th><th>المدارس</th><th>مطلوب</th><th>مسند</th><th>عجز</th><th>فائض</th></tr></thead><tbody>{rows.map((row) => <tr key={row.label}><td>{row.label}</td><td>{formatNumber(row.schools)}</td><td>{formatNumber(row.required)}</td><td>{formatNumber(row.assigned)}</td><td>{formatNumber(row.shortage)}</td><td>{formatNumber(row.surplus)}</td></tr>)}</tbody></table></div></section>;
+  return <section className="card grid min-w-0 content-start self-start gap-3 p-4">
+    <h3 className="font-bold">{title}</h3>
+    <div className="cleaner-summary-table-scroll" role="region" aria-label={title}>
+      <table className="cleaner-placement-table cleaner-summary-table">
+        <thead><tr>
+          <th scope="col">التصنيف</th><th scope="col">المدارس</th><th scope="col">مطلوب</th>
+          <th scope="col">مسند</th><th scope="col">عجز</th><th scope="col">فائض</th>
+        </tr></thead>
+        <tbody>{rows.map((row) => <tr key={row.label}>
+          <td data-label="التصنيف">{row.label}</td>
+          <td data-label="المدارس">{formatNumber(row.schools)}</td>
+          <td data-label="مطلوب">{formatNumber(row.required)}</td>
+          <td data-label="مسند">{formatNumber(row.assigned)}</td>
+          <td data-label="عجز">{formatNumber(row.shortage)}</td>
+          <td data-label="فائض">{formatNumber(row.surplus)}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+  </section>;
 }

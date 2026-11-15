@@ -338,7 +338,7 @@ async function loadRecentActivity(month: string): Promise<DashboardActivity[]> {
       const message = formatDashboardActivity(event);
       return message ? [{ id: event.id, at: event.created_at, message }] : [];
     })
-    .slice(0, 5);
+    .slice(0, 15);
 }
 
 export function useDashboardData(profile: UserProfile | null, filters: DashboardFilter) {

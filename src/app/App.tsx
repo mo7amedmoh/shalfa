@@ -206,6 +206,7 @@ function AppShell({
   syncNotice: string;
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const location = useLocation();
@@ -274,10 +275,19 @@ function AppShell({
 
   return (
     <PreferencesProvider value={preferences.data ?? defaultPreferences}>
-    <div className="app-shell">
-      <aside className="sidebar p-4" data-open={sidebarOpen}>
+    <div className="app-shell" data-sidebar-collapsed={sidebarCollapsed}>
+      <aside className="sidebar p-4" data-open={sidebarOpen} data-collapsed={sidebarCollapsed}>
         <div className="mb-7 flex items-center justify-between gap-2 px-2 py-2">
           <img src="/brand/logo.png" alt="شلفا لإدارة المرافق" className="h-10 w-auto max-w-[190px]" />
+          <button
+            type="button"
+            aria-label={sidebarCollapsed ? 'توسيع القائمة' : 'طي القائمة'}
+            title={sidebarCollapsed ? 'توسيع القائمة' : 'طي القائمة'}
+            className="desktop-sidebar-toggle rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          >
+            <Menu size={19} aria-hidden="true" />
+          </button>
           <button aria-label="إغلاق القائمة" className="mobile-menu hidden rounded-lg p-2 text-slate-500" onClick={() => setSidebarOpen(false)}><X size={20} /></button>
         </div>
         <nav aria-label="القائمة الرئيسية" className="grid gap-1">
@@ -286,7 +296,7 @@ function AppShell({
             return (
               <section key={item.label}>
                 {'path' in item ? (
-                  <NavLink to={item.path!} end className="nav-link"><Icon size={19} /><span>{item.label}</span></NavLink>
+                  <NavLink to={item.path!} end className="nav-link" title={item.label}><Icon size={19} /><span>{item.label}</span></NavLink>
                 ) : (
                   <>
                     <button
@@ -294,10 +304,18 @@ function AppShell({
                       className="nav-link w-full text-start"
                       aria-expanded={Boolean(expandedGroups[item.label])}
                       aria-controls={`nav-group-${visibleNavigation.indexOf(item)}`}
-                      onClick={() => setExpandedGroups((current) => ({
-                        ...current,
-                        [item.label]: !current[item.label],
-                      }))}
+                      title={item.label}
+                      onClick={() => {
+                        if (sidebarCollapsed) {
+                          setSidebarCollapsed(false);
+                          setExpandedGroups((current) => ({ ...current, [item.label]: true }));
+                        } else {
+                          setExpandedGroups((current) => ({
+                            ...current,
+                            [item.label]: !current[item.label],
+                          }));
+                        }
+                      }}
                     >
                       <Icon size={19} />
                       <span className="font-semibold">{item.label}</span>
@@ -305,7 +323,7 @@ function AppShell({
                     </button>
                     {expandedGroups[item.label] && <div id={`nav-group-${visibleNavigation.indexOf(item)}`} className="me-4 grid border-e border-slate-200 pe-2">
                       {item.children?.map(([label, path]) => (
-                        <NavLink key={path} to={path} className="nav-link min-h-9 text-sm" aria-current={location.pathname === path ? 'page' : undefined}>{label}</NavLink>
+                        <NavLink key={path} to={path} title={label} className="nav-link min-h-9 text-sm" aria-current={location.pathname === path ? 'page' : undefined}>{label}</NavLink>
                       ))}
                     </div>}
                   </>
@@ -315,7 +333,7 @@ function AppShell({
           })}
           {isAdmin || canCreateCustom ? <div className="mt-3 border-t border-slate-100 pt-3">
             {canManagePlanNames && adminNavigation.filter((item) => item.path !== '/admin/audit' || isAdmin).map(({ label, path, icon: Icon }) => (
-              <NavLink key={path} to={path} className="nav-link"><Icon size={19} /><span>{label}</span></NavLink>
+              <NavLink key={path} to={path} title={label} className="nav-link"><Icon size={19} /><span>{label}</span></NavLink>
             ))}
             {canCreateCustom && <NavLink to="/settings/plans" className="nav-link"><Settings2 size={19} /><span>إدارة الخطط</span></NavLink>}
           </div> : null}

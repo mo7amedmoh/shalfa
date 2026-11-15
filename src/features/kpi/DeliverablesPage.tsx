@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { Download, ExternalLink, Paperclip, Upload, X } from 'lucide-react';
+import { Download, ExternalLink, Paperclip, SlidersHorizontal, Upload, X } from 'lucide-react';
 import { loadXlsx } from '../../lib/xlsx';
 import { z } from 'zod';
 import { isDeliverableDueWithinDays, isDeliverableLate, resolveDeliverableDueDate, summarizeDeliverables, type DeliverableDueDates, type DeliverableStatus } from '../../domain/deliverables';
@@ -78,6 +78,22 @@ const statusNames: Record<DeliverableStatus, string> = {
   delivered_pending: 'مُسلَّم بانتظار الاعتماد',
   approved: 'معتمد',
 };
+const deliverableColumns = [
+  { key: 'seq', label: '#', width: 40, required: true },
+  { key: 'clause', label: 'الفقرة', width: 70, required: false },
+  { key: 'title', label: 'عنوان المخرج', width: 200, required: true },
+  { key: 'due_basis', label: 'أساس الاستحقاق', width: 140, required: false },
+  { key: 'duration', label: 'المدة', width: 90, required: false },
+  { key: 'review_cycle', label: 'دورية المراجعة', width: 150, required: false },
+  { key: 'due_date', label: 'تاريخ الاستحقاق', width: 180, required: false },
+  { key: 'status', label: 'الحالة', width: 120, required: false },
+  { key: 'delivered_on', label: 'تاريخ التسليم', width: 115, required: false },
+  { key: 'approved_on', label: 'تاريخ الاعتماد', width: 115, required: false },
+  { key: 'notes', label: 'ملاحظات', width: 170, required: false },
+  { key: 'attachments', label: 'المرفقات', width: 80, required: false },
+  { key: 'action', label: 'إجراء', width: 80, required: true },
+] as const;
+type DeliverableColumnKey = (typeof deliverableColumns)[number]['key'];
 
 function today(): string {
   const date = new Date();
@@ -139,6 +155,13 @@ export function DeliverablesPage({ profile }: { profile: UserProfile | null }) {
   const [searchParams] = useSearchParams();
   const dueSoonOnly = searchParams.get('filter') === 'due-soon';
   const [filters, setFilters] = useState<Filters>({ status: 'all', lateness: 'all' });
+  const [visibleColumns, setVisibleColumns] = useState<Set<DeliverableColumnKey>>(
+    () => new Set(deliverableColumns.map(({ key }) => key)),
+  );
+  const [columnMenuOpen, setColumnMenuOpen] = useState(false);
+  const [columnMenuPosition, setColumnMenuPosition] = useState({ top: 12, left: 12, width: 256, maxHeight: 320 });
+  const columnMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const columnMenuRef = useRef<HTMLDivElement>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [message, setMessage] = useState('');
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
@@ -163,6 +186,54 @@ export function DeliverablesPage({ profile }: { profile: UserProfile | null }) {
     if (filters.lateness !== 'all' && (filters.lateness === 'late' ? !late : late)) return false;
     return !dueSoonOnly || isDeliverableDueWithinDays(toDueRecord(item), dates, asOf, 14);
   }), [items, dates, asOf, filters, dueSoonOnly]);
+  const selectedColumns = deliverableColumns.filter(({ key }) => visibleColumns.has(key));
+  const tableMinWidth = selectedColumns.reduce((width, column) => width + column.width, 0);
+
+  useEffect(() => {
+    if (!columnMenuOpen) return;
+
+    const positionMenu = () => {
+      const button = columnMenuButtonRef.current;
+      const menu = columnMenuRef.current;
+      if (!button || !menu) return;
+
+      const margin = 12;
+      const viewportWidth = document.documentElement.clientWidth;
+      const viewportHeight = window.innerHeight;
+      const width = Math.min(256, viewportWidth - margin * 2);
+      const maxHeight = Math.min(320, viewportHeight - margin * 2);
+      const buttonRect = button.getBoundingClientRect();
+      const menuHeight = Math.min(menu.scrollHeight, maxHeight);
+      const left = Math.max(margin, Math.min(buttonRect.right - width, viewportWidth - width - margin));
+      const spaceBelow = viewportHeight - buttonRect.bottom - margin;
+      const top = spaceBelow >= menuHeight + 8
+        ? buttonRect.bottom + 8
+        : Math.max(margin, buttonRect.top - menuHeight - 8);
+
+      setColumnMenuPosition({ top, left, width, maxHeight });
+    };
+
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return;
+      if (columnMenuButtonRef.current?.contains(event.target) || columnMenuRef.current?.contains(event.target)) return;
+      setColumnMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setColumnMenuOpen(false);
+    };
+
+    positionMenu();
+    window.addEventListener('resize', positionMenu);
+    window.addEventListener('scroll', positionMenu, true);
+    document.addEventListener('pointerdown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('resize', positionMenu);
+      window.removeEventListener('scroll', positionMenu, true);
+      document.removeEventListener('pointerdown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [columnMenuOpen]);
 
   const save = useMutation({
     mutationFn: async (draft: EditorState) => {
@@ -331,34 +402,99 @@ export function DeliverablesPage({ profile }: { profile: UserProfile | null }) {
         </section>
 
         <section className="card grid gap-3 p-4">
-          <div className="flex flex-wrap justify-between gap-2"><h3 className="font-bold">سجل المخرجات ({formatNumber(visibleItems.length)})</h3><span className="text-xs text-slate-500">تاريخ احتساب التأخير: {formatDate(asOf)}</span></div>
-          <div className="table-scroll">
-            <table className="min-w-[1550px]">
-              <thead><tr>
-                <th scope="col">#</th><th scope="col">الفقرة</th><th scope="col">عنوان المخرج</th><th scope="col">أساس الاستحقاق</th><th scope="col">المدة</th>
-                <th scope="col">دورية المراجعة</th><th scope="col">تاريخ الاستحقاق</th><th scope="col">الحالة</th><th scope="col">تاريخ التسليم</th>
-                <th scope="col">تاريخ الاعتماد</th><th scope="col">ملاحظات</th><th scope="col">المرفقات</th><th scope="col">إجراء</th>
-              </tr></thead>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="font-bold">سجل المخرجات ({formatNumber(visibleItems.length)})</h3>
+              <span className="text-xs text-slate-500">تاريخ احتساب التأخير: {formatDate(asOf)}</span>
+            </div>
+            <div>
+              <button
+                ref={columnMenuButtonRef}
+                type="button"
+                aria-expanded={columnMenuOpen}
+                aria-controls="deliverables-column-menu"
+                onClick={() => setColumnMenuOpen((open) => !open)}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700"
+              >
+                <SlidersHorizontal size={16} aria-hidden="true" />
+                الأعمدة
+              </button>
+              {columnMenuOpen && (
+                <div
+                  id="deliverables-column-menu"
+                  ref={columnMenuRef}
+                  role="dialog"
+                  aria-label="اختيار الأعمدة الظاهرة"
+                  className="deliverables-column-menu z-50 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-xl"
+                  style={{ ...columnMenuPosition, position: 'fixed' }}
+                >
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-xs text-slate-500">الأعمدة الأساسية ظاهرة دائمًا</span>
+                  <button
+                    type="button"
+                    onClick={() => setVisibleColumns(new Set(deliverableColumns.map(({ key }) => key)))}
+                    className="text-xs font-semibold text-blue-800 underline"
+                  >
+                    إظهار الكل
+                  </button>
+                </div>
+                {deliverableColumns.map((column) => (
+                  <label key={column.key} className="flex items-center gap-2 border-b border-slate-100 py-1.5 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={visibleColumns.has(column.key)}
+                      disabled={column.required}
+                      onChange={(event) => setVisibleColumns((current) => {
+                        const next = new Set(current);
+                        if (event.target.checked) next.add(column.key);
+                        else next.delete(column.key);
+                        return next;
+                      })}
+                    />
+                    <span>{column.label}</span>
+                    {column.required && <span className="ms-auto text-[10px] text-slate-400">أساسي</span>}
+                  </label>
+                ))}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="table-scroll deliverables-table-scroll" role="region" aria-label="سجل المخرجات التعاقدية" tabIndex={0}>
+            <table className="deliverables-table" style={{ minWidth: `${tableMinWidth}px` }}>
+              <colgroup>
+                {selectedColumns.map((column) => <col key={column.key} style={{ width: `${column.width}px` }} />)}
+              </colgroup>
+              <thead>
+                <tr>{selectedColumns.map((column) => <th key={column.key} scope="col">{column.label}</th>)}</tr>
+              </thead>
               <tbody>{visibleItems.map((item) => {
                 const due = resolveDeliverableDueDate(toDueRecord(item), dates);
                 const late = isDeliverableLate(toDueRecord(item), dates, asOf);
                 const attachments = attachmentsByDeliverable.get(item.id) ?? [];
+                const cells: Record<DeliverableColumnKey, ReactNode> = {
+                  seq: <td key="seq">{formatNumber(item.seq)}</td>,
+                  clause: <td key="clause">{item.clause ?? '—'}</td>,
+                  title: <th key="title" scope="row" className="text-start font-semibold text-slate-800">{item.title}</th>,
+                  due_basis: <td key="due_basis">{item.due_basis ?? '—'}</td>,
+                  duration: <td key="duration">{item.duration_days === null ? item.duration_text ?? '—' : `${formatNumber(item.duration_days)} يوم`}</td>,
+                  review_cycle: <td key="review_cycle">{item.review_cycle ?? '—'}</td>,
+                  due_date: (
+                    <td key="due_date" title={due.hint} className={late ? 'font-bold text-rose-700' : ''}>
+                      {due.dueDate ? formatDate(due.dueDate) : 'غير محسوب'}
+                      {due.isOverride && <span className="ms-1 text-[10px]">(يدوي)</span>}
+                      {late && <span className="ms-1 rounded bg-rose-100 px-1 text-[10px]">متأخر</span>}
+                      <p className="max-w-full whitespace-normal break-words text-[10px] font-normal leading-tight text-slate-500">{due.hint}</p>
+                    </td>
+                  ),
+                  status: <td key="status"><span className={`deliverables-status ${item.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : item.status === 'delivered_pending' ? 'bg-sky-100 text-sky-800' : 'bg-slate-100 text-slate-700'}`}>{statusNames[item.status]}</span></td>,
+                  delivered_on: <td key="delivered_on">{item.delivered_on ? formatDate(item.delivered_on) : '—'}</td>,
+                  approved_on: <td key="approved_on">{item.approved_on ? formatDate(item.approved_on) : '—'}</td>,
+                  notes: <td key="notes">{item.notes || '—'}</td>,
+                  attachments: <td key="attachments"><button type="button" onClick={() => openEditor(item)} aria-label={`المرفقات ${formatNumber(attachments.length)}`} className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-xs underline"><Paperclip size={13} aria-hidden="true" /> {formatNumber(attachments.length)}</button></td>,
+                  action: <td key="action"><button type="button" onClick={() => openEditor(item)} className="rounded border border-slate-300 px-2 py-0.5 text-[11px] font-semibold">{canEdit ? 'تعديل' : 'عرض'}</button></td>,
+                };
                 return <tr key={item.id} className={late ? 'bg-rose-50' : undefined}>
-                  <td>{formatNumber(item.seq)}</td><td>{item.clause ?? '—'}</td>
-                  <th scope="row" className="text-start font-semibold text-slate-800">{item.title}</th>
-                  <td>{item.due_basis ?? '—'}</td><td>{item.duration_days === null ? item.duration_text ?? '—' : `${formatNumber(item.duration_days)} يوم`}</td>
-                  <td>{item.review_cycle ?? '—'}</td>
-                  <td title={due.hint} className={late ? 'font-bold text-rose-700' : ''}>
-                    {due.dueDate ? formatDate(due.dueDate) : 'غير محسوب'}
-                    {due.isOverride && <span className="ms-1 text-xs">(يدوي)</span>}
-                    {late && <span className="ms-1 rounded bg-rose-100 px-1 text-xs">متأخر</span>}
-                    <p className="max-w-48 whitespace-normal text-[10px] font-normal text-slate-500">{due.hint}</p>
-                  </td>
-                  <td><span className={`rounded-full px-2 py-1 text-xs font-semibold ${item.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : item.status === 'delivered_pending' ? 'bg-sky-100 text-sky-800' : 'bg-slate-100 text-slate-700'}`}>{statusNames[item.status]}</span></td>
-                  <td>{item.delivered_on ? formatDate(item.delivered_on) : '—'}</td><td>{item.approved_on ? formatDate(item.approved_on) : '—'}</td>
-                  <td className="max-w-56 whitespace-normal">{item.notes || '—'}</td>
-                  <td><button type="button" onClick={() => openEditor(item)} className="inline-flex items-center gap-1 underline"><Paperclip size={14} /> {formatNumber(attachments.length)}</button></td>
-                  <td><button type="button" onClick={() => openEditor(item)} className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold">{canEdit ? 'تعديل' : 'عرض'}</button></td>
+                  {selectedColumns.map(({ key }) => cells[key])}
                 </tr>;
               })}</tbody>
             </table>

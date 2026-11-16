@@ -1,7 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { distributePlanDates, isPlanRowOverdue, matchesPlanCompletionFilters, matchesPlanSchoolSearch } from './plans';
+import {
+  cleaningSupervisorName,
+  cleaningSupervisorUpdates,
+  distributePlanDates,
+  isPlanRowOverdue,
+  matchesPlanCompletionFilters,
+  matchesPlanSchoolSearch,
+} from './plans';
 
 describe('monthly plan date distribution', () => {
+  it('prefers the cleaning supervisor stored with the school and only updates rows with a source name', () => {
+    const rows = [
+      { id: 'one', supervisorName: 'اسم قديم', schoolSourceFields: { 'اسم المشرف (نظافة)': 'مشرف حقيقي' } },
+      { id: 'two', supervisorName: 'مشرف حقيقي', schoolSourceFields: { 'اسم المشرف (نظافة)': 'مشرف حقيقي' } },
+      { id: 'three', supervisorName: 'اسم محفوظ', schoolSourceFields: { 'اسم المشرف (نظافة)': '' } },
+    ];
+
+    expect(cleaningSupervisorName(rows[0])).toBe('مشرف حقيقي');
+    expect(cleaningSupervisorName(rows[2])).toBe('اسم محفوظ');
+    expect(cleaningSupervisorUpdates(rows)).toEqual([{ id: 'one', supervisorName: 'مشرف حقيقي' }]);
+  });
+
   it('searches plan rows by normalized school name or ministry number', () => {
     const school = {
       schoolName: 'مدرسة أُحد الابتدائية',

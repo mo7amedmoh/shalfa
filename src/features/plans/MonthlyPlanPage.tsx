@@ -3,7 +3,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
 import { loadXlsx } from '../../lib/xlsx';
-import { isPlanRowOverdue, matchesPlanCompletionFilters, matchesPlanSchoolSearch, type PlanCompletionFilter } from '../../domain/plans';
+import {
+  cleaningSupervisorName,
+  cleaningSupervisorUpdates,
+  isPlanRowOverdue,
+  matchesPlanCompletionFilters,
+  matchesPlanSchoolSearch,
+  type PlanCompletionFilter,
+} from '../../domain/plans';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import { schoolPersonDefault } from '../../domain/imports';
 import type { ScheduleAssignment } from '../../domain/planScheduler';
@@ -50,7 +57,12 @@ const rowSchema = z.object({
   supervisor_name: z.string().nullable(),
   engineer_name: z.string().nullable(),
   contractor_name: z.string().nullable(),
-  school: z.object({ school_name: z.string(), ministry_number: z.string(), ministry_key: z.string() }).nullable(),
+  school: z.object({
+    school_name: z.string(),
+    ministry_number: z.string(),
+    ministry_key: z.string(),
+    source_fields: z.record(z.string(), z.unknown()),
+  }).nullable(),
 });
 type PlanRow = z.infer<typeof rowSchema>;
 type CandidateData = { schools: z.infer<typeof sourceSchoolSchema>[]; eligibility: PlanEligibilityConfig | null };
@@ -246,6 +258,57 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
     onError: (error: Error) => setMessage(`تعذر تحديث طريقة احتساب التأخر: ${error.message}`),
   });
 
+  const updateCleaningSupervisors = useMutation({
+    mutationFn: async () => {
+      if (!supabase || !activePlan || planType !== 'cleaning') throw new Error('اختر خطة نظافة أولاً.');
+      if (!canCreate) throw new Error('لا تملك صلاحية تحديث أسماء المشرفين.');
+      const updates = cleaningSupervisorUpdates((rows.data ?? []).map((row) => ({
+        id: row.id,
+        supervisorName: row.supervisor_name,
+        schoolSourceFields: row.school?.source_fields ?? null,
+      })));
+      if (!updates.length) return 0;
+      if (!window.confirm(`سيتم استبدال أسماء المشرفين في ${updates.length} صفاً بالأسماء الواردة في قاعدة بيانات المدارس. هل تريد المتابعة؟`)) {
+        throw new Error('تم إلغاء تحديث أسماء المشرفين.');
+      }
+
+      const rowsByName = new Map<string, string[]>();
+      for (const update of updates) {
+        const ids = rowsByName.get(update.supervisorName) ?? [];
+        ids.push(update.id);
+        rowsByName.set(update.supervisorName, ids);
+      }
+      for (const [supervisorName, rowIds] of rowsByName) {
+        const { error } = await supabase.from('monthly_plan_rows')
+          .update({ supervisor_id: null, supervisor_name: supervisorName })
+          .eq('plan_id', activePlan.id)
+          .in('id', rowIds);
+        if (error) throw error;
+      }
+
+      const { data, error } = await supabase.from('monthly_plan_rows')
+        .select('id,supervisor_name')
+        .eq('plan_id', activePlan.id)
+        .in('id', updates.map((update) => update.id));
+      if (error) throw new Error(`تعذر التحقق من أسماء المشرفين المحفوظة: ${error.message}`);
+      const savedNames = new Map((data ?? []).map((row) => [row.id, row.supervisor_name]));
+      const notSaved = updates.filter((update) => savedNames.get(update.id) !== update.supervisorName);
+      if (notSaved.length) throw new Error(`لم تُحفظ أسماء المشرفين في ${notSaved.length} صفاً. تحقق من صلاحيات قاعدة البيانات.`);
+      return updates.length;
+    },
+    onSuccess: (count) => setMessage(count
+      ? `تم تحديث أسماء مشرفي النظافة في ${count} صفاً من قاعدة بيانات المدارس.`
+      : 'أسماء مشرفي الخطة مطابقة بالفعل لقاعدة بيانات المدارس.'),
+    onError: (error: Error) => setMessage(`تعذر تحديث أسماء مشرفي النظافة: ${error.message}`),
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['monthly-plan-rows', activePlanId] }),
+        queryClient.invalidateQueries({ queryKey: ['monthly-report'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard-plan-rows'] }),
+      ]);
+    },
+  });
+
   const updateRow = useMutation({
     mutationFn: async ({ rowId, field, value }: { rowId: string; field: 'visited_at' | 'report_completed_at'; value: string | null }) => {
       if (!supabase) throw new Error('يلزم إعداد Supabase.');
@@ -310,6 +373,25 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const today = localDate();
   const completedVisits = rows.data?.filter((row) => row.visited_at).length ?? 0;
   const completedReports = rows.data?.filter((row) => row.report_completed_at).length ?? 0;
+  const cleaningSupervisorChanges = useMemo(
+    () => cleaningSupervisorUpdates((rows.data ?? []).map((row) => ({
+      id: row.id,
+      supervisorName: row.supervisor_name,
+      schoolSourceFields: row.school?.source_fields ?? null,
+    }))),
+    [rows.data],
+  );
+  const missingSupervisorCount = (rows.data ?? []).filter((row) => {
+    if (planType === 'elevators' || planType === 'security_safety') return false;
+    const supervisorName = planType === 'cleaning'
+      ? cleaningSupervisorName({
+        id: row.id,
+        supervisorName: row.supervisor_name,
+        schoolSourceFields: row.school?.source_fields ?? null,
+      })
+      : row.supervisor_name;
+    return !row.supervisor_id && !supervisorName;
+  }).length;
   const filteredPlanRows = useMemo(
     () => (rows.data ?? []).filter((row) => matchesPlanCompletionFilters({
       visitedAt: row.visited_at,
@@ -412,10 +494,23 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
       <section className="card grid gap-4 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div><h3 className="font-bold text-slate-900">الخطط المنشأة</h3><p className="mt-1 text-sm text-slate-500">زيارة: {formatNumber(completedVisits)} · تقرير مكتمل: {formatNumber(completedReports)}</p></div>
-          <select aria-label="اختر خطة للشهر" value={activePlanId} onChange={(event) => setActivePlanId(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2">
-            {(plans.data ?? []).map((plan) => <option key={plan.id} value={plan.id}>{plan.plan_month.slice(0, 7)}</option>)}
-            {!plans.data?.length && <option value="">لا توجد خطط</option>}
-          </select>
+          <div className="flex flex-wrap items-center gap-2">
+            <select aria-label="اختر خطة للشهر" value={activePlanId} onChange={(event) => setActivePlanId(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2">
+              {(plans.data ?? []).map((plan) => <option key={plan.id} value={plan.id}>{plan.plan_month.slice(0, 7)}</option>)}
+              {!plans.data?.length && <option value="">لا توجد خطط</option>}
+            </select>
+            {activePlan && planType === 'cleaning' && canCreate && rows.data && <button
+              type="button"
+              onClick={() => updateCleaningSupervisors.mutate()}
+              disabled={updateCleaningSupervisors.isPending || !cleaningSupervisorChanges.length}
+              className="rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50"
+              title="تحديث أسماء المشرفين من عمود «اسم المشرف (نظافة)» في قاعدة بيانات المدارس"
+            >
+              {updateCleaningSupervisors.isPending
+                ? 'جارٍ تحديث الأسماء…'
+                : `تحديث المشرفين من قاعدة المدارس (${formatNumber(cleaningSupervisorChanges.length)})`}
+            </button>}
+          </div>
         </div>
         {activePlan && rows.data && <div className="flex flex-wrap items-end gap-3 rounded-lg bg-slate-50 p-3">
           <label className="grid min-w-56 flex-1 gap-1 text-sm font-semibold">
@@ -450,7 +545,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
             <details className="rounded-lg border border-slate-200 bg-slate-50 p-3">
               <summary className="cursor-pointer text-sm font-bold text-brand-900">جودة بيانات الخطة</summary>
               <div className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
-                <QualityBadge label="صفوف دون مشرف" count={(rows.data ?? []).filter((row) => !row.supervisor_id && planType !== 'elevators' && planType !== 'security_safety').length} />
+                <QualityBadge label="صفوف دون مشرف" count={missingSupervisorCount} />
                 <QualityBadge label="صفوف دون موعد مخطط" count={(rows.data ?? []).filter((row) => !row.planned_date).length} />
                 <QualityBadge label="تقارير مرفوعة دون زيارة" count={(rows.data ?? []).filter((row) => Boolean(row.report_completed_at) && !row.visited_at).length} />
               </div>
@@ -465,7 +560,13 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                 schoolName: row.school?.school_name ?? row.school_id,
                 ministryNumber: row.school?.ministry_number ?? '',
                 ministryKey: row.school?.ministry_key ?? '',
-                supervisorName: row.supervisor_name,
+                supervisorName: planType === 'cleaning'
+                  ? cleaningSupervisorName({
+                    id: row.id,
+                    supervisorName: row.supervisor_name,
+                    schoolSourceFields: row.school?.source_fields ?? null,
+                  })
+                  : row.supervisor_name,
                 visited: row.visited,
                 visitedAt: row.visited_at,
                 reportAt: row.report_completed_at,
@@ -492,8 +593,15 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                       reportCompletedAt: row.report_completed_at,
                     }, today)
                     : today > monthEnd && !row.report_completed_at;
+                  const supervisorName = planType === 'cleaning'
+                    ? cleaningSupervisorName({
+                      id: row.id,
+                      supervisorName: row.supervisor_name,
+                      schoolSourceFields: row.school?.source_fields ?? null,
+                    })
+                    : row.supervisor_name;
                   return <tr key={row.id}>
-                    <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small>{row.supervisor_name && <small className="block text-xs text-slate-500">المشرف: {row.supervisor_name}</small>}</td>
+                    <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small>{supervisorName && <small className="block text-xs text-slate-500">المشرف: {supervisorName}</small>}</td>
                     <td>{formatDate(row.planned_date)}</td>
                     {(planType === 'security_safety' || planType === 'elevators') && <td>{row.contractor_name ?? '—'}</td>}
                     <td><DateEditor value={dates.visited} onChange={(value) => setActualDates((current) => ({ ...current, [row.id]: { ...dates, visited: value } }))} onSave={() => updateRow.mutate({ rowId: row.id, field: 'visited_at', value: dates.visited || null })} label="حفظ الزيارة" disabled={!canUpdate || updateRow.isPending} /></td>

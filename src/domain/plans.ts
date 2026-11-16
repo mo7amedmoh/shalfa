@@ -1,4 +1,4 @@
-import { normalizeImportName, normalizeMinistryNumber } from './imports';
+import { normalizeImportName, normalizeMinistryNumber, schoolPersonDefault } from './imports';
 
 export interface PlannedVisit {
   schoolId: string;
@@ -15,6 +15,35 @@ export interface PlanProgress {
   plannedDate: string;
   visitedAt: string | null;
   reportCompletedAt: string | null;
+}
+
+export interface CleaningSupervisorPlanRow {
+  id: string;
+  supervisorName: string | null;
+  schoolSourceFields: Record<string, unknown> | null;
+}
+
+export function cleaningSupervisorName(row: CleaningSupervisorPlanRow): string | null {
+  return schoolPersonDefault(
+    { source_fields: row.schoolSourceFields ?? {} },
+    'supervisor',
+    'cleaning',
+  ) || row.supervisorName;
+}
+
+export function cleaningSupervisorUpdates(
+  rows: readonly CleaningSupervisorPlanRow[],
+): Array<{ id: string; supervisorName: string }> {
+  return rows.flatMap((row) => {
+    const sourceName = schoolPersonDefault(
+      { source_fields: row.schoolSourceFields ?? {} },
+      'supervisor',
+      'cleaning',
+    );
+    return sourceName && sourceName !== row.supervisorName?.trim()
+      ? [{ id: row.id, supervisorName: sourceName }]
+      : [];
+  });
 }
 
 export type PlanCompletionFilter = 'all' | 'completed' | 'incomplete';

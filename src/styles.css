@@ -51,6 +51,38 @@ a {
   border-inline-end: 1px solid #e8ebf3;
 }
 
+@media (min-width: 801px) {
+  .app-shell[data-sidebar-collapsed='true'] {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+
+  .sidebar[data-collapsed='true'] {
+    overflow-x: hidden;
+    padding: 12px !important;
+  }
+
+  .sidebar[data-collapsed='true'] > div:first-child {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .sidebar[data-collapsed='true'] > div:first-child img,
+  .sidebar[data-collapsed='true'] nav > section > div[id^='nav-group-'] {
+    display: none;
+  }
+
+  .sidebar[data-collapsed='true'] .nav-link {
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .sidebar[data-collapsed='true'] .nav-link span,
+  .sidebar[data-collapsed='true'] nav > section > button > svg:last-child {
+    display: none;
+  }
+}
+
 .main-area {
   min-width: 0;
 }

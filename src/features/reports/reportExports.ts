@@ -1,4 +1,6 @@
 import type JSZip from 'jszip';
+import cairoArabicRegular from '@fontsource/cairo/files/cairo-arabic-400-normal.woff2?url';
+import cairoArabicBold from '@fontsource/cairo/files/cairo-arabic-700-normal.woff2?url';
 
 export interface ReportPhoto {
   file: File;
@@ -11,6 +13,41 @@ export interface SchoolReportDetails {
   ministryCode: string;
   district: string;
   date: string;
+}
+
+export function prepareReportPhoto(file: File): Promise<ReportPhoto> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`تعذر قراءة الصورة ${file.name}.`));
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      if (typeof dataUrl !== 'string') {
+        reject(new Error(`تعذر قراءة الصورة ${file.name}.`));
+        return;
+      }
+      const image = new Image();
+      image.onload = () => {
+        const scale = Math.min(1, 2000 / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const context = canvas.getContext('2d');
+        if (!context) {
+          reject(new Error('تعذر تجهيز الصورة للتصدير.'));
+          return;
+        }
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        resolve({
+          file,
+          dataUrl,
+          pngDataUrl: canvas.toDataURL('image/png'),
+        });
+      };
+      image.onerror = () => reject(new Error(`صيغة الصورة ${file.name} غير مدعومة في المتصفح.`));
+      image.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 const pptNamespace = 'http://schemas.openxmlformats.org/presentationml/2006/main';
@@ -388,6 +425,353 @@ export async function exportPowerPointReport(
     mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   });
   downloadBlob(blob, fileName);
+}
+
+const fallbackCrewPhotoFrame = {
+  left: 2051726,
+  top: 1770190,
+  width: 7853803,
+  height: 4490909,
+};
+
+function findPlaceholderFrame(
+  documentValue: XMLDocument,
+  placeholderIndex: string,
+): { left: number; top: number; width: number; height: number } | null {
+  const shapes = Array.from(documentValue.getElementsByTagNameNS(pptNamespace, 'sp'));
+  for (const shape of shapes) {
+    const placeholder = shape.getElementsByTagNameNS(pptNamespace, 'ph')[0];
+    if (placeholder?.getAttribute('idx') !== placeholderIndex) continue;
+    const transform = shape.getElementsByTagNameNS(drawingNamespace, 'xfrm')[0];
+    const offset = transform?.getElementsByTagNameNS(drawingNamespace, 'off')[0];
+    const extent = transform?.getElementsByTagNameNS(drawingNamespace, 'ext')[0];
+    if (!offset || !extent) continue;
+    const bounds = {
+      left: Number(offset.getAttribute('x')),
+      top: Number(offset.getAttribute('y')),
+      width: Number(extent.getAttribute('cx')),
+      height: Number(extent.getAttribute('cy')),
+    };
+    if (Object.values(bounds).every(Number.isFinite) && bounds.width > 0 && bounds.height > 0) {
+      return bounds;
+    }
+  }
+  return null;
+}
+
+async function findCrewPhotoFrame(
+  zip: JSZip,
+  slidePath: string,
+  slide: XMLDocument,
+): Promise<{ left: number; top: number; width: number; height: number }> {
+  const slideFrame = findPlaceholderFrame(slide, '15');
+  if (slideFrame) return slideFrame;
+
+  const relationships = await readXml(zip, relationFilePath(slidePath));
+  const layoutRelationship = Array.from(
+    relationships.getElementsByTagNameNS(packageRelationshipNamespace, 'Relationship'),
+  ).find((relationship) => relationship.getAttribute('Type')?.endsWith('/slideLayout'));
+  const layoutTarget = layoutRelationship?.getAttribute('Target');
+  if (layoutTarget) {
+    const layoutPath = packagePathFromTarget('ppt/slides', layoutTarget);
+    const layout = await readXml(zip, layoutPath);
+    const layoutFrame = findPlaceholderFrame(layout, '15');
+    if (layoutFrame) return layoutFrame;
+  }
+
+  return fallbackCrewPhotoFrame;
+}
+
+function replacePlaceholderText(slide: XMLDocument, placeholderIndex: string, value: string) {
+  const shapes = Array.from(slide.getElementsByTagNameNS(pptNamespace, 'sp'));
+  const shape = shapes.find((candidate) => {
+    const placeholder = candidate.getElementsByTagNameNS(pptNamespace, 'ph')[0];
+    return placeholderIndex === 'title'
+      ? placeholder?.getAttribute('type') === 'title'
+      : placeholder?.getAttribute('idx') === placeholderIndex;
+  });
+  const textBody = shape?.getElementsByTagNameNS(pptNamespace, 'txBody')[0];
+  const paragraph = textBody?.getElementsByTagNameNS(drawingNamespace, 'p')[0];
+  if (!shape || !paragraph) {
+    const field = placeholderIndex === '17' ? 'الرقم الوزاري' : 'اسم المدرسة';
+    throw new Error(`لم يتم العثور على حقل ${field} في الشريحة الثانية من القالب.`);
+  }
+
+  Array.from(paragraph.children)
+    .filter((child) => child.namespaceURI === drawingNamespace
+      && !['pPr', 'endParaRPr'].includes(child.localName))
+    .forEach((child) => paragraph.removeChild(child));
+  const run = slide.createElementNS(drawingNamespace, 'a:r');
+  const endProperties = paragraph.getElementsByTagNameNS(drawingNamespace, 'endParaRPr')[0];
+  const runProperties = endProperties
+    ? endProperties.cloneNode(false) as Element
+    : slide.createElementNS(drawingNamespace, 'a:rPr');
+  runProperties.setAttribute('lang', 'ar-SA');
+  const text = slide.createElementNS(drawingNamespace, 'a:t');
+  text.textContent = value;
+  run.append(runProperties, text);
+  paragraph.insertBefore(run, endProperties ?? null);
+}
+
+function nextShapeId(slide: XMLDocument): number {
+  const ids = Array.from(slide.getElementsByTagNameNS(pptNamespace, 'cNvPr'))
+    .map((shape) => Number(shape.getAttribute('id')))
+    .filter(Number.isFinite);
+  return Math.max(0, ...ids) + 1;
+}
+
+async function addCrewPhotoToSlide(
+  zip: JSZip,
+  slidePath: string,
+  slide: XMLDocument,
+  photo: ReportPhoto,
+  photoIndex: number,
+  frame: { left: number; top: number; width: number; height: number },
+) {
+  const relationshipsPath = relationFilePath(slidePath);
+  const relationships = await readXml(zip, relationshipsPath);
+  const relationshipId = nextRelationshipId(relationships);
+  let mediaName = `shalfa-cleaning-attendance-${photoIndex + 1}.png`;
+  let suffix = 1;
+  while (zip.file(`ppt/media/${mediaName}`)) {
+    mediaName = `shalfa-cleaning-attendance-${photoIndex + 1}-${suffix}.png`;
+    suffix += 1;
+  }
+  zip.file(
+    `ppt/media/${mediaName}`,
+    photo.pngDataUrl.slice(photo.pngDataUrl.indexOf(',') + 1),
+    { base64: true },
+  );
+
+  const relationship = relationships.createElementNS(packageRelationshipNamespace, 'Relationship');
+  relationship.setAttribute('Id', relationshipId);
+  relationship.setAttribute('Type', `${officeRelationshipNamespace}/image`);
+  relationship.setAttribute('Target', `../media/${mediaName}`);
+  relationships.documentElement.appendChild(relationship);
+  zip.file(relationshipsPath, serializeXml(relationships));
+
+  const image = new Image();
+  image.src = photo.pngDataUrl;
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error(`تعذر تجهيز الصورة ${photo.file.name} للتصدير.`));
+  });
+  const scale = Math.min(frame.width / image.naturalWidth, frame.height / image.naturalHeight);
+  const width = Math.round(image.naturalWidth * scale);
+  const height = Math.round(image.naturalHeight * scale);
+  const left = frame.left + Math.round((frame.width - width) / 2);
+  const top = frame.top + Math.round((frame.height - height) / 2);
+
+  const picture = slide.createElementNS(pptNamespace, 'p:pic');
+  const nonVisual = slide.createElementNS(pptNamespace, 'p:nvPicPr');
+  const properties = slide.createElementNS(pptNamespace, 'p:cNvPr');
+  properties.setAttribute('id', String(nextShapeId(slide)));
+  properties.setAttribute('name', `صورة تحضير العمالة ${photoIndex + 1}`);
+  const pictureProperties = slide.createElementNS(pptNamespace, 'p:cNvPicPr');
+  const locks = slide.createElementNS(drawingNamespace, 'a:picLocks');
+  locks.setAttribute('noChangeAspect', '1');
+  pictureProperties.appendChild(locks);
+  nonVisual.append(
+    properties,
+    pictureProperties,
+    slide.createElementNS(pptNamespace, 'p:nvPr'),
+  );
+
+  const fill = slide.createElementNS(pptNamespace, 'p:blipFill');
+  const blip = slide.createElementNS(drawingNamespace, 'a:blip');
+  blip.setAttributeNS(officeRelationshipNamespace, 'r:embed', relationshipId);
+  const stretch = slide.createElementNS(drawingNamespace, 'a:stretch');
+  stretch.appendChild(slide.createElementNS(drawingNamespace, 'a:fillRect'));
+  fill.append(blip, stretch);
+
+  const shapeProperties = slide.createElementNS(pptNamespace, 'p:spPr');
+  const transform = slide.createElementNS(drawingNamespace, 'a:xfrm');
+  const offset = slide.createElementNS(drawingNamespace, 'a:off');
+  offset.setAttribute('x', String(left));
+  offset.setAttribute('y', String(top));
+  const extent = slide.createElementNS(drawingNamespace, 'a:ext');
+  extent.setAttribute('cx', String(width));
+  extent.setAttribute('cy', String(height));
+  transform.append(offset, extent);
+  const geometry = slide.createElementNS(drawingNamespace, 'a:prstGeom');
+  geometry.setAttribute('prst', 'rect');
+  geometry.appendChild(slide.createElementNS(drawingNamespace, 'a:avLst'));
+  shapeProperties.append(transform, geometry);
+  picture.append(nonVisual, fill, shapeProperties);
+
+  const shapeTree = slide.getElementsByTagNameNS(pptNamespace, 'spTree')[0];
+  if (!shapeTree) throw new Error('تعذر إضافة الصورة إلى شريحة التقرير.');
+  shapeTree.appendChild(picture);
+}
+
+async function createCleaningAttendancePowerPoint(
+  template: File,
+  school: string,
+  ministryCode: string,
+  photos: ReportPhoto[],
+): Promise<Blob> {
+  if (!photos.length) throw new Error('أرفق صورة واحدة على الأقل قبل إنشاء التقرير.');
+  const { default: JSZipModule } = await import('jszip');
+  const zip = await JSZipModule.loadAsync(template);
+  const presentation = await readXml(zip, 'ppt/presentation.xml');
+  const presentationRelationships = await readXml(zip, 'ppt/_rels/presentation.xml.rels');
+  const slidePaths = getSlidePaths(presentation, presentationRelationships);
+  if (slidePaths.length < 3) throw new Error('يجب أن يحتوي قالب PowerPoint على ثلاث شرائح على الأقل.');
+
+  const photoSlidePath = slidePaths[1];
+  const sourceSlide = await readXml(zip, photoSlidePath);
+  replacePlaceholderText(sourceSlide, 'title', school);
+  replacePlaceholderText(sourceSlide, '17', `الرقم الوزاري: ${ministryCode}`);
+  const frame = await findCrewPhotoFrame(zip, photoSlidePath, sourceSlide);
+  const slideList = presentation.getElementsByTagNameNS(pptNamespace, 'sldIdLst')[0];
+  if (!slideList) throw new Error('تعذر تحديد شرائح قالب PowerPoint.');
+
+  const photoSlideRelationship = Array.from(
+    presentationRelationships.getElementsByTagNameNS(packageRelationshipNamespace, 'Relationship'),
+  ).find((relationship) => relationTargetPath(relationship.getAttribute('Target') ?? '') === photoSlidePath);
+  const originalSlideId = Array.from(slideList.children).find((slideId) => (
+    slideId.getAttributeNS(officeRelationshipNamespace, 'id') === photoSlideRelationship?.getAttribute('Id')
+  ));
+  if (!photoSlideRelationship || !originalSlideId) {
+    throw new Error('تعذر تحديد الشريحة الثانية في قالب PowerPoint.');
+  }
+
+  const contentTypes = await readXml(zip, '[Content_Types].xml');
+  addPngContentType(contentTypes);
+  const sourceRelationshipsPath = relationFilePath(photoSlidePath);
+  const sourceRelationships = await readXml(zip, sourceRelationshipsPath);
+  const sourceSlideXml = serializeXml(sourceSlide);
+  const slideNumbers = Object.keys(zip.files)
+    .map((path) => path.match(/^ppt\/slides\/slide(\d+)\.xml$/)?.[1])
+    .filter((value): value is string => Boolean(value))
+    .map(Number);
+  const presentationSlideIds = Array.from(slideList.children)
+    .map((slideId) => Number(slideId.getAttribute('id')))
+    .filter(Number.isFinite);
+  let nextSlideNumber = Math.max(0, ...slideNumbers) + 1;
+  let nextSlideId = Math.max(255, ...presentationSlideIds) + 1;
+  let nextPresentationRelationshipId = nextRelationshipId(presentationRelationships);
+  let previousSlideId = originalSlideId;
+
+  for (let index = 0; index < photos.length; index += 1) {
+    const isOriginal = index === 0;
+    const slidePath = isOriginal ? photoSlidePath : `ppt/slides/slide${nextSlideNumber++}.xml`;
+    const slide = isOriginal ? sourceSlide : parseXml(sourceSlideXml, slidePath);
+    if (!isOriginal) {
+      const duplicatedRelationships = parseXml(serializeXml(sourceRelationships), sourceRelationshipsPath);
+      Array.from(duplicatedRelationships.getElementsByTagNameNS(packageRelationshipNamespace, 'Relationship'))
+        .filter((relationship) => relationship.getAttribute('Type')?.endsWith('/notesSlide'))
+        .forEach((relationship) => relationship.parentNode?.removeChild(relationship));
+      zip.file(relationFilePath(slidePath), serializeXml(duplicatedRelationships));
+      const relationshipId = nextPresentationRelationshipId;
+      nextPresentationRelationshipId = `rId${Number(relationshipId.replace(/^rId/, '')) + 1}`;
+      addSlideRelationship(presentationRelationships, relationshipId, slidePath);
+      const slideId = presentation.createElementNS(pptNamespace, 'p:sldId');
+      slideId.setAttribute('id', String(nextSlideId++));
+      slideId.setAttributeNS(officeRelationshipNamespace, 'r:id', relationshipId);
+      previousSlideId.parentNode?.insertBefore(slideId, previousSlideId.nextSibling);
+      previousSlideId = slideId;
+      addSlideContentType(contentTypes, slidePath);
+    }
+    await addCrewPhotoToSlide(zip, slidePath, slide, photos[index], index, frame);
+    zip.file(slidePath, serializeXml(slide));
+  }
+
+  zip.file('ppt/presentation.xml', serializeXml(presentation));
+  zip.file('ppt/_rels/presentation.xml.rels', serializeXml(presentationRelationships));
+  zip.file('[Content_Types].xml', serializeXml(contentTypes));
+  const blob = await zip.generateAsync({
+    type: 'blob',
+    mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  });
+  return blob;
+}
+
+export async function exportCleaningAttendancePowerPoint(
+  template: File,
+  school: string,
+  ministryCode: string,
+  photos: ReportPhoto[],
+  fileName: string,
+): Promise<void> {
+  const blob = await createCleaningAttendancePowerPoint(template, school, ministryCode, photos);
+  downloadBlob(blob, fileName);
+}
+
+export async function exportCleaningAttendancePdf(
+  template: File,
+  school: string,
+  ministryCode: string,
+  photos: ReportPhoto[],
+  fileName: string,
+): Promise<void> {
+  const presentation = await createCleaningAttendancePowerPoint(template, school, ministryCode, photos);
+  const [{ PptxViewer }, { toJpeg }, { jsPDF }] = await Promise.all([
+    import('@aiden0z/pptx-renderer'),
+    import('html-to-image'),
+    import('jspdf'),
+  ]);
+  const host = document.createElement('div');
+  host.style.position = 'fixed';
+  host.style.left = '-10000px';
+  host.style.top = '0';
+  document.body.appendChild(host);
+  const renderer = new PptxViewer(host, {
+    fitMode: 'none',
+    externalMedia: 'block',
+    fontFaces: [
+      { family: 'Aptos', source: `url(${cairoArabicRegular})`, descriptors: { weight: '400' } },
+      { family: 'Aptos', source: `url(${cairoArabicBold})`, descriptors: { weight: '700' } },
+      { family: 'Aptos Display', source: `url(${cairoArabicRegular})`, descriptors: { weight: '400' } },
+      { family: 'Aptos Display', source: `url(${cairoArabicBold})`, descriptors: { weight: '700' } },
+    ],
+  });
+  try {
+    await renderer.open(presentation, { renderMode: 'slide' });
+    const slideWidth = renderer.slideWidth;
+    const slideHeight = renderer.slideHeight;
+    if (!renderer.slideCount || !slideWidth || !slideHeight) {
+      throw new Error('تعذر قراءة شرائح قالب PowerPoint للتصدير.');
+    }
+
+    await document.fonts.ready;
+    const pageWidthMm = 297;
+    const pageHeightMm = pageWidthMm * slideHeight / slideWidth;
+    const pdf = new jsPDF({
+      orientation: slideWidth >= slideHeight ? 'landscape' : 'portrait',
+      unit: 'mm',
+      format: [pageWidthMm, pageHeightMm],
+      compress: true,
+    });
+
+    for (let index = 0; index < renderer.slideCount; index += 1) {
+      const pageHost = document.createElement('div');
+      host.appendChild(pageHost);
+      const slide = renderer.renderSlideToContainer(index, pageHost, 1);
+      if (!slide) throw new Error(`تعذر تجهيز الشريحة رقم ${index + 1} للتصدير.`);
+      try {
+        await slide.ready;
+        const image = await toJpeg(slide.element, {
+          width: slideWidth,
+          height: slideHeight,
+          pixelRatio: 1.25,
+          quality: 0.9,
+          cacheBust: false,
+          backgroundColor: '#ffffff',
+        });
+        if (index > 0) pdf.addPage([pageWidthMm, pageHeightMm], slideWidth >= slideHeight ? 'landscape' : 'portrait');
+        pdf.addImage(image, 'JPEG', 0, 0, pageWidthMm, pageHeightMm);
+      } finally {
+        slide.dispose();
+        pageHost.remove();
+      }
+    }
+
+    pdf.save(fileName);
+  } finally {
+    renderer.destroy();
+    host.remove();
+  }
 }
 
 function packagePathFromTarget(baseDirectory: string, target: string): string {

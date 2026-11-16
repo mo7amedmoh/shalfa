@@ -8,11 +8,13 @@ import { reportSchoolNeighbourhood } from '../../domain/reportSchools';
 import { exportReportPdf } from '../../lib/reportPdf';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { supabase } from '../../lib/supabase';
+import { CleaningAttendanceReportForm } from './CleaningAttendanceReportForm';
 import {
   exportDeepCleaningWorkbook,
   exportMaintenanceWorkbook,
   exportPowerPointReport,
   maintenanceCategoryDefinitions,
+  prepareReportPhoto,
   sanitizeFilePart,
   type PhotoCategory,
   type ReportPhoto,
@@ -119,34 +121,6 @@ async function findPlanReportStatus(
   };
 }
 
-function readDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`تعذر قراءة الصورة ${file.name}.`));
-    reader.onload = () => typeof reader.result === 'string'
-      ? resolve(reader.result)
-      : reject(new Error(`تعذر قراءة الصورة ${file.name}.`));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function toPngDataUrl(dataUrl: string, fileName: string): Promise<string> {
-  const image = new Image();
-  image.src = dataUrl;
-  await new Promise<void>((resolve, reject) => {
-    image.onload = () => resolve();
-    image.onerror = () => reject(new Error(`صيغة الصورة ${fileName} غير مدعومة في المتصفح.`));
-  });
-  const scale = Math.min(1, 2000 / Math.max(image.naturalWidth, image.naturalHeight));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-  const context = canvas.getContext('2d');
-  if (!context) throw new Error('تعذر تجهيز الصورة للتصدير.');
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL('image/png');
-}
-
 function initialFileName(toolId: ReportToolId, school: string, extension: string): string {
   const name = sanitizeFilePart(school);
   if (toolId === 'cleaning') return `${name}-تقرير-التنظيف-العميق.${extension}`;
@@ -161,6 +135,7 @@ export function ReportGeneratorPage() {
   if (!tool) {
     return <section role="alert" className="card p-6 text-center text-slate-600">التطبيق المطلوب غير متاح.</section>;
   }
+  if (tool.id === 'cleaning-attendance') return <CleaningAttendanceReportForm />;
   return <ReportGeneratorForm key={tool.id} toolId={tool.id} title={tool.label} />;
 }
 
@@ -273,10 +248,7 @@ function ReportGeneratorForm({ toolId, title }: { toolId: ReportToolId; title: s
       });
       const remaining = maximum === undefined ? uniqueFiles.length : Math.max(0, maximum - current.length);
       const selected = uniqueFiles.slice(0, remaining);
-      const next = await Promise.all(selected.map(async (file) => {
-        const dataUrl = await readDataUrl(file);
-        return { file, dataUrl, pngDataUrl: await toPngDataUrl(dataUrl, file.name) };
-      }));
+      const next = await Promise.all(selected.map(prepareReportPhoto));
       setPhotos((previous) => ({ ...previous, [key]: [...(previous[key] ?? []), ...next] }));
       if (uniqueFiles.length > selected.length) {
         setStatus(`الفئة تستوعب ${maximum} صور فقط.`);

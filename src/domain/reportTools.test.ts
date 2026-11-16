@@ -15,9 +15,10 @@ describe('report tools access', () => {
     expect(canUseReportTools(null)).toBe(false);
   });
 
-  it('lists the four attached report generators', () => {
+  it('lists the available report generators', () => {
     expect(reportTools.map(({ label }) => label)).toEqual([
       'منجز تقارير النظافة',
+      'منجز تقارير تحضير عمالة النظافة',
       'منجز تقارير الصيانة و التكييف',
       'منجز تقارير غسيل الخزانات',
       'منجز تقارير مكافحة الافات',

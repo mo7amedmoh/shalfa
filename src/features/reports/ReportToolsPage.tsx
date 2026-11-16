@@ -1,8 +1,8 @@
-import { Bug, ChevronLeft, FileText, Sparkles, Wrench, Droplets } from 'lucide-react';
+import { Bug, ChevronLeft, Droplets, FileText, Sparkles, Users, Wrench } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { reportTools } from '../../domain/reportTools';
 
-const icons = [Sparkles, Wrench, Droplets, Bug] as const;
+const icons = [Sparkles, Users, Wrench, Droplets, Bug] as const;
 
 export function ReportToolsPage() {
   return (

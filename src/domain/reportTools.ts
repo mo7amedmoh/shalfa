@@ -7,6 +7,11 @@ export const reportTools = [
     description: 'إنشاء تقرير التنظيف العميق من قالب Excel وإضافة صور المدرسة.',
   },
   {
+    id: 'cleaning-attendance',
+    label: 'منجز تقارير تحضير عمالة النظافة',
+    description: 'إنشاء تقرير تحضير عمالة النظافة من قالب PowerPoint وإضافة صورة في كل شريحة.',
+  },
+  {
     id: 'maintenance',
     label: 'منجز تقارير الصيانة و التكييف',
     description: 'إنشاء تقارير الصيانة والتكييف مع الصور المطلوبة لكل فئة.',

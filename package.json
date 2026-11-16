@@ -19,10 +19,12 @@
     "verify:schema": "tsx scripts/verify-schema.ts"
   },
   "dependencies": {
+    "@aiden0z/pptx-renderer": "1.4.0",
     "@fontsource/cairo": "5.2.6",
     "@supabase/supabase-js": "2.118.0",
     "@tanstack/react-query": "5.66.9",
     "@tanstack/react-query-persist-client": "^5.66.9",
+    "exceljs": "^4.4.0",
     "html-to-image": "^1.11.13",
     "jspdf": "^4.2.1",
     "jszip": "^3.10.1",

@@ -33,9 +33,7 @@ export function PlanManagementPage({ profile }: { profile: UserProfile }) {
     try {
       const counts = await exportAllPlans();
       setExportMessage(
-        `تم التصدير: ${counts.monthlyPlans} خطة شهرية و${counts.monthlyRows} سجل، `
-        + `${counts.generalPlans} خطة عامة و${counts.generalRows} سجل، `
-        + `${counts.customTypes} نوع مخصص و${counts.customPlans} فترة و${counts.customRows} سجل.`,
+        `تم التصدير: ${counts.summaryRows} صفًا في ورقة ملخص الخطط، تمثل ${counts.records} سجل خطة.`,
       );
     } catch (error) {
       setExportMessage(`تعذر تصدير الخطط: ${error instanceof Error ? error.message : String(error)}`);

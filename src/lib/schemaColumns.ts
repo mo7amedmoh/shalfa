@@ -96,7 +96,7 @@ export const APP_SCHEMA_SELECT = {
   supervisorAliases: 'alias_normalised,employee_id',
   monthlyPlanRows: 'id,school_id,planned_date,visited,visited_at:visited_date,report_completed_at:report_done_date,engineer_id,engineer_name,supervisor_id,supervisor_name,contractor_name,school:schools(school_name:name,ministry_number:ministry_no,ministry_key,source_fields:extra)',
   monthlyPlanRowsForReport: 'id,planned_date,visited_at:visited_date,report_completed_at:report_done_date,supervisor_id,supervisor_name,school:schools(source_fields:extra)',
-  monthlyReportPlanRows: 'id,plan_id,school_id,planned_date,updated_at,visited,visited_date,report_done,report_done_date,engineer_id,engineer_name,supervisor_id,supervisor_name,contractor_name,school:schools(name,ministry_no,neighbourhood)',
+  monthlyReportPlanRows: 'id,plan_id,school_id,planned_date,updated_at,visited,visited_date,report_done,report_done_date,engineer_id,engineer_name,supervisor_id,supervisor_name,contractor_name,school:schools(name,ministry_no,neighbourhood,source_fields:extra)',
   monthlyReportPlanHeaders: 'id,plan_type,month,late_by_planned_date',
   monthlyPlanList: 'id,plan_month:month,late_by_planned_date',
   monthlyPlanSchoolIds: 'school_id',

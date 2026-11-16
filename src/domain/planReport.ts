@@ -1,5 +1,5 @@
 import type { PlanType } from './types';
-import { normalizeImportName } from './imports';
+import { normalizeImportName, schoolPersonDefault } from './imports';
 
 export type ReportAxis = 'maintenance' | 'cleaning' | 'elevators' | 'security_safety';
 export type ReportAxisFilter = ReportAxis | 'all';
@@ -27,6 +27,23 @@ export type ReportPlanRow = {
   hasCleaner: boolean;
   updatedAt?: string | null;
 };
+
+export function reportSupervisorForPlanRow(input: {
+  planType: ReportAxis;
+  supervisorId: string | null;
+  supervisorName: string | null;
+  schoolSourceFields?: Record<string, unknown> | null;
+}): { supervisorId: string | null; supervisorName: string | null } {
+  if (input.planType === 'cleaning') {
+    const sourceName = schoolPersonDefault(
+      { source_fields: input.schoolSourceFields ?? {} },
+      'supervisor',
+      'cleaning',
+    );
+    if (sourceName) return { supervisorId: null, supervisorName: sourceName };
+  }
+  return { supervisorId: input.supervisorId, supervisorName: input.supervisorName };
+}
 
 export type ReportPlanMetricRow = Pick<
   ReportPlanRow,

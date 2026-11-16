@@ -95,13 +95,16 @@ export function ReportsSection({ reports, formatNumber }: ReportData) {
 export function LateItemsSection({ lateItems, formatNumber }: ReportData) {
   const visibleItems = lateItems.slice(0, 30);
   const remaining = Math.max(0, lateItems.length - visibleItems.length);
-  return <SectionCard title="متابعة المتأخرات">
-    {visibleItems.length ? <div className="report-export-table"><table className="w-full text-sm"><colgroup><col className="report-late-school-column" /><col className="report-late-kind-column" /><col className="report-late-date-column" /><col className="report-late-days-column" /><col className="report-late-supervisor-column" /></colgroup><thead><tr><th>المدرسة</th><th>النوع</th><th>بداية التأخر</th><th>التأخر</th><th>المشرف</th></tr></thead><tbody>{visibleItems.map((item) => <tr key={item.id}><td>{item.schoolName}</td><td>{item.kind}</td><td><bdi dir="ltr">{formatNumber(`${item.lateSince.slice(8, 10)}/${item.lateSince.slice(5, 7)}/${item.lateSince.slice(0, 4)}`)}</bdi></td><td>{formatNumber(item.daysLate)} يوم</td><td>{item.supervisorName}</td></tr>)}</tbody></table>{remaining > 0 && <p className="report-export-more">+{formatNumber(remaining)} أخرى</p>}</div> : <p className="report-empty">لا توجد عناصر متأخرة.</p>}
+  return <SectionCard title="متابعة متأخرات الصيانة">
+    {visibleItems.length ? <div className="report-export-table"><table className="w-full text-sm"><colgroup><col className="report-late-school-column" /><col className="report-late-service-column" /><col className="report-late-kind-column" /><col className="report-late-date-column" /><col className="report-late-days-column" /><col className="report-late-supervisor-column" /></colgroup><thead><tr><th>المدرسة</th><th>الخدمة</th><th>المتأخر</th><th>بداية التأخر</th><th>مدة التأخر</th><th>المشرف</th></tr></thead><tbody>{visibleItems.map((item) => <tr key={item.id}><td>{item.schoolName}</td><td>{item.service}</td><td>{item.kind}</td><td><bdi dir="ltr">{formatNumber(`${item.lateSince.slice(8, 10)}/${item.lateSince.slice(5, 7)}/${item.lateSince.slice(0, 4)}`)}</bdi></td><td>{formatNumber(item.daysLate)} يوم</td><td>{item.supervisorName}</td></tr>)}</tbody></table>{remaining > 0 && <p className="report-export-more">+{formatNumber(remaining)} أخرى</p>}</div> : <p className="report-empty">لا توجد عناصر متأخرة.</p>}
   </SectionCard>;
 }
 
 export function CleaningSupervisorsSection({ cleaningSupervisors, formatNumber }: ReportData) {
-  return <SectionCard title="زيارات مشرفي النظافة">
-    {cleaningSupervisors.length ? <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr><th>المشرف</th><th>المخطط</th><th>الزيارات</th><th>التقارير</th></tr></thead><tbody>{cleaningSupervisors.map((item) => <tr key={item.id}><td>{item.name}</td><td>{formatNumber(item.planned)}</td><td>{formatNumber(item.visited)}</td><td>{formatNumber(item.reportsDone)}</td></tr>)}</tbody></table></div> : <p className="report-empty">لا توجد بيانات لمشرفي النظافة.</p>}
+  return <SectionCard title="الزيارات حسب المشرف — النظافة" className="report-supervisors-card">
+    <div className="report-supervisor-legend"><span><i className="green" /> منجز</span><span><i className="red" /> متأخر</span><span><i className="empty" /> متبقي</span></div>
+    {cleaningSupervisors.length
+      ? cleaningSupervisors.map((supervisor) => <SupervisorRow key={supervisor.id} supervisor={supervisor} formatNumber={formatNumber} />)
+      : <p className="report-empty">لا توجد بيانات مشرفين للنظافة.</p>}
   </SectionCard>;
 }

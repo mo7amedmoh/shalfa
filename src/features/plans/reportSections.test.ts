@@ -17,4 +17,41 @@ describe('report layout persistence', () => {
     expect(layout.find((item) => item.id === 'late-items')?.visible).toBe(false);
     expect(getReportLayout(layout).map((section) => section.id)).toEqual(['reports', 'services', 'summary', 'supervisors', 'cumulative']);
   });
+
+  it('moves cleaning supervisors before the cumulative report when all sections are selected', () => {
+    const allSections = defaultReportLayout.map((item) => ({ ...item, visible: true }));
+    expect(getReportLayout(allSections).map((section) => section.id)).toEqual([
+      'header',
+      'services',
+      'summary',
+      'supervisors',
+      'cleaning-supervisors',
+      'cumulative',
+      'reports',
+      'late-items',
+    ]);
+  });
+
+  it('updates users who had the previous default order without overwriting custom order', () => {
+    const previousDefault = [
+      'header',
+      'services',
+      'summary',
+      'supervisors',
+      'cumulative',
+      'reports',
+      'late-items',
+      'cleaning-supervisors',
+    ].map((id) => ({ id, visible: true }));
+    expect(getReportLayout(normalizeReportLayout(previousDefault)).map((section) => section.id)).toEqual([
+      'header',
+      'services',
+      'summary',
+      'supervisors',
+      'cleaning-supervisors',
+      'cumulative',
+      'reports',
+      'late-items',
+    ]);
+  });
 });

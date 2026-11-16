@@ -2855,11 +2855,12 @@ th {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
-.report-export-mode .report-late-school-column { width: 42%; }
-.report-export-mode .report-late-kind-column { width: 14%; }
-.report-export-mode .report-late-date-column { width: 16%; }
-.report-export-mode .report-late-days-column { width: 12%; }
-.report-export-mode .report-late-supervisor-column { width: 16%; }
+.report-export-mode .report-late-school-column { width: 34%; }
+.report-export-mode .report-late-service-column { width: 14%; }
+.report-export-mode .report-late-kind-column { width: 12%; }
+.report-export-mode .report-late-date-column { width: 15%; }
+.report-export-mode .report-late-days-column { width: 10%; }
+.report-export-mode .report-late-supervisor-column { width: 15%; }
 .report-export-mode thead {
   display: table-header-group;
 }
@@ -2906,6 +2907,20 @@ th {
 .report-export-section-capture {
   display: block;
   padding: 8px 16px;
+}
+.report-export-side-by-side {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+.report-export-side-by-side > .report-section-wrapper {
+  display: flex;
+  align-self: stretch;
+  min-width: 0;
+}
+.report-export-side-by-side .report-design-card {
+  flex: 1;
 }
 .report-export-long-page .report-design-header,
 .report-export-long-page .report-design-card {
@@ -2959,6 +2974,10 @@ th {
 }
 .report-export-mode .report-line-chart {
   height: 230px;
+}
+.report-export-long-page .report-line-chart:not(.ticket-sla-svg) {
+  height: auto;
+  aspect-ratio: 1000 / 310;
 }
 .report-export-mode .report-donut-layout {
   padding: 0;

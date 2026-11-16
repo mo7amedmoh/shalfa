@@ -7,15 +7,15 @@ export type ReportService = {
   reportsDone: number; reportRemaining: number; reportPercent: number; overallPercent: number; expectedVisits: number;
   pillTone: 'on-track' | 'slightly-behind' | 'far-behind' | 'no-plan';
 };
-export type ReportSupervisor = { id: string; name: string; planned: number; visited: number; donePercent: number; latePercent: number };
+export type ReportSupervisor = { id: string; name: string; planned: number; visited: number; reportsDone: number; donePercent: number; latePercent: number };
 export type ReportData = {
   monthLabel: string; asOfLabel: string; schools: number; planned: number;
   lastUpdate: string; status: { late: boolean; label: string }; logoPath: string; services: ReportService[];
   totalService: ReportService; summaryCards: Array<{ label: string; value: number; tone: string }>;
   supervisors: ReportSupervisor[]; chart: { points: Array<{ x: number; yActual: number; yPlanned: number; actualVisible: boolean }>; xLabels: Array<{ x: number; label: string }>; yTicks: Array<{ y: number; label: string }>; todayX: number; todayY: number; forecastY: number; forecastPoints: boolean; todayLabel: string; max: number };
   reports: { percent: number; uploaded: number; remaining: number; total: number; byService: Array<{ id: string; label: string; uploaded: number; planned: number }> }; formatNumber: ReportFormatNumber;
-  lateItems: Array<{ id: string; schoolName: string; kind: string; plannedDate: string; lateSince: string; daysLate: number; supervisorName: string }>;
-  cleaningSupervisors: Array<{ id: string; name: string; planned: number; visited: number; reportsDone: number }>;
+  lateItems: Array<{ id: string; schoolName: string; service: string; kind: string; plannedDate: string; lateSince: string; daysLate: number; supervisorName: string }>;
+  cleaningSupervisors: ReportSupervisor[];
   Header?: unknown; Services?: unknown; Summary?: unknown; Supervisors?: unknown; Cumulative?: unknown; Reports?: unknown;
 };
 
@@ -36,6 +36,18 @@ function service(axis: AxisSummary, expectedVisits: number): ReportService {
   };
 }
 
+function reportSupervisor(supervisor: PlanReportView['supervisors'][number]): ReportSupervisor {
+  return {
+    id: supervisor.id,
+    name: supervisor.name,
+    planned: supervisor.planned,
+    visited: supervisor.visited,
+    reportsDone: supervisor.reportsDone,
+    donePercent: supervisor.planned ? (supervisor.visited / supervisor.planned) * 100 : 0,
+    latePercent: supervisor.planned ? (supervisor.lateVisits / supervisor.planned) * 100 : 0,
+  };
+}
+
 export function buildReportData(view: PlanReportView, rows: readonly ReportPlanRow[], month: string, asOf: string, formatNumber: ReportFormatNumber): ReportData {
   const services = (['maintenance', 'cleaning', 'security_safety', 'elevators'] as const).map((id) => {
     const axis = view.axes.find((item) => item.axis === id)!;
@@ -48,6 +60,8 @@ export function buildReportData(view: PlanReportView, rows: readonly ReportPlanR
   const totalService: ReportService = { id: 'total', label: 'الإجمالي', ...totalAxis, visitPercent: totalAxis.planned ? (totalAxis.visited / totalAxis.planned) * 100 : 0, reportPercent: totalAxis.planned ? (totalAxis.reportsDone / totalAxis.planned) * 100 : 0, overallPercent: totalOverall, expectedVisits: totalExpected, pillTone: totalAxis.planned ? (totalOverall - (totalExpected / totalAxis.planned) * 100 >= -5 ? 'on-track' : totalOverall - (totalExpected / totalAxis.planned) * 100 >= -15 ? 'slightly-behind' : 'far-behind') : 'no-plan' };
   const maintenanceRows = rows.filter((row) => row.planType === 'maintenance');
   const maintenanceView = buildPlanReportView(maintenanceRows, month, asOf);
+  const cleaningRows = rows.filter((row) => row.planType === 'cleaning');
+  const cleaningView = buildPlanReportView(cleaningRows, month, asOf);
   const maintenancePlanned = maintenanceView.axes.find((axis) => axis.axis === 'maintenance')?.planned ?? 0;
   const days = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate();
   const elapsed = Math.min(days, Math.max(0, Number(asOf.slice(8, 10))));
@@ -64,7 +78,7 @@ export function buildReportData(view: PlanReportView, rows: readonly ReportPlanR
   const performanceRows = rows.filter((row) => row.lateByPlannedDate === false);
   const performanceMetrics = performanceRows.length ? summarizePlanReport(performanceRows, month, asOf) : null;
   const performanceGap = Math.max(0, (performanceMetrics?.expectedVisits ?? 0) - (performanceMetrics?.visited ?? 0));
-  const cleaningSupervisors = view.supervisors.filter((supervisor) => rows.some((row) => row.planType === 'cleaning' && (row.supervisorId ?? `name:${row.supervisorName}`) === supervisor.id)).map((supervisor) => ({ id: supervisor.id, name: supervisor.name, planned: supervisor.planned, visited: supervisor.visited, reportsDone: supervisor.reportsDone }));
+  const cleaningSupervisors = cleaningView.supervisors.map(reportSupervisor);
   const latestUpdatedAt = rows.map((row) => row.updatedAt).filter((value): value is string => Boolean(value)).sort().at(-1);
   const lastUpdate = latestUpdatedAt ? `${formatDate(latestUpdatedAt.slice(0, 10), formatNumber)} · ${latestUpdatedAt.slice(11, 16)}` : 'غير متاح';
   return {
@@ -72,8 +86,17 @@ export function buildReportData(view: PlanReportView, rows: readonly ReportPlanR
       ? { late: true, label: `متأخر ${formatNumber(late)} زيارة حسب الموعد المخطط · بدأ التأخر ${lateStartLabel}` }
       : performanceGap
         ? { late: false, label: `الإنجاز أقل من وتيرة الإنجاز المستهدفة بـ ${formatNumber(performanceGap)} زيارة` }
-        : { late: false, label: 'على المسار' }, logoPath: '/brand/logo.png', services, totalService, summaryCards: [{ label: 'الزيارات المخططة', value: totalAxis.planned, tone: 'navy' }, { label: 'الزيارات المنجزة', value: totalAxis.visited, tone: 'green' }, { label: 'التقارير المرفوعة', value: totalAxis.reportsDone, tone: 'navy' }, { label: 'زيارات متأخرة', value: view.metrics.lateVisits, tone: 'red' }, { label: 'تمت بدون تقرير', value: Math.max(0, totalAxis.visited - services.reduce((sum, item) => sum + (view.axes.find((axis) => axis.axis === item.id)?.completed ?? 0), 0)), tone: 'amber' }], supervisors: view.supervisors.filter((supervisor) => rows.some((row) => row.planType === 'maintenance' && (row.supervisorId ?? `name:${row.supervisorName}`) === supervisor.id)).map((supervisor) => ({ id: supervisor.id, name: supervisor.name, planned: supervisor.planned, visited: supervisor.visited, donePercent: supervisor.planned ? (supervisor.visited / supervisor.planned) * 100 : 0, latePercent: supervisor.planned ? (supervisor.lateVisits / supervisor.planned) * 100 : 0 })), chart: { points, xLabels, yTicks, todayX: todayPoint.x, todayY: todayPoint.yActual, forecastY, forecastPoints: Boolean(maintenanceView.forecast.estimate), todayLabel: formatNumber(Number(asOf.slice(8, 10))) + '/' + formatNumber(Number(asOf.slice(5, 7))), max, },     reports: { percent: totalAxis.planned ? (totalAxis.reportsDone / totalAxis.planned) * 100 : 0, uploaded: totalAxis.reportsDone, remaining: totalAxis.reportRemaining, total: totalAxis.planned, byService: services.map((item) => ({ id: item.id, label: item.label, uploaded: item.reportsDone, planned: item.planned })) }, formatNumber,
-    lateItems: view.lateItems.slice(0, 60).map((item) => ({ id: item.id, schoolName: item.schoolName, kind: item.kind === 'visit' ? 'زيارة' : 'تقرير', plannedDate: item.plannedDate, lateSince: item.lateSince, daysLate: item.daysLate, supervisorName: item.supervisorName })),
+        : { late: false, label: 'على المسار' }, logoPath: '/brand/logo.png', services, totalService, summaryCards: [{ label: 'الزيارات المخططة', value: totalAxis.planned, tone: 'navy' }, { label: 'الزيارات المنجزة', value: totalAxis.visited, tone: 'green' }, { label: 'التقارير المرفوعة', value: totalAxis.reportsDone, tone: 'navy' }, { label: 'زيارات متأخرة', value: view.metrics.lateVisits, tone: 'red' }, { label: 'تمت بدون تقرير', value: Math.max(0, totalAxis.visited - services.reduce((sum, item) => sum + (view.axes.find((axis) => axis.axis === item.id)?.completed ?? 0), 0)), tone: 'amber' }], supervisors: maintenanceView.supervisors.map(reportSupervisor), chart: { points, xLabels, yTicks, todayX: todayPoint.x, todayY: todayPoint.yActual, forecastY, forecastPoints: Boolean(maintenanceView.forecast.estimate), todayLabel: formatNumber(Number(asOf.slice(8, 10))) + '/' + formatNumber(Number(asOf.slice(5, 7))), max, },     reports: { percent: totalAxis.planned ? (totalAxis.reportsDone / totalAxis.planned) * 100 : 0, uploaded: totalAxis.reportsDone, remaining: totalAxis.reportRemaining, total: totalAxis.planned, byService: services.map((item) => ({ id: item.id, label: item.label, uploaded: item.reportsDone, planned: item.planned })) }, formatNumber,
+    lateItems: maintenanceView.lateItems.slice(0, 60).map((item) => ({
+      id: item.id,
+      schoolName: item.schoolName,
+      service: labels[item.axis] ?? item.axis,
+      kind: item.kind === 'visit' ? 'زيارة' : 'تقرير',
+      plannedDate: item.plannedDate,
+      lateSince: item.lateSince,
+      daysLate: item.daysLate,
+      supervisorName: item.supervisorName,
+    })),
     cleaningSupervisors,
   };
 }

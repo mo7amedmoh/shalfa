@@ -32,6 +32,61 @@ function reportData(rows: ReportPlanRow[], asOf = '2026-11-10') {
 }
 
 describe('monthly report presentation data', () => {
+  it('calculates maintenance and cleaning supervisor achievements from their own plans', () => {
+    const data = reportData([
+      row('maintenance', {
+        planType: 'maintenance',
+        supervisorId: 'shared-supervisor',
+        supervisorName: 'مشرف الصيانة',
+        visited: true,
+        visitedDate: '2026-11-05',
+        reportDone: true,
+        reportCompletedDate: '2026-11-05',
+      }),
+      row('cleaning-done', {
+        planType: 'cleaning',
+        supervisorId: 'shared-supervisor',
+        supervisorName: 'مشرف النظافة',
+        visited: true,
+        visitedDate: '2026-11-05',
+        reportDone: true,
+        reportCompletedDate: '2026-11-05',
+      }),
+      row('cleaning-late', {
+        planType: 'cleaning',
+        supervisorId: 'shared-supervisor',
+        supervisorName: 'مشرف النظافة',
+        plannedDate: '2026-11-05',
+      }),
+    ]);
+
+    expect(data.supervisors).toMatchObject([
+      { name: 'مشرف الصيانة', planned: 1, visited: 1, donePercent: 100, latePercent: 0 },
+    ]);
+    expect(data.cleaningSupervisors).toMatchObject([
+      { name: 'مشرف النظافة', planned: 2, visited: 1, reportsDone: 1, donePercent: 50, latePercent: 50 },
+    ]);
+  });
+
+  it('limits follow-up late items to maintenance and includes the service name', () => {
+    const data = reportData([
+      row('maintenance-late', {
+        planType: 'maintenance',
+        plannedDate: '2026-11-05',
+        supervisorName: 'مشرف الصيانة',
+      }),
+      row('cleaning-late', {
+        planType: 'cleaning',
+        plannedDate: '2026-11-05',
+        supervisorName: 'مشرف النظافة',
+      }),
+    ]);
+
+    expect(data.lateItems).toMatchObject([
+      { id: 'maintenance-late:visit', service: 'الصيانة والتكييف', kind: 'زيارة', supervisorName: 'مشرف الصيانة' },
+    ]);
+  });
+
   it('cuts the actual cumulative line off at the as-of date and continues the forecast', () => {
     const data = reportData([
       row('done', { visited: true, visitedDate: '2026-11-05' }),

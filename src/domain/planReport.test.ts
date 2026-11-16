@@ -4,6 +4,7 @@ import {
   filterPlanReportActionRows,
   filterPlanReportRows,
   rankSupervisorsByLateness,
+  reportSupervisorForPlanRow,
   rowsForAxisStatus,
   summarizeDashboardVerdict,
   summarizePlanReport,
@@ -33,6 +34,22 @@ const row = (values: Partial<ReportPlanRow> = {}): ReportPlanRow => ({
 });
 
 describe('monthly plan report metrics', () => {
+  it('uses the school database cleaning supervisor instead of a stale employee assignment', () => {
+    expect(reportSupervisorForPlanRow({
+      planType: 'cleaning',
+      supervisorId: 'old-supervisor',
+      supervisorName: 'مشرف سابق',
+      schoolSourceFields: { 'اسم المشرف (نظافة)': 'مشرف النظافة المعتمد' },
+    })).toEqual({ supervisorId: null, supervisorName: 'مشرف النظافة المعتمد' });
+
+    expect(reportSupervisorForPlanRow({
+      planType: 'maintenance',
+      supervisorId: 'maintenance-supervisor',
+      supervisorName: 'مشرف الصيانة',
+      schoolSourceFields: { 'اسم المشرف (نظافة)': 'مشرف النظافة المعتمد' },
+    })).toEqual({ supervisorId: 'maintenance-supervisor', supervisorName: 'مشرف الصيانة' });
+  });
+
   it('returns zero-safe metrics for a month with no plan rows', () => {
     expect(summarizePlanReport([], '2026-11', '2026-11-15')).toMatchObject({
       planned: 0,

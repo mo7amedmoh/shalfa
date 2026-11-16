@@ -4,7 +4,15 @@ import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronUp, Download, Printer, Settings, X } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
-import { buildPlanReportView, filterPlanReportActionRows, filterPlanReportRows, type ReportActionFilter, type ReportAxisFilter, type ReportPlanRow } from '../../domain/planReport';
+import {
+  buildPlanReportView,
+  filterPlanReportActionRows,
+  filterPlanReportRows,
+  reportSupervisorForPlanRow,
+  type ReportActionFilter,
+  type ReportAxisFilter,
+  type ReportPlanRow,
+} from '../../domain/planReport';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
@@ -17,7 +25,12 @@ const planHeaderSchema = z.object({ id: z.string().uuid(), plan_type: z.enum(['m
 const reportRowSchema = z.object({
   id: z.string().uuid(), plan_id: z.string().uuid(), school_id: z.string().uuid(), planned_date: z.string(), updated_at: z.string().nullable().optional(), visited: z.boolean(), visited_date: z.string().nullable(), report_done: z.boolean(), report_done_date: z.string().nullable(),
   engineer_id: z.string().uuid().nullable(), engineer_name: z.string().nullable(), supervisor_id: z.string().uuid().nullable(), supervisor_name: z.string().nullable(), contractor_name: z.string().nullable(),
-  school: z.object({ name: z.string(), ministry_no: z.string(), neighbourhood: z.string().nullable() }).nullable(),
+  school: z.object({
+    name: z.string(),
+    ministry_no: z.string(),
+    neighbourhood: z.string().nullable(),
+    source_fields: z.record(z.string(), z.unknown()),
+  }).nullable(),
 });
 const employeeSchema = z.object({ id: z.string().uuid(), full_name: z.string() });
 const cleanerSchema = z.object({ school_id: z.string().uuid() });
@@ -65,11 +78,20 @@ async function fetchMonthRows(month: string): Promise<ReportPlanRow[]> {
   if (cleaners.error) throw cleaners.error;
   const names = new Map(z.array(employeeSchema).parse(employees.data).map((employee) => [employee.id, employee.full_name]));
   const cleanerIds = new Set(z.array(cleanerSchema).parse(cleaners.data).map((row) => row.school_id));
-  return rows.map((row) => ({
-    id: row.id, planId: row.plan_id, lateByPlannedDate: plans.find((plan) => plan.id === row.plan_id)!.late_by_planned_date, month, planType: plans.find((plan) => plan.id === row.plan_id)!.plan_type, plannedDate: row.planned_date, visited: row.visited, visitedDate: row.visited_date, reportDone: row.report_done, reportCompletedDate: row.report_done_date, updatedAt: row.updated_at ?? null,
-    engineerId: row.engineer_id, engineerName: row.engineer_id ? names.get(row.engineer_id) ?? row.engineer_name : row.engineer_name, supervisorId: row.supervisor_id, supervisorName: row.supervisor_id ? names.get(row.supervisor_id) ?? row.supervisor_name : row.supervisor_name, contractorName: row.contractor_name,
-    schoolId: row.school_id, schoolName: row.school?.name ?? 'مدرسة غير معروفة', ministryNumber: row.school?.ministry_no ?? '', neighbourhood: row.school?.neighbourhood ?? 'غير محدد', hasCleaner: cleanerIds.has(row.school_id),
-  }));
+  return rows.map((row) => {
+    const plan = plans.find((item) => item.id === row.plan_id)!;
+    const supervisor = reportSupervisorForPlanRow({
+      planType: plan.plan_type,
+      supervisorId: row.supervisor_id,
+      supervisorName: row.supervisor_id ? names.get(row.supervisor_id) ?? row.supervisor_name : row.supervisor_name,
+      schoolSourceFields: row.school?.source_fields,
+    });
+    return {
+      id: row.id, planId: row.plan_id, lateByPlannedDate: plan.late_by_planned_date, month, planType: plan.plan_type, plannedDate: row.planned_date, visited: row.visited, visitedDate: row.visited_date, reportDone: row.report_done, reportCompletedDate: row.report_done_date, updatedAt: row.updated_at ?? null,
+      engineerId: row.engineer_id, engineerName: row.engineer_id ? names.get(row.engineer_id) ?? row.engineer_name : row.engineer_name, supervisorId: supervisor.supervisorId, supervisorName: supervisor.supervisorName, contractorName: row.contractor_name,
+      schoolId: row.school_id, schoolName: row.school?.name ?? 'مدرسة غير معروفة', ministryNumber: row.school?.ministry_no ?? '', neighbourhood: row.school?.neighbourhood ?? 'غير محدد', hasCleaner: cleanerIds.has(row.school_id),
+    };
+  });
 }
 async function loadReport(month: string): Promise<LoadedReport> {
   const [current, previous] = await Promise.all([fetchMonthRows(month), fetchMonthRows(previousMonth(month))]);
@@ -95,6 +117,7 @@ export function MonthlyReportPage({ fixture }: { fixture?: LoadedReport } = {}) 
   const actionFilter = reportActionFilter(searchParams.get('action'));
   const reportElementRef = useRef<HTMLDivElement>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [pdfError, setPdfError] = useState('');
   const [layout, setLayout] = useState<ReportLayoutItem[]>([...defaultReportLayout]);
   const [draftLayout, setDraftLayout] = useState<ReportLayoutItem[]>([...defaultReportLayout]);
   const [customizing, setCustomizing] = useState(false);
@@ -138,9 +161,15 @@ export function MonthlyReportPage({ fixture }: { fixture?: LoadedReport } = {}) 
     <FilterBar {...{ month, setMonth, asOf, setAsOf, axis, setAxis, engineerId, setEngineerId, supervisorId, setSupervisorId, neighbourhood, setNeighbourhood, engineers, supervisors, neighbourhoods }} onExcel={() => void exportWorkbook(view)} onPrint={() => window.print()} onCustomize={() => { setDraftLayout(layout); setCustomizing(true); }} onPdf={() => {
       if (!reportElementRef.current || isExporting) return;
       setIsExporting(true);
-      void exportReportPdf(reportElementRef.current, `تقرير-متابعة-الخطة-${month.slice(0, 4)}-${month.slice(5, 7)}.pdf`)
+      setPdfError('');
+      void exportReportPdf(reportElementRef.current, `تقرير-متابعة-الخطة-${month.slice(0, 4)}-${month.slice(5, 7)}.pdf`, undefined, {
+        singleLongPage: true,
+        sideBySideSectionGroups: [['supervisors', 'cleaning-supervisors']],
+      })
+        .catch((error: unknown) => setPdfError(error instanceof Error ? error.message : 'تعذر تصدير التقرير إلى PDF.'))
         .finally(() => setIsExporting(false));
     }} isExporting={isExporting} />
+    {pdfError && <p role="status" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{pdfError}</p>}
     {actionFilter && <div role="status" className="card flex flex-wrap items-center justify-between gap-2 p-3 text-sm text-brand-900">
       <span>
         {actionFilter === 'late-visits'

@@ -2,6 +2,28 @@ const defaultCoreSectionIds = ['header', 'services', 'summary', 'supervisors', '
 
 interface ExportReportPdfOptions {
   singleLongPage?: boolean;
+  sideBySideSectionGroups?: readonly (readonly string[])[];
+}
+
+export function groupReportPdfSections<T>(
+  sections: readonly { id: string; content: T }[],
+  sideBySideGroups: readonly (readonly string[])[],
+): Array<{ sections: T[]; sideBySide: boolean }> {
+  const remaining = new Set(sections);
+  const groups: Array<{ sections: T[]; sideBySide: boolean }> = [];
+  for (const section of sections) {
+    if (!remaining.has(section)) continue;
+    const sideBySideGroup = sideBySideGroups.find((group) => group.includes(section.id));
+    const members = sideBySideGroup
+      ? sideBySideGroup.flatMap((id) => {
+        const member = sections.find((candidate) => candidate.id === id && remaining.has(candidate));
+        return member ? [member] : [];
+      })
+      : [section];
+    members.forEach((member) => remaining.delete(member));
+    groups.push({ sections: members.map((member) => member.content), sideBySide: members.length > 1 });
+  }
+  return groups;
 }
 
 export async function exportReportPdf(
@@ -40,14 +62,26 @@ export async function exportReportPdf(
     };
     if (options.singleLongPage) {
       const letterWidthMm = 279.4;
-      const sectionClones = [...clone.children].map((section) => section.cloneNode(true) as HTMLElement);
-      if (!sectionClones.length) throw new Error('لا توجد أقسام ظاهرة في التقرير لتصديرها.');
+      const sourceSections = [...clone.children] as HTMLElement[];
+      const sectionGroups = groupReportPdfSections(sourceSections.map((section) => ({
+        id: section.dataset.sectionId ?? '',
+        content: section,
+      })), options.sideBySideSectionGroups ?? []);
+      if (!sectionGroups.length) throw new Error('لا توجد أقسام ظاهرة في التقرير لتصديرها.');
       clone.remove();
-      const captures = sectionClones.map((section) => {
+      const captures = sectionGroups.map(({ sections, sideBySide }) => {
         const capture = document.createElement('div');
         capture.className = 'report-design-page report-export-mode report-export-long-page report-export-section-capture';
         capture.dir = clone.dir || 'rtl';
-        capture.appendChild(section);
+        if (sideBySide) {
+          const pair = document.createElement('div');
+          pair.className = 'report-export-side-by-side';
+          pair.dir = 'rtl';
+          sections.forEach((section) => pair.appendChild(section.cloneNode(true)));
+          capture.appendChild(pair);
+        } else {
+          capture.appendChild(sections[0].cloneNode(true));
+        }
         host.appendChild(capture);
         return capture;
       });

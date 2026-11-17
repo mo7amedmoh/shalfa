@@ -351,8 +351,9 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
     }
   };
   const previewImportRows = async (file: File | undefined) => {
-    if (!file || !canManage(profile) || !planId) return;
+    if (!file || !canManage(profile)) return;
     setMessage('');
+    setImportPreview(null);
     setImportResult([]);
     try {
       const XLSX = await loadXlsx();
@@ -389,7 +390,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
     }
   };
   const applyImportRows = async () => {
-    if (!supabase || !planId || !canManage(profile) || !importPreview) return;
+    if (!supabase || !canManage(profile) || !importPreview || !type) return;
     setMessage('');
     const result: CustomImportResult[] = [];
     try {
@@ -413,10 +414,25 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
           ready.push({ source, school });
         }
       }
+      let targetPlanId = planId;
+      if (ready.length > 0 && !targetPlanId) {
+        const validPeriod = type.cadence === 'monthly'
+          ? /^\d{4}-(0[1-9]|1[0-2])$/.test(period)
+          : /^\d{4}$/.test(period);
+        if (!validPeriod) throw new Error('اختر فترة صحيحة قبل استيراد الخطة.');
+        const { data: plan, error: planError } = await supabase.from('custom_plans')
+          .upsert({ type_id: type.id, period: periodFor(type.cadence, period) }, { onConflict: 'type_id,period' })
+          .select('id')
+          .single();
+        if (planError) throw planError;
+        targetPlanId = plan.id;
+        setPlanId(targetPlanId);
+        await queryClient.invalidateQueries({ queryKey: ['custom-plans', typeId] });
+      }
       for (let offset = 0; offset < ready.length; offset += 100) {
         const batch = ready.slice(offset, offset + 100);
         const payload = batch.map(({ source, school }) => ({
-          plan_id: planId, school_id: school.id, planned_date: source.plannedDate,
+          plan_id: targetPlanId, school_id: school.id, planned_date: source.plannedDate,
           supervisor_name: source.supervisorName, engineer_name: source.engineerName, status: 'planned',
         }));
         const { error } = await supabase.from('custom_plan_rows').upsert(payload, { onConflict: 'plan_id,school_id' });
@@ -431,7 +447,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
       }
       setImportResult(result.sort((a, b) => a.line - b.line));
       setMessage(`تمت معالجة ${ready.length} صفاً صالحاً. راجع الصفوف غير المحسومة قبل إغلاق المعاينة.`);
-      await queryClient.invalidateQueries({ queryKey: ['custom-plan-rows', planId] });
+      if (targetPlanId) await queryClient.invalidateQueries({ queryKey: ['custom-plan-rows', targetPlanId] });
     } catch (error) {
       const details = error instanceof Error ? error.message : String(error);
       setImportResult(importPreview.map((row) => ({ line: row.line, ministry: row.ministry, status: 'تحتاج مراجعة', note: details })));
@@ -458,7 +474,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
     : '';
   return <div className="grid gap-5">
     <section className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm text-slate-500">خطة مخصصة</p><h2 className="mt-1 text-2xl font-bold text-brand-900">{type.name}</h2></div><div className="flex flex-wrap gap-2">
-      {canManage(profile) && <><label className="cursor-pointer rounded-lg border border-slate-300 px-3 py-2 text-sm">معاينة استيراد Excel<input className="hidden" type="file" accept=".xlsx,.xls" disabled={!planId || candidates.isLoading || Boolean(candidateError)} onChange={(event) => { void previewImportRows(event.target.files?.[0]); event.currentTarget.value = ''; }} /></label><button type="button" onClick={async () => { const XLSX = await loadXlsx(); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['الرقم الوزاري', 'التاريخ المخطط', 'اسم المشرف', 'اسم المهندس']]), 'قالب'); XLSX.writeFile(book, `قالب-${type.name}.xlsx`); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">تنزيل قالب Excel</button><button type="button" disabled={!planId || rows.isLoading || !rows.data?.length || exportingRows} onClick={() => void exportRows()} className="inline-flex items-center gap-2 rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50"><Download size={16} />{exportingRows ? 'جارٍ التصدير…' : 'تصدير الخطة Excel'}</button></>}
+      {canManage(profile) && <><label className="cursor-pointer rounded-lg border border-slate-300 px-3 py-2 text-sm">معاينة استيراد Excel<input className="hidden" type="file" accept=".xlsx,.xls" disabled={candidates.isLoading || Boolean(candidateError)} onChange={(event) => { void previewImportRows(event.target.files?.[0]); event.currentTarget.value = ''; }} /></label><button type="button" onClick={async () => { const XLSX = await loadXlsx(); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['الرقم الوزاري', 'التاريخ المخطط', 'اسم المشرف', 'اسم المهندس']]), 'قالب'); XLSX.writeFile(book, `قالب-${type.name}.xlsx`); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">تنزيل قالب Excel</button><button type="button" disabled={!planId || rows.isLoading || !rows.data?.length || exportingRows} onClick={() => void exportRows()} className="inline-flex items-center gap-2 rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50"><Download size={16} />{exportingRows ? 'جارٍ التصدير…' : 'تصدير الخطة Excel'}</button></>}
       {canTypeManage(profile) && <><button type="button" onClick={() => deleteType.mutate('hide')} className="rounded-lg border border-amber-300 px-3 py-2 text-sm text-amber-800">إخفاء من القائمة</button><button type="button" onClick={() => deleteType.mutate('delete')} className="rounded-lg bg-rose-700 px-3 py-2 text-sm text-white">حذف الخطة من القائمة</button></>}</div></section>
     <section className="card grid gap-4 p-5">
       <div className="grid gap-3 sm:grid-cols-2">

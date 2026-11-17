@@ -477,6 +477,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
               key={`${planType}-${month}`}
               schools={schedulerSchools}
               initialSchoolIds={eligibleIds}
+              maintenanceMode={planType === 'maintenance'}
               startDate={`${month}-01`}
               endDate={monthEnd}
               minDate={`${month}-01`}

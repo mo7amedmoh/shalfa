@@ -74,6 +74,94 @@ describe('plan scheduler', () => {
     expect(summary.warnings.some((warning) => warning.includes('والحد'))).toBe(true);
   });
 
+  it('keeps maintenance visits unique per supervisor and working day', () => {
+    const result = schedulePlan(schools(10), {
+      startDate: '2026-11-08',
+      endDate: '2026-11-12',
+      weekendDays: [5, 6],
+      defaultMaxSchoolsPerDay: 1,
+      singleVisitPerDay: true,
+      supervisors,
+      assignmentMode: 'balanced',
+      clusterBy: 'coordinates',
+    });
+    const supervisorDays = result.assignments.map((row) => `${row.supervisorId}:${row.plannedDate}`);
+
+    expect(new Set(supervisorDays).size).toBe(result.assignments.length);
+    expect(result.summary.errors).toEqual([]);
+  });
+
+  it('excludes Fridays, Saturdays, and configured monthly holidays', () => {
+    const result = schedulePlan(schools(4), {
+      startDate: '2026-11-08',
+      endDate: '2026-11-14',
+      weekendDays: [5, 6],
+      holidays: ['2026-11-11'],
+      defaultMaxSchoolsPerDay: 1,
+      singleVisitPerDay: true,
+      supervisors: [{ id: 'one', name: 'مشرف أول' }],
+      assignmentMode: 'balanced',
+      clusterBy: 'none',
+    });
+
+    expect(result.assignments.map((row) => row.plannedDate)).toEqual([
+      '2026-11-08',
+      '2026-11-09',
+      '2026-11-10',
+      '2026-11-12',
+    ]);
+    expect(result.assignments.every((row) => !['2026-11-13', '2026-11-14'].includes(row.plannedDate))).toBe(true);
+  });
+
+  it('rejects a fixed supervisor workload above the available workdays', () => {
+    expect(() => schedulePlan(schools(3).map((school) => ({
+      ...school,
+      supervisorName: 'أحمد',
+    })), {
+      startDate: '2026-11-08',
+      endDate: '2026-11-09',
+      weekendDays: [5, 6],
+      defaultMaxSchoolsPerDay: 1,
+      singleVisitPerDay: true,
+      supervisors: [{ id: 'ahmed', name: 'أحمد' }],
+      assignmentMode: 'keep',
+      clusterBy: 'none',
+    })).toThrow('أحمد: 3 مدرسة و2 يوم عمل فقط');
+  });
+
+  it('marks manually duplicated supervisor visits as blocking errors', () => {
+    const summary = summarizePlanSchedule([
+      { schoolId: 'one', supervisorId: 'one', supervisorName: 'أحمد', plannedDate: '2026-11-08' },
+      { schoolId: 'two', supervisorId: 'one', supervisorName: 'أحمد', plannedDate: '2026-11-08' },
+    ], {
+      startDate: '2026-11-08',
+      endDate: '2026-11-09',
+      weekendDays: [5, 6],
+      defaultMaxSchoolsPerDay: 1,
+      singleVisitPerDay: true,
+      supervisors: [{ id: 'one', name: 'أحمد' }],
+    });
+
+    expect(summary.errors).toContain('أحمد: 2 زيارات في 2026-11-08؛ المسموح زيارة واحدة يوميًا.');
+  });
+
+  it('uses the correct local calendar date at the end of November', () => {
+    const result = schedulePlan(schools(1), {
+      startDate: '2026-11-01',
+      endDate: '2026-11-30',
+      weekendDays: [5, 6],
+      defaultMaxSchoolsPerDay: 1,
+      singleVisitPerDay: true,
+      supervisors: [{ id: 'one', name: 'مشرف أول' }],
+      assignmentMode: 'balanced',
+      clusterBy: 'none',
+    });
+
+    expect(result.summary.days[0]).toBe('2026-11-01');
+    expect(result.summary.days[result.summary.days.length - 1]).toBe('2026-11-30');
+    expect(result.assignments[0].plannedDate).toBe('2026-11-01');
+  });
+
   it('clusters schools by neighbourhood and validates required inputs', () => {
     const result = schedulePlan([
       { id: 'b', name: 'مدرسة ب', neighbourhood: 'حي ب' },

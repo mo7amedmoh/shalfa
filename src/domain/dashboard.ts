@@ -60,6 +60,9 @@ export interface DashboardServiceProgress {
   overallPercent: number;
   expectedPercent: number;
   behind: number;
+  reportBehind: number;
+  visitStatus: DashboardVerdict['status'];
+  reportStatus: DashboardVerdict['status'];
   status: DashboardVerdict['status'];
 }
 
@@ -129,7 +132,16 @@ export function summarizeDashboardServices(
       : 0;
     const visitPercent = metrics.planned ? (metrics.visited / metrics.planned) * 100 : 0;
     const expectedPercent = metrics.planned ? (metrics.expectedVisits / metrics.planned) * 100 : 0;
-    const gap = visitPercent - expectedPercent;
+    const reportPercent = metrics.planned ? (metrics.reportsDone / metrics.planned) * 100 : 0;
+    const getStatus = (actualPercent: number): Exclude<DashboardVerdict['status'], 'no-plan'> =>
+      actualPercent - expectedPercent >= -5
+        ? 'on-track'
+        : actualPercent - expectedPercent >= -15
+          ? 'slightly-behind'
+          : 'far-behind';
+    const statusRank = { 'on-track': 0, 'slightly-behind': 1, 'far-behind': 2 } as const;
+    const visitStatus = getStatus(visitPercent);
+    const reportStatus = getStatus(reportPercent);
     return {
       planType,
       planned: metrics.planned,
@@ -138,13 +150,12 @@ export function summarizeDashboardServices(
       overallPercent,
       expectedPercent,
       behind: Math.max(0, metrics.expectedVisits - metrics.visited),
+      reportBehind: Math.max(0, metrics.expectedVisits - metrics.reportsDone),
+      visitStatus: metrics.planned ? visitStatus : 'no-plan',
+      reportStatus: metrics.planned ? reportStatus : 'no-plan',
       status: !metrics.planned
         ? 'no-plan'
-        : gap >= -5
-          ? 'on-track'
-          : gap >= -15
-            ? 'slightly-behind'
-            : 'far-behind',
+        : statusRank[visitStatus] >= statusRank[reportStatus] ? visitStatus : reportStatus,
     };
   });
 }
@@ -277,8 +288,9 @@ export function summarizeDashboardStaffing(rows: readonly DashboardStaffingRow[]
     shortage: summary.shortage + row.shortage,
     surplus: summary.surplus + row.surplus,
     shortageSchools: summary.shortageSchools + Number(row.shortage > 0),
+    surplusSchools: summary.surplusSchools + Number(row.surplus > 0),
     missingClassCount: summary.missingClassCount + Number(row.requiredCleaners === null),
-  }), { schools: 0, required: 0, assigned: 0, shortage: 0, surplus: 0, shortageSchools: 0, missingClassCount: 0 });
+  }), { schools: 0, required: 0, assigned: 0, shortage: 0, surplus: 0, shortageSchools: 0, surplusSchools: 0, missingClassCount: 0 });
 }
 
 export interface WorkforceSummary {
@@ -287,6 +299,8 @@ export interface WorkforceSummary {
     assigned: number;
     shortage: number;
     surplus: number;
+    shortageSchools: number;
+    surplusSchools: number;
     netBalance: number;
   };
   cleaners: ReturnType<typeof summarizeDashboardStaffing> & {
@@ -298,19 +312,25 @@ export interface WorkforceSummary {
     assigned: number;
     shortage: number;
     surplus: number;
+    shortageSchools: number | null;
     netBalance: number;
   };
 }
 
 export function summarizeWorkforce(
   cleanerRows: readonly (DashboardStaffingRow & { size?: SchoolSize | null })[],
-  gatekeepersRequired: number,
-  gatekeepersAssigned: number,
+  gatekeeperAssignmentsBySchool: readonly number[],
+  totalShortageSchools?: number,
 ): WorkforceSummary {
-  if (!Number.isInteger(gatekeepersRequired) || gatekeepersRequired < 0 ||
-      !Number.isInteger(gatekeepersAssigned) || gatekeepersAssigned < 0) {
+  if (gatekeeperAssignmentsBySchool.some((assigned) => !Number.isInteger(assigned) || assigned < 0)) {
     throw new RangeError('Gatekeeper counts must be non-negative integers.');
   }
+  if (totalShortageSchools !== undefined
+    && (!Number.isSafeInteger(totalShortageSchools) || totalShortageSchools < 0)) {
+    throw new RangeError('Total shortage school count must be a non-negative safe integer.');
+  }
+  const gatekeepersRequired = gatekeeperAssignmentsBySchool.length;
+  const gatekeepersAssigned = gatekeeperAssignmentsBySchool.reduce((total, assigned) => total + assigned, 0);
   const cleaners = {
     ...summarizeDashboardStaffing(cleanerRows),
     bySize: SCHOOL_SIZES.reduce((result, size) => {
@@ -328,8 +348,10 @@ export function summarizeWorkforce(
   const gatekeepers = {
     required: gatekeepersRequired,
     assigned: gatekeepersAssigned,
-    shortage: Math.max(0, gatekeepersRequired - gatekeepersAssigned),
-    surplus: Math.max(0, gatekeepersAssigned - gatekeepersRequired),
+    shortage: gatekeeperAssignmentsBySchool.reduce((total, assigned) => total + Math.max(0, 1 - assigned), 0),
+    surplus: gatekeeperAssignmentsBySchool.reduce((total, assigned) => total + Math.max(0, assigned - 1), 0),
+    shortageSchools: gatekeeperAssignmentsBySchool.filter((assigned) => assigned < 1).length,
+    surplusSchools: gatekeeperAssignmentsBySchool.filter((assigned) => assigned > 1).length,
   };
   const cleanersNetBalance = cleaners.assigned - cleaners.required;
   const gatekeepersNetBalance = gatekeepers.assigned - gatekeepers.required;
@@ -341,6 +363,7 @@ export function summarizeWorkforce(
       assigned: gatekeepers.assigned + cleaners.assigned,
       shortage: gatekeepers.shortage + cleaners.shortage,
       surplus: gatekeepers.surplus + cleaners.surplus,
+      shortageSchools: totalShortageSchools ?? null,
       netBalance: gatekeepers.assigned + cleaners.assigned - gatekeepers.required - cleaners.required,
     },
   };

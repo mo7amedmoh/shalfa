@@ -225,16 +225,26 @@ async function loadStaffingData(): Promise<StaffingData> {
   const eligibility: EligibilitySettings & { staffingRules: typeof rules } = { ...config, staffingRules: rules };
   const rows = staffingRowsForEligibleSchools(dashboardSchools, eligibility);
   const eligibleSchools = new Set(eligibleSchoolIds(dashboardSchools, 'maintenance', config));
-  const assignedGatekeepers = new Set(z.array(gatekeeperSchema).parse(gatekeepersResult.data)
-    .map(({ school_id }) => school_id)
-    .filter((schoolId) => eligibleSchools.has(schoolId)));
+  const gatekeeperAssignments = new Map<string, number>();
+  for (const { school_id } of z.array(gatekeeperSchema).parse(gatekeepersResult.data)) {
+    if (eligibleSchools.has(school_id)) {
+      gatekeeperAssignments.set(school_id, (gatekeeperAssignments.get(school_id) ?? 0) + 1);
+    }
+  }
+  const gatekeeperAssignmentsBySchool = [...eligibleSchools]
+    .map((schoolId) => gatekeeperAssignments.get(schoolId) ?? 0);
+  const cleanerShortageSchoolRows = cleanerShortageSchools(dashboardSchools, eligibility);
+  const totalShortageSchoolIds = new Set(cleanerShortageSchoolRows.map((school) => school.id));
+  for (const schoolId of eligibleSchools) {
+    if ((gatekeeperAssignments.get(schoolId) ?? 0) < 1) totalShortageSchoolIds.add(schoolId);
+  }
   return {
     rows,
     configured: true,
     workforce: {
-      ...summarizeWorkforce(rows, eligibleSchools.size, assignedGatekeepers.size),
+      ...summarizeWorkforce(rows, gatekeeperAssignmentsBySchool, totalShortageSchoolIds.size),
       missingClassCountSchools: eligibleSchoolsMissingClassCount(dashboardSchools, eligibility),
-      cleanerShortageSchools: cleanerShortageSchools(dashboardSchools, eligibility),
+      cleanerShortageSchools: cleanerShortageSchoolRows,
       sizeMismatchSchools: schoolsWithSizeClassDifference(dashboardSchools, config.classCountHeader),
     },
   };

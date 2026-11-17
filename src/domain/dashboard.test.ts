@@ -46,7 +46,7 @@ describe('dashboard summaries', () => {
     expect(summarizeDashboardStaffing([
       { requiredCleaners: 2, assignedCleaners: 1, shortage: 1, surplus: 0 },
       { requiredCleaners: null, assignedCleaners: 0, shortage: 0, surplus: 0 },
-    ])).toEqual({ schools: 2, required: 2, assigned: 1, shortage: 1, surplus: 0, shortageSchools: 1, missingClassCount: 1 });
+    ])).toEqual({ schools: 2, required: 2, assigned: 1, shortage: 1, surplus: 0, shortageSchools: 1, surplusSchools: 0, missingClassCount: 1 });
   });
 
   it('uses the explicit size before class-count fallback in the domain layer', () => {
@@ -131,15 +131,15 @@ describe('dashboard summaries', () => {
     expect(summarizeWorkforce([
       { size: 'large', requiredCleaners: 3, assignedCleaners: 2, shortage: 1, surplus: 0 },
       { size: 'small', requiredCleaners: 1, assignedCleaners: 2, shortage: 0, surplus: 1 },
-    ], 182, 180)).toMatchObject({
-      gatekeepers: { required: 182, assigned: 180, shortage: 2, surplus: 0 },
+    ], [...Array(180).fill(1), 0, 0])).toMatchObject({
+      gatekeepers: { required: 182, assigned: 180, shortage: 2, surplus: 0, shortageSchools: 2, surplusSchools: 0 },
       cleaners: { required: 4, assigned: 4, shortage: 1, surplus: 1 },
       total: { required: 186, assigned: 184, shortage: 3, surplus: 1 },
     });
     expect(summarizeWorkforce([
       { size: 'large', requiredCleaners: 3, assignedCleaners: 2, shortage: 1, surplus: 0 },
       { size: 'small', requiredCleaners: 1, assignedCleaners: 2, shortage: 0, surplus: 1 },
-    ], 182, 180    ).cleaners.bySize).toEqual({
+    ], [...Array(180).fill(1), 0, 0]).cleaners.bySize).toEqual({
       small: { required: 1, assigned: 2, shortage: 0, surplus: 1 },
       small_plus: { required: 0, assigned: 0, shortage: 0, surplus: 0 },
       medium: { required: 0, assigned: 0, shortage: 0, surplus: 0 },
@@ -150,7 +150,7 @@ describe('dashboard summaries', () => {
     const workforce = summarizeWorkforce([
       { size: 'small_plus', requiredCleaners: 2, assignedCleaners: 1, shortage: 1, surplus: 0 },
       { size: 'large_plus', requiredCleaners: 4, assignedCleaners: 4, shortage: 0, surplus: 0 },
-    ], 3, 3);
+    ], [1, 1, 1]);
     expect(workforce.total.required).toBe(workforce.gatekeepers.required + workforce.cleaners.required);
     expect(workforce.cleaners.bySize.small_plus.required).toBe(2);
     expect(workforce.cleaners.bySize.large_plus.assigned).toBe(4);
@@ -160,9 +160,10 @@ describe('dashboard summaries', () => {
     const workforce = summarizeWorkforce([
       { size: 'large', requiredCleaners: 3, assignedCleaners: 1, shortage: 2, surplus: 0 },
       { size: 'small', requiredCleaners: 2, assignedCleaners: 5, shortage: 0, surplus: 3 },
-    ], 0, 0);
+    ], []);
 
     expect(workforce.cleaners.shortageSchools).toBe(1);
+    expect(workforce.cleaners.surplusSchools).toBe(1);
     expect(workforce.cleaners.netBalance).toBe(workforce.cleaners.surplus - workforce.cleaners.shortage);
     expect(workforce.cleaners.netBalance).toBe(1);
   });
@@ -170,10 +171,10 @@ describe('dashboard summaries', () => {
   it('uses assigned minus required for net balance: deficit is negative and surplus is positive', () => {
     const deficit = summarizeWorkforce([
       { requiredCleaners: 4, assignedCleaners: 1, shortage: 3, surplus: 0 },
-    ], 0, 0);
+    ], []);
     const surplus = summarizeWorkforce([
       { requiredCleaners: 1, assignedCleaners: 4, shortage: 0, surplus: 3 },
-    ], 0, 0);
+    ], []);
 
     expect(deficit.cleaners.netBalance).toBe(-3);
     expect(surplus.cleaners.netBalance).toBe(3);
@@ -183,7 +184,7 @@ describe('dashboard summaries', () => {
     const workforce = summarizeWorkforce([
       { requiredCleaners: 2, assignedCleaners: 1, shortage: 1, surplus: 0 },
       { requiredCleaners: null, assignedCleaners: 3, shortage: 0, surplus: 0 },
-    ], 4, 5);
+    ], [1, 1, 1, 2]);
 
     expect(workforce.total.netBalance).toBe(workforce.total.assigned - workforce.total.required);
   });
@@ -344,5 +345,56 @@ describe('dashboard summaries', () => {
       { planType: 'security_safety', planned: 0, overallPercent: 0, status: 'no-plan' },
       { planType: 'elevators', planned: 0, overallPercent: 0, status: 'no-plan' },
     ]);
+  });
+
+  it('marks a service late when reports are below the same month-to-date target as visits', () => {
+    const rows = Array.from({ length: 182 }, (_, index) => metricRow({
+      planId: 'cleaning-plan',
+      planType: 'cleaning',
+      plannedDate: '2026-11-02',
+      visited: index < 125,
+      visitedDate: index < 125 ? '2026-11-02' : null,
+      reportDone: index < 38,
+      reportCompletedDate: index < 38 ? '2026-11-02' : null,
+    }));
+
+    expect(summarizeDashboardServices(rows, '2026-11', '2026-11-02').find(({ planType }) => planType === 'cleaning'))
+      .toMatchObject({ planned: 182, visited: 125, reportsDone: 38, behind: 57, reportBehind: 144, status: 'far-behind' });
+  });
+
+  it('applies the existing 5% and 15% service thresholds to report progress', () => {
+    const makeRows = (reportsDone: number) => Array.from({ length: 100 }, (_, index) => metricRow({
+      planId: 'maintenance-plan',
+      plannedDate: '2026-11-02',
+      visited: true,
+      visitedDate: '2026-11-02',
+      reportDone: index < reportsDone,
+      reportCompletedDate: index < reportsDone ? '2026-11-02' : null,
+    }));
+
+    expect(summarizeDashboardServices(makeRows(95), '2026-11', '2026-11-02')[0].status).toBe('on-track');
+    expect(summarizeDashboardServices(makeRows(94), '2026-11', '2026-11-02')[0].status).toBe('slightly-behind');
+    expect(summarizeDashboardServices(makeRows(84), '2026-11', '2026-11-02')[0].status).toBe('far-behind');
+  });
+
+  it('counts gatekeeper shortages and surpluses by school', () => {
+    expect(summarizeWorkforce([], [0, 2, 1])).toMatchObject({
+      gatekeepers: {
+        required: 3,
+        assigned: 3,
+        shortage: 1,
+        surplus: 1,
+        shortageSchools: 1,
+        surplusSchools: 1,
+      },
+    });
+  });
+
+  it('uses the union count for schools with shortages across workforce categories', () => {
+    expect(summarizeWorkforce([
+      { requiredCleaners: 2, assignedCleaners: 1, shortage: 1, surplus: 0 },
+      { requiredCleaners: 1, assignedCleaners: 1, shortage: 0, surplus: 0 },
+      { requiredCleaners: 1, assignedCleaners: 1, shortage: 0, surplus: 0 },
+    ], [0, 0, 1], 2).total.shortageSchools).toBe(2);
   });
 });

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
   BadgeCheck, Building2, CalendarDays, ChevronDown, ClipboardCheck, FileText, Gauge,
-  LayoutDashboard, LogOut, Menu, Settings2,
+  LayoutDashboard, ListChecks, LogOut, Menu, Settings2,
   UserRound, Users, X,
 } from 'lucide-react';
 import { NavLink, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
@@ -335,7 +335,7 @@ function AppShell({
             {canManagePlanNames && adminNavigation.filter((item) => item.path !== '/admin/audit' || isAdmin).map(({ label, path, icon: Icon }) => (
               <NavLink key={path} to={path} title={label} className="nav-link"><Icon size={19} /><span>{label}</span></NavLink>
             ))}
-            {canCreateCustom && <NavLink to="/settings/plans" className="nav-link"><Settings2 size={19} /><span>إدارة الخطط</span></NavLink>}
+            {canCreateCustom && <NavLink to="/settings/plans" className="nav-link"><ListChecks size={19} /><span>إدارة الخطط</span></NavLink>}
           </div> : null}
         </nav>
         <div className="relative mt-6 border-t border-slate-100 pt-4">
@@ -348,6 +348,7 @@ function AppShell({
                 onClick={() => setProfileMenuOpen((open) => !open)}
                 className="nav-link w-full justify-between"
               >
+                <UserRound size={19} aria-hidden="true" />
                 <span className="min-w-0 truncate text-sm font-semibold">{profile.display_name ?? profile.username}</span>
                 <ChevronDown size={16} className={`shrink-0 transition-transform ${profileMenuOpen ? 'rotate-180' : ''}`} />
               </button>
@@ -393,7 +394,7 @@ function AppShell({
           </div>
           {profile && <span className="hidden rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-800 sm:inline">{profile.role === 'admin' ? 'مدير النظام' : profile.role === 'project_manager' ? 'مدير المشروع' : 'مستخدم'}</span>}
         </header>
-        {syncNotice && <div role="status" className="bg-emerald-50 px-4 py-2 text-center text-sm text-emerald-900">{syncNotice}</div>}
+        {syncNotice && <div role="status" className="bg-emerald-50 px-4 py-2 text-center text-xs text-emerald-900">{syncNotice}</div>}
         {preferences.error && <div role="alert" className="bg-rose-50 px-4 py-2 text-center text-sm text-rose-800">تعذر تحميل تفضيلات العرض؛ تُستخدم القيم الافتراضية مؤقتاً.</div>}
         <main className="content-wrap">
           <Suspense fallback={<div role="status" className="card p-8 text-center text-slate-500">جارٍ تحميل الصفحة…</div>}>
@@ -490,10 +491,21 @@ export function App() {
       .then((result) => {
         if (active && result !== null) {
           void queryClient.invalidateQueries({ queryKey: ['schools'] });
-          const duplicatesNotice = result.duplicatesWarned > 0
-            ? ` يوجد ${result.duplicatesWarned} صفاً برقم وزاري مكرر.`
-            : '';
-          setSyncNotice(`اكتملت المزامنة التلقائية: صفوف المصدر ${result.sourceRows}، مستبعدة لنقص الرقم الوزاري ${result.skippedRows.missingMinistryNumber} أو الاسم ${result.skippedRows.missingSchoolName}، جديد ${result.inserted}، محدث ${result.updated}، أحجام فارغة أو غير معروفة ${result.sizeWarnings.length} (تنبيه فقط)، معلّم كمفقود ${result.flaggedMissing}، إحداثيات ناقصة/غير صالحة ${result.invalidCoordinates}.${duplicatesNotice}`);
+          const counters: Array<[string, number]> = [
+            ['صفوف المصدر', result.sourceRows],
+            ['مستبعدة', result.skippedRows.total],
+            ['جديد', result.inserted],
+            ['محدث', result.updated],
+            ['أحجام غير معروفة', result.sizeWarnings.length],
+            ['معلّمة كمفقودة', result.flaggedMissing],
+            ['إحداثيات غير صالحة', result.invalidCoordinates],
+            ['صفوف مكررة', result.duplicatesWarned],
+          ];
+          const details = counters
+            .filter(([, count]) => count > 0)
+            .map(([label, count]) => `${label} ${count}`)
+            .join(' · ');
+          setSyncNotice(`اكتملت المزامنة · ${result.inserted + result.updated} مدرسة${details ? ` · ${details}` : ''}`);
         }
       })
       .catch((error: unknown) => {

@@ -6,7 +6,6 @@ import { formatArabicCount, type ArabicCountForms } from '../../domain/arabicCou
 import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { useDashboardData } from './useDashboardData';
-import { SCHOOL_SIZE_LABELS, SCHOOL_SIZES } from '../../domain/staffing';
 
 const serviceLabels: Record<PlanType, string> = {
   maintenance: 'الصيانة والتكييف',
@@ -17,8 +16,8 @@ const serviceLabels: Record<PlanType, string> = {
 
 const serviceOrder: readonly PlanType[] = ['maintenance', 'cleaning', 'security_safety', 'elevators'];
 const visitCountForms: ArabicCountForms = { one: 'زيارة', two: 'زيارتين', few: 'زيارات', many: 'زيارة' };
+const schoolCountForms: ArabicCountForms = { one: 'مدرسة', two: 'مدرستين', few: 'مدارس', many: 'مدرسة' };
 const workingDayCountForms: ArabicCountForms = { one: 'يوم عمل', two: 'يومي عمل', few: 'أيام عمل', many: 'يوم عمل' };
-const gatekeeperCountForms: ArabicCountForms = { one: 'بواب', two: 'بوابين', few: 'بوابين', many: 'بواب' };
 const cleanerShortageCountForms: ArabicCountForms = {
   one: 'عامل نظافة',
   two: 'عاملان نظافة',
@@ -61,19 +60,42 @@ function validMonth(value: string | null): string {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 7) === value ? value : currentMonth();
 }
 
+function monthOptions(selectedMonth: string): Array<{ value: string; label: string }> {
+  const currentYear = new Date().getFullYear();
+  const months = Array.from({ length: 12 }, (_, index) =>
+    `${currentYear}-${String(index + 1).padStart(2, '0')}`,
+  );
+  if (!months.includes(selectedMonth)) months.push(selectedMonth);
+  return months.sort().map((value) => ({
+    value,
+    label: `${new Intl.DateTimeFormat('ar-SA-u-ca-gregory', { month: 'long', timeZone: 'UTC' }).format(new Date(`${value}-01T00:00:00Z`))} ${value.slice(0, 4)}`,
+  }));
+}
+
 function validService(value: string | null): PlanType | 'all' {
   return value === 'maintenance' || value === 'cleaning' || value === 'security_safety' || value === 'elevators'
     ? value
     : 'all';
 }
 
+function formatSyncDateTime(value: string): string {
+  return `${value.slice(8, 10)}/${value.slice(5, 7)}/${value.slice(0, 4)} ${value.slice(11, 16)}`;
+}
+
 export function DashboardPage({ profile = null }: { profile?: UserProfile | null }) {
   const { formatDate, formatDateTime, formatNumber } = useDisplayFormat();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [filtersOpen, setFiltersOpen] = useState(() => window.matchMedia('(min-width: 640px)').matches);
   const month = validMonth(searchParams.get('month'));
   const supervisorId = searchParams.get('supervisor') ?? '';
   const serviceType = validService(searchParams.get('service'));
   const dashboard = useDashboardData(profile, { month, supervisorId, serviceType });
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(min-width: 640px)');
+    const syncFiltersToViewport = (event: MediaQueryListEvent) => setFiltersOpen(event.matches);
+    mediaQuery.addEventListener('change', syncFiltersToViewport);
+    return () => mediaQuery.removeEventListener('change', syncFiltersToViewport);
+  }, []);
   const updateFilter = (key: 'month' | 'service' | 'supervisor', value: string, defaultValue: string) => {
     const next = new URLSearchParams(searchParams);
     if (value === defaultValue) next.delete(key);
@@ -87,14 +109,45 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
     next.delete('supervisor');
     setSearchParams(next, { replace: true });
   };
-  const verdictTone = dashboard.verdict.status === 'on-track'
+  const plannedServices = dashboard.services.filter((service) => service.planned > 0);
+  const lateServices = plannedServices.filter((service) => service.status !== 'on-track');
+  const allServicesOnTrack = plannedServices.length > 0 && lateServices.length === 0;
+  const onTrackServiceCount = plannedServices.length - lateServices.length;
+  const serviceCount = (count: number) => count === 0
+    ? 'لا توجد خدمات'
+    : count === 1 ? 'خدمة واحدة' : count === 2 ? 'خدمتان' : `${formatNumber(count)} خدمات`;
+  const lateServiceCount = (count: number) => count === 1
+    ? 'خدمة واحدة متأخرة'
+    : count === 2 ? 'خدمتان متأخرتان' : `${formatNumber(count)} خدمات متأخرة`;
+  const expectedServiceCount = (service: (typeof plannedServices)[number]) =>
+    Math.round(service.planned * service.expectedPercent / 100);
+  const lateVisitDeficit = lateServices
+    .reduce(
+      (total, service) => total + Math.max(0, expectedServiceCount(service) - service.visited),
+      0,
+    );
+  const lateReportDeficit = lateServices.reduce(
+    (total, service) => total + Math.max(0, expectedServiceCount(service) - service.reportsDone),
+    0,
+  );
+  const totalVisitDifference = dashboard.verdict.done - dashboard.verdict.expected;
+  const totalVisitSummary = totalVisitDifference > 0
+    ? `الإجمالي متقدم بـ ${formatNumber(dashboard.verdict.ahead)} زيارة عن المستهدف`
+    : totalVisitDifference < 0
+      ? `الإجمالي متأخر بـ ${formatNumber(dashboard.verdict.behind)} زيارة عن المستهدف`
+      : 'الإجمالي على المستهدف دون فرق';
+  const verdictTone = allServicesOnTrack
     ? 'border-emerald-500'
-    : dashboard.verdict.status === 'slightly-behind'
-      ? 'border-amber-500'
-      : dashboard.verdict.status === 'far-behind'
-        ? 'border-rose-600'
-        : 'border-slate-300';
-  const monthLabel = `${new Intl.DateTimeFormat('ar-SA', { month: 'long' }).format(new Date(`${dashboard.month}-01T00:00:00Z`))} ${formatNumber(dashboard.month.slice(0, 4))}`;
+    : lateServices.some((service) => service.status === 'far-behind')
+      ? 'border-rose-600'
+      : lateServices.length
+        ? 'border-amber-500'
+        : dashboard.verdict.status === 'no-plan'
+          ? 'border-slate-300'
+          : dashboard.verdict.status === 'far-behind'
+            ? 'border-rose-600'
+            : 'border-amber-500';
+  const monthLabel = `${new Intl.DateTimeFormat('ar-SA-u-ca-gregory', { month: 'long', timeZone: 'UTC' }).format(new Date(`${dashboard.month}-01T00:00:00Z`))} ${formatNumber(dashboard.month.slice(0, 4))}`;
   const reportFilters = new URLSearchParams({
     month: dashboard.month,
     service: serviceType,
@@ -102,20 +155,30 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
   if (supervisorId) reportFilters.set('supervisor', supervisorId);
   const reportUrl = `/plans/report?${reportFilters.toString()}`;
   const counts = dashboard.actionCounts;
+  const mobileActionValues = [
+    counts?.lateVisits,
+    counts?.visitedWithoutReport,
+    dashboard.staffingConfigured ? counts?.cleanerShortage : undefined,
+    dashboard.access.deliverables ? counts?.deliverablesDueSoon : undefined,
+    dashboard.access.kpi ? counts?.previousKpiNotApproved : undefined,
+  ].filter((value): value is number => value !== undefined);
+  const allMobileActionsClear = mobileActionValues.length > 0
+    && mobileActionValues.every((value) => value === 0);
   const workforce = dashboard.workforce;
   const largestCleanerShortages = workforce
     ? [...workforce.cleanerShortageSchools]
       .sort((left, right) => right.shortage - left.shortage)
-      .slice(0, 4)
+      .slice(0, 6)
     : [];
   const serviceProgress = new Map(dashboard.services.map((service) => [service.planType, service]));
   const monthlyVisitPercent = dashboard.verdict.planned
     ? Math.min(100, dashboard.verdict.done / dashboard.verdict.planned * 100)
     : 0;
+  const availableMonths = monthOptions(dashboard.month);
   const renderComplianceRow = (supervisor: (typeof dashboard.compliance)[number]) => {
-    const band = supervisor.percent >= 70
+    const band = supervisor.percent >= 80
       ? 'bg-emerald-500'
-      : supervisor.percent >= 40 ? 'bg-amber-500' : 'bg-rose-500';
+      : supervisor.percent >= 60 ? 'bg-amber-500' : 'bg-rose-500';
     return (
       <div key={supervisor.id}>
         <div className="flex items-center justify-between gap-3 text-sm">
@@ -134,7 +197,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
   };
   const renderActivityRow = (event: (typeof dashboard.recentActivity)[number]) => (
     <li key={event.id} className="flex flex-col justify-between gap-1 border-b border-slate-100 pb-2 text-xs sm:flex-row sm:items-center sm:gap-3">
-      <span className="min-w-0 truncate font-medium text-slate-700 sm:flex-1" title={event.message}>{event.message}</span>
+      <span className="min-w-0 break-words font-medium text-slate-700 sm:flex-1">{event.message}</span>
       <time className="shrink-0 text-xs text-slate-400" dateTime={event.at}><bdi dir="ltr">{formatDateTime(event.at)}</bdi></time>
     </li>
   );
@@ -154,7 +217,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
                   : dashboard.syncTimeLoading
                     ? 'جارٍ التحميل…'
                   : dashboard.lastSchoolSyncAt
-                    ? `${formatDate(dashboard.lastSchoolSyncAt.slice(0, 10))} ${dashboard.lastSchoolSyncAt.slice(11, 16)}`
+                    ? formatSyncDateTime(dashboard.lastSchoolSyncAt)
                     : 'غير متاح'}
               </>
             )}
@@ -163,19 +226,32 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
       </section>
 
       <section className="dashboard-filterbar card">
-        <details open className="dashboard-filter-disclosure">
-          <summary>الفترة والفلاتر</summary>
-          <div className="dashboard-filter-fields">
-            <label className="grid min-w-0 gap-1 text-xs font-semibold text-slate-500">
-              الشهر
-              <input
+        <div className="dashboard-filter-disclosure">
+          <div className="dashboard-filter-heading">
+            <button
+              type="button"
+              className="dashboard-filter-toggle"
+              aria-expanded={filtersOpen}
+              aria-controls="dashboard-extra-filters"
+              onClick={() => setFiltersOpen((open) => !open)}
+            >
+              <span>الفلاتر</span>
+              <span className="dashboard-filter-chevron" aria-hidden="true">{filtersOpen ? '−' : '+'}</span>
+            </button>
+            <label className="dashboard-filter-month text-xs font-semibold text-slate-500">
+              <span>الشهر</span>
+              <select
                 aria-label="تصفية حسب الشهر"
-                type="month"
                 value={dashboard.month}
                 onChange={(event) => updateFilter('month', event.target.value, currentMonth())}
                 className="dashboard-filter"
-              />
+              >
+                {availableMonths.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+              </select>
             </label>
+          </div>
+          {filtersOpen && (
+          <div id="dashboard-extra-filters" className="dashboard-filter-fields">
             <label className="grid min-w-0 gap-1 text-xs font-semibold text-slate-500">
               المشرف
               <select
@@ -206,7 +282,8 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
               إعادة ضبط الفلاتر
             </button>
           </div>
-        </details>
+          )}
+        </div>
       </section>
 
       {dashboard.access.reportFollowerView && (
@@ -236,20 +313,23 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
           <>
             <div className="dashboard-hero-main">
               <div className="dashboard-hero-copy">
-                <span className={`dashboard-status-pill ${dashboard.verdict.done >= dashboard.verdict.expected ? 'good' : dashboard.verdict.status === 'far-behind' ? 'critical' : 'warning'}`}>
-                  {dashboard.verdict.done > dashboard.verdict.expected
-                    ? 'متقدمون على الخطة'
-                    : dashboard.verdict.done === dashboard.verdict.expected
-                      ? 'على المسار المتوقع'
-                      : 'أقل من المتوقع'}
+                <span className={`dashboard-status-pill ${allServicesOnTrack ? 'good' : lateServices.some((service) => service.status === 'far-behind') ? 'critical' : 'warning'}`}>
+                  {allServicesOnTrack ? 'على المسار' : 'تحتاج متابعة'}
                 </span>
                 <h2>
-                  {dashboard.verdict.done > dashboard.verdict.expected
-                    ? 'إنجاز الشهر يسير أفضل من المتوقع'
-                    : dashboard.verdict.done === dashboard.verdict.expected
-                      ? 'إنجاز الشهر يسير حسب المتوقع'
-                      : 'إنجاز الشهر أقل من المتوقع'}
+                  {allServicesOnTrack
+                    ? 'متقدمون على الخطة'
+                    : `${serviceCount(onTrackServiceCount)} على المسار · ${lateServiceCount(lateServices.length)}`}
                 </h2>
+                {lateServices.length > 0 && (
+                  <>
+                    <p className="dashboard-hero-reason">
+                      متأخر: {formatNumber(lateVisitDeficit)} زيارة · {formatNumber(lateReportDeficit)} تقرير
+                    </p>
+                    <p className="dashboard-hero-total">{totalVisitSummary}</p>
+                    <p>الخدمات المتأخرة: {lateServices.map((service) => serviceLabels[service.planType]).join('، ')}</p>
+                  </>
+                )}
                 <p>تم تنفيذ {formatNumber(dashboard.verdict.done)} من أصل {formatNumber(dashboard.verdict.planned)} زيارة مخططة حتى اليوم.</p>
                 {dashboard.verdict.done < dashboard.verdict.expected && (
                   <p className="dashboard-hero-note">
@@ -310,7 +390,10 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
         {dashboard.plansLoading ? <CardSkeleton /> : dashboard.plansError
           ? <CardError title="تعذر تحميل الإجراءات المرتبطة بالخطط" message={dashboard.plansError.message} />
           : (
-        <div className="dashboard-content-enter dashboard-stagger dashboard-issues">
+        <div className={`dashboard-content-enter dashboard-stagger dashboard-issues${allMobileActionsClear ? ' dashboard-issues-all-clear' : ''}`}>
+          {allMobileActionsClear && (
+            <p className="dashboard-mobile-clear" aria-live="polite">لا شيء يحتاج انتباهًا ✓</p>
+          )}
           <ActionTile
             to={`${reportUrl}&action=late-visits`}
             title="زيارات فاتها موعدها"
@@ -401,18 +484,33 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
               </article>
             );
           }
-          const visitPercent = progress.planned ? progress.visited / progress.planned * 100 : 0;
-          const chip = progress.behind === 0
-            ? { label: 'على المسار', tone: 'good' }
+          const lateReason = progress.visitStatus !== 'on-track' && progress.reportStatus !== 'on-track'
+            ? 'الزيارات والتقارير'
+            : progress.visitStatus !== 'on-track' ? 'الزيارات' : 'التقارير';
+          const chip = progress.status === 'on-track'
+            ? { label: 'على المسار', reason: '', tone: 'good' }
             : {
-              label: `متأخر ${formatArabicCount(progress.behind, formatNumber, visitCountForms)}`,
+              label: 'متأخر',
+              reason: lateReason,
               tone: progress.status === 'far-behind' ? 'critical' : 'warning',
             };
+          const pillContent = (
+            <>
+              <span className="dashboard-service-pill-status">{chip.label}</span>
+              {chip.reason && <span className="dashboard-service-pill-reason">{chip.reason}</span>}
+            </>
+          );
+          const metrics = progress.visited === progress.reportsDone
+            ? [{ label: 'الزيارات والتقارير', actual: progress.visited }]
+            : [
+              { label: 'الزيارات', actual: progress.visited },
+              { label: 'التقارير', actual: progress.reportsDone },
+            ];
           return (
             <article key={type} className="card dashboard-card-enter dashboard-service-card">
               <div className="dashboard-service-top">
                 <h3>{serviceLabels[type]}</h3>
-                {progress.behind > 0 ? (
+                {progress.visitStatus !== 'on-track' && progress.behind > 0 ? (
                   <Link
                     to={`/plans/report?${new URLSearchParams({
                       month: dashboard.month,
@@ -420,39 +518,45 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
                       ...(supervisorId ? { supervisor: supervisorId } : {}),
                       action: 'below-expected',
                     }).toString()}`}
-                    title="المنجز أقل من المتوقع حتى التاريخ المحدد."
+                    title={chip.reason ? `متأخر · ${chip.reason}` : chip.label}
                     className={`dashboard-service-pill ${chip.tone}`}
-                  >{chip.label}</Link>
+                  >{pillContent}</Link>
                 ) : (
-                  <span className={`dashboard-service-pill ${chip.tone}`} title="المنجز بلغ المتوقع حتى التاريخ المحدد.">{chip.label}</span>
+                  <span className={`dashboard-service-pill ${chip.tone}`}>{pillContent}</span>
                 )}
               </div>
-              <div className="dashboard-service-data">
-                <b>{formatNumber(visitPercent.toFixed(1))}%</b>
-                <span>المستهدف {formatNumber(progress.expectedPercent.toFixed(1))}%</span>
-              </div>
-              <div
-                className="dashboard-service-track"
-                role="progressbar"
-                aria-label={`نسبة الزيارات المنجزة من خطة ${serviceLabels[type]}`}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.min(100, visitPercent)}
-              >
-                <span className="dashboard-progress-fill" style={{ width: `${Math.min(100, visitPercent)}%` }} />
-                <span
-                  className="dashboard-service-target"
-                  style={{ insetInlineStart: `${progress.expectedPercent}%` }}
-                  title={`المتوقع ${formatNumber(progress.expectedPercent.toFixed(1))}%`}
-                />
-              </div>
-              <div className="dashboard-service-counts">
-                <bdi dir="ltr">{formatNumber(progress.visited)} / {formatNumber(progress.planned)}</bdi>
-                <span>التقارير {formatNumber(progress.reportsDone)} من {formatNumber(progress.planned)}</span>
-              </div>
-              <p className="dashboard-service-average">
-                متوسط إنجاز الزيارات والتقارير {formatNumber(progress.overallPercent.toFixed(1))}%
-              </p>
+              {metrics.map(({ label, actual }) => {
+                const percent = progress.planned ? actual / progress.planned * 100 : 0;
+                return (
+                  <div key={label} className="dashboard-service-metric">
+                    <div className="dashboard-service-data" dir="rtl">
+                      <b>{label}</b>
+                      <span className="dashboard-service-values">
+                        <span>الفعلي <bdi dir="ltr">{formatNumber(percent.toFixed(1))}%</bdi></span>
+                        <span>المستهدف <bdi dir="ltr">{formatNumber(progress.expectedPercent.toFixed(1))}%</bdi></span>
+                      </span>
+                    </div>
+                    <div
+                      className="dashboard-service-track"
+                      role="progressbar"
+                      aria-label={`نسبة ${label} المنجزة من خطة ${serviceLabels[type]}`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.min(100, percent)}
+                    >
+                      <span className="dashboard-progress-fill" style={{ width: `${Math.min(100, percent)}%` }} />
+                      <span
+                        className="dashboard-service-target"
+                        style={{ insetInlineStart: `${progress.expectedPercent}%` }}
+                        title={`مستهدف ${label}: ${formatNumber(progress.expectedPercent.toFixed(1))}%`}
+                      />
+                    </div>
+                    <div className="dashboard-service-counts">
+                      <bdi dir="ltr">{formatNumber(actual)} / {formatNumber(progress.planned)}</bdi>
+                    </div>
+                  </div>
+                );
+              })}
             </article>
           );
         })}
@@ -461,122 +565,92 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
       )}
 
       {dashboard.access.workforce && !dashboard.access.reportFollowerView && (
-      <section className="dashboard-operations dashboard-stagger" aria-label="الأداء التشغيلي">
-        <article className="card dashboard-card-enter dashboard-panel">
+      <section className="dashboard-operations dashboard-stagger items-stretch" aria-label="الأداء التشغيلي">
+        <article className="card dashboard-card-enter dashboard-panel dashboard-supervisor-panel">
           <div className="dashboard-panel-head">
             <div>
               <h2>التزام مشرفي الصيانة</h2>
               <p>الأعلى إنجازًا حتى اليوم</p>
             </div>
-            <Link
-              to={`/plans/report?${new URLSearchParams({ month: dashboard.month, service: 'maintenance', ...(supervisorId ? { supervisor: supervisorId } : {}) }).toString()}`}
-              className="dashboard-panel-link"
-            >
-              عرض الجميع ←
-            </Link>
           </div>
-          {dashboard.plansLoading ? <CardSkeleton /> : dashboard.plansError
-            ? <CardError title="تعذر تحميل التزام المشرفين" message={dashboard.plansError.message} />
-            : dashboard.compliance.length ? (
-            <div className="dashboard-people">
-              {dashboard.compliance.slice(0, 8).map(renderComplianceRow)}
-              {dashboard.compliance.length > 8 && (
-                <details className="dashboard-workforce-details">
-                  <summary>عرض بقية المشرفين ({formatNumber(dashboard.compliance.length - 8)})</summary>
-                  <div className="dashboard-people-more">
-                    {dashboard.compliance.slice(8).map(renderComplianceRow)}
-                  </div>
-                </details>
-              )}
-            </div>
-          ) : (
-            <p className="mt-4 text-sm text-slate-500">لا توجد زيارات صيانة مستحقة حتى اليوم.</p>
-          )}
-
+          <div className="dashboard-panel-content">
+            {dashboard.plansLoading ? <CardSkeleton /> : dashboard.plansError
+              ? <CardError title="تعذر تحميل التزام المشرفين" message={dashboard.plansError.message} />
+              : dashboard.compliance.length ? (
+              <div className="dashboard-people">
+                {dashboard.compliance.slice(0, 7).map(renderComplianceRow)}
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-slate-500">لا توجد زيارات صيانة مستحقة حتى اليوم.</p>
+            )}
+          </div>
+          <Link
+            to={`/plans/report?${new URLSearchParams({ month: dashboard.month, service: 'maintenance', ...(supervisorId ? { supervisor: supervisorId } : {}) }).toString()}`}
+            className="dashboard-panel-link mt-auto pt-3"
+          >
+            عرض الجميع ←
+          </Link>
         </article>
 
-        <article className="card dashboard-card-enter dashboard-panel">
+        <article className="card dashboard-card-enter dashboard-panel dashboard-workforce-panel">
           <div className="dashboard-panel-head">
             <div>
               <h2>تغطية القوى العاملة</h2>
               <p>التوزيع الحالي والاحتياج</p>
             </div>
-            <Link to="/workforce" className="dashboard-panel-link">التفاصيل ←</Link>
           </div>
-          {dashboard.staffingLoading ? <CardSkeleton /> : dashboard.staffingError
-            ? <CardError title="تعذر تحميل تغطية القوى العاملة" message={dashboard.staffingError.message} />
-            : !dashboard.staffingConfigured ? (
-            <p className="mt-4 text-sm text-slate-500">إعدادات احتياج القوى العاملة غير متاحة.</p>
-          ) : workforce ? (
-            <>
-              <div className="dashboard-labor">
-                <div className="dashboard-labor-stat">
-                  <span>المطلوب</span><b>{formatNumber(workforce.total.required)}</b>
-                </div>
-                <div className="dashboard-labor-stat">
-                  <span>المسند</span><b>{formatNumber(workforce.total.assigned)}</b>
-                </div>
-                <div className="dashboard-labor-stat is-short">
-                  <span>العجز</span><b>{formatNumber(workforce.total.shortage)}</b>
-                </div>
-              </div>
-              <div className="dashboard-workforce-lines">
-                <WorkforceProgressLine label="عمال النظافة" assigned={workforce.cleaners.assigned}
-                  required={workforce.cleaners.required} formatNumber={formatNumber}
-                  tone={workforce.cleaners.assigned >= workforce.cleaners.required ? 'emerald' : 'amber'} />
-                <WorkforceProgressLine label="البوابون" assigned={workforce.gatekeepers.assigned}
-                  required={workforce.gatekeepers.required} formatNumber={formatNumber}
-                  tone={workforce.gatekeepers.assigned >= workforce.gatekeepers.required ? 'emerald' : 'amber'} />
-              </div>
-              <p className={`dashboard-workforce-balance ${workforce.total.netBalance < 0 ? 'is-short' : ''}`}>
-                {workforce.total.netBalance < 0
-                  ? `عجز صافي ${formatNumber(Math.abs(workforce.total.netBalance))}`
-                  : workforce.total.netBalance > 0
-                    ? `فائض صافي ${formatNumber(workforce.total.netBalance)}`
-                    : 'التغطية مكتملة'}
-                {' · '}
-                {workforce.gatekeepers.shortage > 0
-                  ? `عجز ${formatArabicCount(workforce.gatekeepers.shortage, formatNumber, gatekeeperCountForms)}`
-                  : 'لا عجز في البوابين'}
-              </p>
-              <details className="dashboard-workforce-details">
-                <summary>تفصيل الاحتياج حسب حجم المدرسة</summary>
-                <div>
-                  <div className="table-scroll dashboard-size-table">
-                    <table className="w-full text-xs">
-                      <thead><tr className="text-slate-500"><th className="py-1 text-start">حجم المدرسة</th><th className="py-1 text-start">مطلوب</th><th className="py-1 text-start">مسند</th></tr></thead>
-                      <tbody>
-                        {SCHOOL_SIZES.map((size) => (
-                          <tr key={size} className="border-t border-slate-100">
-                            <th scope="row" className="py-1 text-start font-semibold text-slate-700">{SCHOOL_SIZE_LABELS[size]}</th>
-                            <td className="py-1">{formatNumber(workforce.cleaners.bySize[size].required)}</td>
-                            <td className="py-1">{formatNumber(workforce.cleaners.bySize[size].assigned)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+          <div className="dashboard-panel-content">
+            {dashboard.staffingLoading ? <CardSkeleton /> : dashboard.staffingError
+              ? <CardError title="تعذر تحميل تغطية القوى العاملة" message={dashboard.staffingError.message} />
+              : !dashboard.staffingConfigured ? (
+              <p className="mt-4 text-sm text-slate-500">إعدادات احتياج القوى العاملة غير متاحة.</p>
+            ) : workforce ? (
+              <>
+                <div className="dashboard-labor">
+                  <div className="dashboard-labor-stat">
+                    <span>المطلوب</span><b>{formatNumber(workforce.total.required)}</b>
                   </div>
-                  <p className="mt-2 text-xs text-amber-800">
-                    <Link to="/schools?sizeDiff=true" className="font-semibold underline">
-                      {formatNumber(workforce.sizeMismatchSchools.length)} مدرسة يختلف مؤشر حجمها عن عدد الفصول
-                    </Link>
-                  </p>
-                  {workforce.missingClassCountSchools.length > 0 && (
-                    <p className="mt-2 text-xs leading-5 text-amber-800">
-                      لا يمكن حساب احتياج عمال النظافة لغياب عدد الفصول:
-                      {' '}
-                      {workforce.missingClassCountSchools.map((school) => school.name).join('، ')}
-                    </p>
-                  )}
+                  <div className="dashboard-labor-stat">
+                    <span>المسند</span><b>{formatNumber(workforce.total.assigned)}</b>
+                  </div>
+                  <div className="dashboard-labor-stat is-short">
+                    <span>العجز</span>
+                    <b>{formatNumber(workforce.total.shortage)}</b>
+                    {workforce.total.shortageSchools !== null && (
+                      <small>في {formatArabicCount(workforce.total.shortageSchools, formatNumber, schoolCountForms)}</small>
+                    )}
+                  </div>
                 </div>
-              </details>
-              <p className="dashboard-workforce-note">
-                الحالة الحالية للمدارس المؤهلة؛ لا تتغير بفلاتر الخدمة أو المشرف.
-              </p>
-            </>
-          ) : (
-            <p className="mt-4 text-sm text-slate-500">لا توجد بيانات تغطية.</p>
-          )}
+                <div className="dashboard-workforce-lines">
+                  <WorkforceProgressLine label="عمال النظافة" assigned={workforce.cleaners.assigned}
+                    required={workforce.cleaners.required} formatNumber={formatNumber}
+                    tone={workforce.cleaners.assigned >= workforce.cleaners.required ? 'emerald' : 'amber'} />
+                  <WorkforceProgressLine label="البوابون" assigned={workforce.gatekeepers.assigned}
+                    required={workforce.gatekeepers.required} formatNumber={formatNumber}
+                    tone={workforce.gatekeepers.assigned >= workforce.gatekeepers.required ? 'emerald' : 'amber'} />
+                </div>
+                <p className="dashboard-workforce-balance">
+                  عمال النظافة:{' '}
+                  {workforce.cleaners.shortage === 0 && workforce.cleaners.surplus === 0
+                    ? 'مغطّى بالكامل ✓'
+                    : <>عجز {formatNumber(workforce.cleaners.shortage)} في {formatNumber(workforce.cleaners.shortageSchools)} مدرسة · زيادة {formatNumber(workforce.cleaners.surplus)} في {formatNumber(workforce.cleaners.surplusSchools)} مدرسة</>}
+                  <br />
+                  البوابون:{' '}
+                  {workforce.gatekeepers.shortage === 0 && workforce.gatekeepers.surplus === 0
+                    ? 'مغطّى بالكامل ✓'
+                    : <>عجز {formatNumber(workforce.gatekeepers.shortage)} في {formatNumber(workforce.gatekeepers.shortageSchools)} مدرسة · زيادة {formatNumber(workforce.gatekeepers.surplus)} في {formatNumber(workforce.gatekeepers.surplusSchools)} مدرسة</>}
+                </p>
+                <p className="dashboard-workforce-note">
+                  الحالة الحالية للمدارس المؤهلة، مستقلة عن الفلاتر.
+                </p>
+              </>
+            ) : (
+              <p className="mt-4 text-sm text-slate-500">لا توجد بيانات تغطية.</p>
+            )}
+          </div>
+          <Link to="/workforce" className="dashboard-panel-link dashboard-workforce-link mt-auto pt-3">
+            تفصيل الاحتياج حسب حجم المدرسة ←
+          </Link>
         </article>
       </section>
       )}
@@ -592,7 +666,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
       )}
 
       {(dashboard.access.workforce || dashboard.access.deliverables || dashboard.access.kpi) && (
-        <section className="dashboard-lower">
+        <section className="dashboard-lower items-stretch">
           {dashboard.access.workforce && !dashboard.access.reportFollowerView && (
             <article className="card dashboard-panel dashboard-schools-panel">
               <div className="dashboard-panel-head">
@@ -604,24 +678,26 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
                       : 'أعلى المدارس عجزًا في عمال النظافة'}
                   </p>
                 </div>
-                <Link to="/placement/cleaners?shortage=true" className="dashboard-panel-link">كل المدارس ←</Link>
               </div>
-              {dashboard.staffingLoading ? <CardSkeleton /> : dashboard.staffingError
-                ? <CardError title="تعذر تحميل المدارس ذات العجز" message={dashboard.staffingError.message} />
-                : !dashboard.staffingConfigured
-                  ? <p className="mt-4 text-sm text-slate-500">إعدادات احتياج القوى العاملة غير متاحة.</p>
-                  : largestCleanerShortages.length ? (
-                    <ul className="dashboard-shortage-list">
-                      {largestCleanerShortages.map((school) => (
-                        <li key={school.id}>
-                          <Link to="/placement/cleaners?shortage=true" title={school.name}>{school.name}</Link>
-                          <b>عجز {formatNumber(school.shortage)}</b>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-4 text-sm text-slate-500">لا توجد مدارس لديها عجز.</p>
-                  )}
+              <div className="dashboard-panel-content">
+                {dashboard.staffingLoading ? <CardSkeleton /> : dashboard.staffingError
+                  ? <CardError title="تعذر تحميل المدارس ذات العجز" message={dashboard.staffingError.message} />
+                  : !dashboard.staffingConfigured
+                    ? <p className="mt-4 text-sm text-slate-500">إعدادات احتياج القوى العاملة غير متاحة.</p>
+                    : largestCleanerShortages.length ? (
+                      <ul className="dashboard-shortage-list">
+                        {largestCleanerShortages.map((school) => (
+                          <li key={school.id}>
+                            <Link to="/placement/cleaners?shortage=true" title={school.name}>{school.name}</Link>
+                            <b>عجز {formatNumber(school.shortage)}</b>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="mt-4 text-sm text-slate-500">لا توجد مدارس لديها عجز.</p>
+                    )}
+              </div>
+              <Link to="/placement/cleaners?shortage=true" className="dashboard-panel-link mt-auto pt-3">كل المدارس ←</Link>
             </article>
           )}
 
@@ -636,80 +712,83 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
                       : 'ملخص المخرجات التعاقدية وبطاقة الأداء'}
                   </p>
                 </div>
+              </div>
+              <div className="dashboard-panel-content">
                 {dashboard.access.deliverables && (
-                  <Link to="/kpi/deliverables" className="dashboard-panel-link">التفاصيل ←</Link>
+                  dashboard.deliverablesLoading ? <CardSkeleton /> : dashboard.deliverablesError
+                    ? <CardError title="تعذر تحميل المخرجات" message={dashboard.deliverablesError.message} />
+                    : dashboard.deliverableSummary ? (
+                      <div className="dashboard-contractbody">
+                        <div>
+                          <div className="dashboard-contractnums">
+                            <DeliverableCount label="معتمد" value={dashboard.deliverableSummary.approved} formatNumber={formatNumber} />
+                            <DeliverableCount label="بانتظار" value={dashboard.deliverableSummary.delivered - dashboard.deliverableSummary.approved} formatNumber={formatNumber} />
+                            <DeliverableCount label="غير مستلم" value={dashboard.deliverableSummary.total - dashboard.deliverableSummary.delivered} formatNumber={formatNumber} />
+                            <DeliverableCount label="متأخر" value={dashboard.deliverableSummary.late} formatNumber={formatNumber} />
+                          </div>
+                          <p className="dashboard-deliverables-note">
+                            المخرجات المسلّمة {formatNumber(dashboard.deliverableSummary.delivered)} من {formatNumber(dashboard.deliverableSummary.total)}
+                          </p>
+                        </div>
+                        <div
+                          className="dashboard-contract-donut"
+                          role="progressbar"
+                          aria-label="نسبة المخرجات المسلّمة"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={dashboard.deliverableSummary.progressPercent}
+                          style={{
+                            background: `conic-gradient(#13865e 0 ${dashboard.deliverableSummary.progressPercent}%, #e9eef3 ${dashboard.deliverableSummary.progressPercent}% 100%)`,
+                          }}
+                        >
+                          <span>{formatNumber(dashboard.deliverableSummary.progressPercent.toFixed(1))}%</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="mt-4 text-sm text-slate-500">لا توجد مخرجات تعاقدية.</p>
+                    )
+                )}
+                {dashboard.access.kpi && (
+                  <div className="dashboard-contract-kpi">
+                    {dashboard.kpiLoading ? <CardSkeleton /> : dashboard.kpiError
+                      ? <CardError title="تعذر تحميل بطاقة الأداء" message={dashboard.kpiError.message} />
+                      : dashboard.latestKpi ? (
+                        <>
+                          <p className="dashboard-contract-kpi-month">
+                            بطاقة {dashboard.latestKpi.month.slice(0, 7) === dashboard.month
+                              ? dashboard.month
+                              : `آخر بطاقة: ${formatNumber(dashboard.latestKpi.month.slice(0, 7))}`}
+                          </p>
+                          <p>
+                            تقييم الشهر:{' '}
+                            <b className={`dashboard-rating-text ${dashboard.latestKpi.rating ?? 'unavailable'}`}>
+                              {dashboard.latestKpi.rating === 'excellent'
+                                ? 'ممتاز'
+                                : dashboard.latestKpi.rating === 'average'
+                                  ? 'متوسط'
+                                  : dashboard.latestKpi.rating === 'weak' ? 'يحتاج إلى تحسين' : 'غير متاح'}
+                            </b>
+                            {' · '}
+                            نتيجة البطاقة {dashboard.latestKpi.scorePercent === null
+                              ? '—'
+                              : `${formatNumber(dashboard.latestKpi.scorePercent.toFixed(1))}%`}
+                            {' · '}
+                            استحقاق الفاتورة {dashboard.latestKpi.payablePercent === null
+                              ? '—'
+                              : `${formatNumber(dashboard.latestKpi.payablePercent.toFixed(0))}%`}
+                          </p>
+                        </>
+                      ) : (
+                        <p>لا توجد بطاقة أداء مسجلة.</p>
+                      )}
+                  </div>
                 )}
               </div>
-              {dashboard.access.deliverables && (
-                dashboard.deliverablesLoading ? <CardSkeleton /> : dashboard.deliverablesError
-                  ? <CardError title="تعذر تحميل المخرجات" message={dashboard.deliverablesError.message} />
-                  : dashboard.deliverableSummary ? (
-                    <div className="dashboard-contractbody">
-                      <div>
-                        <div className="dashboard-contractnums">
-                          <DeliverableCount label="معتمد" value={dashboard.deliverableSummary.approved} formatNumber={formatNumber} />
-                          <DeliverableCount label="بانتظار" value={dashboard.deliverableSummary.delivered - dashboard.deliverableSummary.approved} formatNumber={formatNumber} />
-                          <DeliverableCount label="غير مستلم" value={dashboard.deliverableSummary.total - dashboard.deliverableSummary.delivered} formatNumber={formatNumber} />
-                          <DeliverableCount label="متأخر" value={dashboard.deliverableSummary.late} formatNumber={formatNumber} />
-                        </div>
-                        <p className="dashboard-deliverables-note">
-                          المخرجات المسلّمة {formatNumber(dashboard.deliverableSummary.delivered)} من {formatNumber(dashboard.deliverableSummary.total)}
-                        </p>
-                      </div>
-                      <div
-                        className="dashboard-contract-donut"
-                        role="progressbar"
-                        aria-label="نسبة المخرجات المسلّمة"
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={dashboard.deliverableSummary.progressPercent}
-                        style={{
-                          background: `conic-gradient(#13865e 0 ${dashboard.deliverableSummary.progressPercent}%, #e9eef3 ${dashboard.deliverableSummary.progressPercent}% 100%)`,
-                        }}
-                      >
-                        <span>{formatNumber(dashboard.deliverableSummary.progressPercent.toFixed(1))}%</span>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="mt-4 text-sm text-slate-500">لا توجد مخرجات تعاقدية.</p>
-                  )
-              )}
-              {dashboard.access.kpi && (
-                <div className="dashboard-contract-kpi">
-                  {dashboard.kpiLoading ? <CardSkeleton /> : dashboard.kpiError
-                    ? <CardError title="تعذر تحميل بطاقة الأداء" message={dashboard.kpiError.message} />
-                    : dashboard.latestKpi ? (
-                      <>
-                        <p className="dashboard-contract-kpi-month">
-                          بطاقة {dashboard.latestKpi.month.slice(0, 7) === dashboard.month
-                            ? dashboard.month
-                            : `آخر بطاقة: ${formatNumber(dashboard.latestKpi.month.slice(0, 7))}`}
-                        </p>
-                        <p>
-                          تقييم الشهر:{' '}
-                          <b className={`dashboard-rating-text ${dashboard.latestKpi.rating ?? 'unavailable'}`}>
-                            {dashboard.latestKpi.rating === 'excellent'
-                              ? 'ممتاز'
-                              : dashboard.latestKpi.rating === 'average'
-                                ? 'متوسط'
-                                : dashboard.latestKpi.rating === 'weak' ? 'يحتاج إلى تحسين' : 'غير متاح'}
-                          </b>
-                          {' · '}
-                          نتيجة البطاقة {dashboard.latestKpi.scorePercent === null
-                            ? '—'
-                            : `${formatNumber(dashboard.latestKpi.scorePercent.toFixed(1))}%`}
-                          {' · '}
-                          استحقاق الفاتورة {dashboard.latestKpi.payablePercent === null
-                            ? '—'
-                            : `${formatNumber(dashboard.latestKpi.payablePercent.toFixed(0))}%`}
-                        </p>
-                        <Link to={`/kpi/scorecards?month=${encodeURIComponent(dashboard.month)}`} className="dashboard-panel-link">
-                          فتح بطاقة الأداء ←
-                        </Link>
-                      </>
-                    ) : (
-                      <p>لا توجد بطاقة أداء مسجلة.</p>
-                    )}
+              {dashboard.access.kpi && dashboard.latestKpi && (
+                <div className="dashboard-panel-actions">
+                  <Link to={`/kpi/scorecards?month=${encodeURIComponent(dashboard.month)}`} className="dashboard-panel-link">
+                    فتح بطاقة الأداء ←
+                  </Link>
                 </div>
               )}
             </article>
@@ -724,26 +803,17 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
               <h2>آخر النشاطات</h2>
               <p>أحدث التحديثات على الخطط والتقارير خلال الشهر المحدد</p>
             </div>
-            {profile?.role === 'admin' && (
-              <Link to="/admin/audit" className="dashboard-panel-link">سجل النشاط ←</Link>
+            {profile?.role === 'admin' && dashboard.recentActivity.length > 3 && (
+              <Link to="/admin/audit" className="dashboard-panel-link">عرض الكل ←</Link>
             )}
           </div>
-          <p className="dashboard-activity-note">سجل التدقيق لا يصنف الأحداث حسب الخدمة أو المشرف.</p>
           {dashboard.activityLoading ? <CardSkeleton /> : dashboard.activityError
             ? <CardError title="تعذر تحميل النشاطات" message={dashboard.activityError.message} />
             : dashboard.recentActivity.length ? (
               <>
                 <ol className="dashboard-activity-list">
-                  {dashboard.recentActivity.slice(0, 5).map(renderActivityRow)}
+                  {dashboard.recentActivity.slice(0, 3).map(renderActivityRow)}
                 </ol>
-                {dashboard.recentActivity.length > 5 && (
-                  <details className="dashboard-workforce-details">
-                    <summary>عرض بقية النشاطات ({formatNumber(dashboard.recentActivity.length - 5)})</summary>
-                    <ol className="dashboard-activity-list dashboard-activity-more">
-                      {dashboard.recentActivity.slice(5).map(renderActivityRow)}
-                    </ol>
-                  </details>
-                )}
               </>
             ) : (
               <p className="mt-4 text-sm text-slate-500">لا توجد نشاطات مهمة مسجلة.</p>
@@ -895,9 +965,9 @@ function ReportFollowerDashboard({
                       }).toString()}`}
                       className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 hover:text-brand-800"
                     >
-                      <span className="min-w-0 truncate font-semibold text-slate-700">{item.schoolName}</span>
+                      <span className="min-w-0 break-words font-semibold text-slate-700">{item.schoolName}</span>
                       <span className="text-slate-500">{serviceLabels[item.planType]} · {formatDate(item.plannedDate)}</span>
-                      {item.supervisorName && <span className="w-full truncate text-xs text-slate-400">{item.supervisorName}</span>}
+                      {item.supervisorName && <span className="w-full break-words text-xs text-slate-400">{item.supervisorName}</span>}
                     </Link>
                   </li>
                 ))}
@@ -958,23 +1028,30 @@ function ActionTile({
   detail?: string;
   tooltip?: string;
 }) {
+  const clear = value === 0 && !loading;
   return (
-    <Link to={to} title={tooltip} className="card dashboard-glass dashboard-card-enter group block min-h-32 p-4">
+    <Link to={to} title={tooltip} className={`card dashboard-glass dashboard-card-enter group dashboard-action-tile${clear ? ' dashboard-action-clear' : ''}`}>
       <div className="flex items-start justify-between gap-2">
         <p className="text-xs font-semibold leading-5 text-slate-500">
           {titleForms && value !== undefined
             ? `${titlePrefix ?? ''}${formatArabicCount(value, formatNumber, titleForms)}`
             : title}
         </p>
-        <span className={`shrink-0 ${tone}`}>{icon}</span>
+        <span className={`shrink-0 ${clear ? 'text-slate-400' : tone}`}>
+          {clear ? <span aria-hidden="true">✓</span> : icon}
+        </span>
       </div>
-      <p className={`mt-2 text-3xl font-extrabold ${tone}`}>
-        {value === undefined
-          ? loading ? '…' : '—'
-          : <AnimatedNumber value={value} formatNumber={formatNumber} />}
-      </p>
-      {detail && <p className="mt-1 text-[11px] text-slate-500">{detail}</p>}
-      <span className="mt-2 inline-flex text-xs font-bold text-brand-800 group-hover:text-brand-950">{action} ←</span>
+      {detail && <p className="dashboard-action-detail">{detail}</p>}
+      <div className="dashboard-action-footer">
+        <p className={`dashboard-action-value ${clear ? 'text-slate-400' : tone}`}>
+          {value === undefined
+            ? loading ? '…' : '—'
+            : clear
+              ? <span aria-label="لا توجد عناصر تحتاج متابعة">✓</span>
+              : <AnimatedNumber value={value} formatNumber={formatNumber} />}
+        </p>
+        <span className="dashboard-action-link">{action} ←</span>
+      </div>
     </Link>
   );
 }

@@ -4,6 +4,7 @@ import {
   cleaningSupervisorUpdates,
   distributePlanDates,
   isPlanRowOverdue,
+  matchPlanSchoolsByMinistryNumbers,
   matchesPlanCompletionFilters,
   matchesPlanSchoolSearch,
 } from './plans';
@@ -34,6 +35,17 @@ describe('monthly plan date distribution', () => {
     expect(matchesPlanSchoolSearch(school, 'M10801')).toBe(true);
     expect(matchesPlanSchoolSearch(school, 'مدرسة أخرى')).toBe(false);
     expect(matchesPlanSchoolSearch(school, '')).toBe(true);
+  });
+
+  it('matches pasted ministry numbers in Arabic or Latin digits and reports unmatched numbers', () => {
+    expect(matchPlanSchoolsByMinistryNumbers('M٠١٠٨٠١، 95183\n99999 10801', [
+      { id: 'one', ministryNumber: '10801' },
+      { id: 'two', ministryNumber: '٩٥١٨٣' },
+    ])).toEqual({
+      schoolIds: ['one', 'two'],
+      unmatchedNumbers: ['99999'],
+      inputCount: 3,
+    });
   });
 
   it('matches visit and report completion filters independently', () => {

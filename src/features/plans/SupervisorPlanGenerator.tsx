@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { normalizeImportName, resolvePlanPerson } from '../../domain/imports';
+import { matchPlanSchoolsByMinistryNumbers } from '../../domain/plans';
 import {
   schedulePlan,
   summarizePlanSchedule,
@@ -20,6 +21,7 @@ type GeneratorSchool = SchedulerSchool & { ministryNumber: string };
 type Props = {
   schools: readonly GeneratorSchool[];
   initialSchoolIds: readonly string[];
+  maintenanceMode?: boolean;
   lockedSelection?: boolean;
   startDate: string;
   endDate: string;
@@ -70,6 +72,7 @@ function optionForName(name: string, references: References): SchedulerSuperviso
 export function SupervisorPlanGenerator({
   schools,
   initialSchoolIds,
+  maintenanceMode = false,
   lockedSelection = false,
   startDate: initialStartDate,
   endDate: initialEndDate,
@@ -84,14 +87,21 @@ export function SupervisorPlanGenerator({
   const [startDate, setStartDate] = useState(initialStartDate);
   const [endDate, setEndDate] = useState(initialEndDate);
   const [weekendDays, setWeekendDays] = useState<number[]>([5, 6]);
+  const [holidays, setHolidays] = useState<string[]>([]);
+  const [holidayDate, setHolidayDate] = useState('');
   const [defaultCap, setDefaultCap] = useState('5');
-  const [assignmentMode, setAssignmentMode] = useState<PlanScheduleOptions['assignmentMode']>('keep');
+  const [assignmentMode, setAssignmentMode] = useState<PlanScheduleOptions['assignmentMode']>(
+    () => maintenanceMode ? 'balanced' : 'keep',
+  );
   const [clusterBy, setClusterBy] = useState<PlanScheduleOptions['clusterBy']>('none');
   const [supervisors, setSupervisors] = useState<SchedulerSupervisor[]>([]);
   const [employeeId, setEmployeeId] = useState('');
   const [typedName, setTypedName] = useState('');
   const [preview, setPreview] = useState<ScheduleAssignment[] | null>(null);
   const [message, setMessage] = useState('');
+  const [showMinistrySelection, setShowMinistrySelection] = useState(false);
+  const [ministryNumbersText, setMinistryNumbersText] = useState('');
+  const [ministrySelectionMessage, setMinistrySelectionMessage] = useState('');
   const referencesData = references.data ?? emptyReferences;
 
   useEffect(() => {
@@ -127,11 +137,13 @@ export function SupervisorPlanGenerator({
     startDate,
     endDate,
     weekendDays,
-    defaultMaxSchoolsPerDay: currentCap,
+    holidays: maintenanceMode ? holidays : [],
+    singleVisitPerDay: maintenanceMode,
+    defaultMaxSchoolsPerDay: maintenanceMode ? 1 : currentCap,
     supervisors,
     assignmentMode,
     clusterBy,
-  }), [startDate, endDate, weekendDays, currentCap, supervisors, assignmentMode, clusterBy]);
+  }), [startDate, endDate, weekendDays, holidays, maintenanceMode, currentCap, supervisors, assignmentMode, clusterBy]);
   const summaryOptions = useMemo(() => ({
     ...scheduleOptions,
     supervisors: scheduleOptions.assignmentMode === 'balanced'
@@ -158,7 +170,26 @@ export function SupervisorPlanGenerator({
 
   function changeSelection(next: string[]) {
     setSelectedIds(next);
+    setMinistrySelectionMessage('');
     invalidatePreview();
+  }
+
+  function applyMinistrySelection() {
+    const result = matchPlanSchoolsByMinistryNumbers(ministryNumbersText, schools);
+    if (!result.inputCount) {
+      setMinistrySelectionMessage('أدخل رقماً وزارياً واحداً على الأقل.');
+      return;
+    }
+    if (!result.schoolIds.length) {
+      setMinistrySelectionMessage('لم يتم العثور على مدارس مطابقة؛ لم يتغير التحديد الحالي.');
+      return;
+    }
+
+    setSelectedIds(result.schoolIds);
+    invalidatePreview();
+    setMinistrySelectionMessage(`تم تحديد ${result.schoolIds.length} مدرسة من أصل ${result.inputCount} رقم.${result.unmatchedNumbers.length
+      ? ` أرقام غير مطابقة: ${result.unmatchedNumbers.slice(0, 5).join('، ')}${result.unmatchedNumbers.length > 5 ? '، …' : ''}`
+      : ''}`);
   }
 
   function addSupervisor(name: string, id?: string) {
@@ -180,7 +211,9 @@ export function SupervisorPlanGenerator({
 
   function generate() {
     try {
-      if (!Number.isInteger(currentCap) || currentCap <= 0) throw new RangeError('الحد اليومي الافتراضي يجب أن يكون عدداً صحيحاً موجباً.');
+      if (!maintenanceMode && (!Number.isInteger(currentCap) || currentCap <= 0)) {
+        throw new RangeError('الحد اليومي الافتراضي يجب أن يكون عدداً صحيحاً موجباً.');
+      }
       const preparedSchools = selectedSchools.map((school) => ({
         ...school,
         supervisorName: school.supervisorName
@@ -203,12 +236,14 @@ export function SupervisorPlanGenerator({
   }
 
   function save() {
-    if (!preview || !summaryState?.summary || summaryState.summary.hasInvalidDates || referenceError) return;
+    if (!preview || !summaryState?.summary || summaryState.summary.hasInvalidDates
+      || summaryState.summary.errors.length > 0 || referenceError) return;
     onSave(preview.map((assignment) => {
       const person = resolvePlanPerson(assignment.supervisorName ?? '', referencesData.employees, referencesData.aliases);
+      const supervisorId = person.employee?.id ?? assignment.supervisorId;
       return {
         ...assignment,
-        supervisorId: person.employee?.id ?? assignment.supervisorId,
+        supervisorId: supervisorId && z.string().uuid().safeParse(supervisorId).success ? supervisorId : null,
         supervisorName: person.name || null,
       };
     }));
@@ -216,6 +251,7 @@ export function SupervisorPlanGenerator({
 
   const allSelected = selectedIds.length === schools.length && schools.length > 0;
   const availableEmployeeId = referencesData.employees.some((employee) => employee.id === employeeId) ? employeeId : '';
+  const isSuccessMessage = message.startsWith('تم إنشاء المعاينة.');
 
   return <details className="rounded-xl border border-slate-200">
     <summary className="cursor-pointer list-inside p-4 font-bold text-slate-900">
@@ -231,13 +267,14 @@ export function SupervisorPlanGenerator({
       <label className="grid gap-1 text-sm font-semibold">إلى تاريخ
         <input type="date" min={minDate} max={maxDate} value={endDate} onChange={(event) => { setEndDate(event.target.value); invalidatePreview(); }} className={inputClass} />
       </label>
-      <label className="grid gap-1 text-sm font-semibold">الحد الافتراضي للمدارس لكل مشرف يومياً
+      {!maintenanceMode && <label className="grid gap-1 text-sm font-semibold">الحد الافتراضي للمدارس لكل مشرف يومياً
         <input type="number" min="1" step="1" value={defaultCap} onChange={(event) => { setDefaultCap(event.target.value); invalidatePreview(); }} className={inputClass} />
-      </label>
+      </label>}
       <label className="grid gap-1 text-sm font-semibold">طريقة الإسناد
         <select value={assignmentMode} onChange={(event) => { setAssignmentMode(event.target.value as PlanScheduleOptions['assignmentMode']); invalidatePreview(); }} className={inputClass}>
-          <option value="keep">الإبقاء على مشرف سجل المدرسة</option>
-          <option value="balanced">توزيع متوازن على المشرفين</option>
+          {maintenanceMode
+            ? <><option value="balanced">توزيع متوازن على المشرفين</option><option value="keep">الإبقاء على مشرف المدرسة</option></>
+            : <><option value="keep">الإبقاء على مشرف المدرسة</option><option value="balanced">توزيع متوازن على المشرفين</option></>}
         </select>
       </label>
     </div>
@@ -253,6 +290,28 @@ export function SupervisorPlanGenerator({
         </label>)}
       </div>
     </fieldset>
+    {maintenanceMode && <div className="grid gap-3 rounded-lg border border-slate-200 p-3">
+      <p className="text-sm font-semibold">إجازات رسمية ضمن الفترة</p>
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="grid gap-1 text-xs font-semibold">تاريخ الإجازة
+          <input type="date" min={startDate} max={endDate} value={holidayDate} onChange={(event) => setHolidayDate(event.target.value)} className={inputClass} />
+        </label>
+        <button type="button" disabled={!holidayDate || holidays.includes(holidayDate)} onClick={() => {
+          setHolidays((current) => [...current, holidayDate].sort());
+          setHolidayDate('');
+          invalidatePreview();
+        }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-50">إضافة إجازة</button>
+      </div>
+      {holidays.length > 0 && <ul className="flex flex-wrap gap-2 text-sm">
+        {holidays.map((holiday) => <li key={holiday} className="flex items-center gap-2 rounded bg-slate-50 px-2 py-1">
+          <span>{holiday}</span>
+          <button type="button" aria-label={`إزالة إجازة ${holiday}`} onClick={() => {
+            setHolidays((current) => current.filter((date) => date !== holiday));
+            invalidatePreview();
+          }} className="text-rose-700">إزالة</button>
+        </li>)}
+      </ul>}
+    </div>}
     <div className="grid gap-3 rounded-lg bg-slate-50 p-3">
       <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
         <label className="grid gap-1 text-sm font-semibold">اختيار موظف مشرف
@@ -274,13 +333,13 @@ export function SupervisorPlanGenerator({
       {supervisors.length > 0 && <div className="grid gap-2 sm:grid-cols-2">
         {supervisors.map((supervisor) => <div key={supervisor.id} className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 bg-white p-2">
           <strong className="min-w-32 flex-1 text-sm">{supervisor.name}</strong>
-          <label className="grid gap-1 text-xs">حد يومي خاص (اختياري)
+          {!maintenanceMode && <label className="grid gap-1 text-xs">حد يومي خاص (اختياري)
             <input type="number" min="1" step="1" value={supervisor.maxSchoolsPerDay ?? ''} placeholder={String(currentCap || 5)} onChange={(event) => {
               const value = event.target.value === '' ? null : Number(event.target.value);
               setSupervisors((current) => current.map((item) => item.id === supervisor.id ? { ...item, maxSchoolsPerDay: value } : item));
               invalidatePreview();
             }} className="w-28 rounded border border-slate-300 px-2 py-1.5" />
-          </label>
+          </label>}
           <button type="button" onClick={() => {
             setSupervisors((current) => current.filter((item) => item.id !== supervisor.id));
             invalidatePreview();
@@ -288,21 +347,38 @@ export function SupervisorPlanGenerator({
         </div>)}
       </div>}
     </div>
-    <label className="grid max-w-md gap-1 text-sm font-semibold">ترتيب المدارس المتجاورة
+    {!maintenanceMode && <label className="grid max-w-md gap-1 text-sm font-semibold">ترتيب المدارس المتجاورة
       <select value={clusterBy} onChange={(event) => { setClusterBy(event.target.value as PlanScheduleOptions['clusterBy']); invalidatePreview(); }} className={inputClass}>
         <option value="none">بدون تجميع</option>
         <option value="neighbourhood">تجميع حسب الحي</option>
         <option value="coordinates">تجميع حسب الإحداثيات</option>
       </select>
-    </label>
+    </label>}
     <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
       <span>المدارس المحددة: {selectedIds.length} / {schools.length}</span>
-      {!lockedSelection && <div className="flex gap-2">
+      {!lockedSelection && <div className="flex flex-wrap gap-2">
         <button type="button" onClick={() => changeSelection(allSelected ? [] : schools.map((school) => school.id))} className="rounded-lg border border-slate-300 px-3 py-1.5">
           {allSelected ? 'إلغاء تحديد المدارس' : 'تحديد كل المدارس'}
         </button>
+        <button type="button" aria-expanded={showMinistrySelection} onClick={() => {
+          setShowMinistrySelection((current) => !current);
+          setMinistrySelectionMessage('');
+        }} className="rounded-lg border border-slate-300 px-3 py-1.5">
+          تحديد بالرقم الوزاري
+        </button>
       </div>}
     </div>
+    {!lockedSelection && showMinistrySelection && <div className="grid gap-2 rounded-lg border border-slate-200 p-3">
+      <label className="grid gap-1 text-sm font-semibold">الأرقام الوزارية
+        <textarea value={ministryNumbersText} onChange={(event) => {
+          setMinistryNumbersText(event.target.value);
+          setMinistrySelectionMessage('');
+        }} disabled={disabled} rows={3} className="rounded-lg border border-slate-300 px-3 py-2 font-normal" placeholder={'الصق الأرقام، رقماً في كل سطر أو افصل بينها بفاصلة'} />
+      </label>
+      <p className="text-xs text-slate-500">سيستبدل التطبيق التحديد الحالي بالمدارس المطابقة. يمكن الفصل بين الأرقام بالأسطر أو الفواصل أو المسافات.</p>
+      <button type="button" disabled={disabled} onClick={applyMinistrySelection} className="justify-self-start rounded-lg bg-brand-700 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">تطبيق التحديد</button>
+      {ministrySelectionMessage && <p role="status" className="text-sm text-slate-700">{ministrySelectionMessage}</p>}
+    </div>}
     {schools.length === 0 ? <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">لا توجد مدارس متاحة للتوزيع.</p> : (
       <div className="max-h-52 overflow-y-auto rounded-lg border border-slate-200 p-2">
         {schools.map((school) => <label key={school.id} className="flex items-center gap-2 border-b border-slate-100 py-1.5 text-sm last:border-0">
@@ -316,12 +392,17 @@ export function SupervisorPlanGenerator({
     )}
     <div className="flex flex-wrap gap-2">
       <button type="button" disabled={disabled || references.isLoading || !selectedIds.length} onClick={generate} className="rounded-lg border border-brand-700 px-4 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50">إنشاء المعاينة</button>
-      <button type="button" disabled={disabled || references.isLoading || saving || !preview?.length || !summaryState?.summary || summaryState.summary.hasInvalidDates || Boolean(referenceError)} onClick={save} className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+      <button type="button" disabled={disabled || references.isLoading || saving || !preview?.length || !summaryState?.summary || summaryState.summary.hasInvalidDates || summaryState.summary.errors.length > 0 || Boolean(referenceError)} onClick={save} className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
         {saving ? 'جارٍ الحفظ…' : 'حفظ الخطة'}
       </button>
-      <span className="self-center text-xs text-slate-500">السعة الافتراضية: {defaultCap || '—'} مدارس يومياً</span>
+      <span className="self-center text-xs text-slate-500">
+        {maintenanceMode ? 'الحد: زيارة واحدة للمشرف يومياً' : `السعة الافتراضية: ${defaultCap || '—'} مدارس يومياً`}
+      </span>
     </div>
     {preview && summaryState?.summary && <>
+      {summaryState.summary.errors.length > 0 && <ul role="alert" className="grid gap-1 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
+        {summaryState.summary.errors.map((error, index) => <li key={`${error}-${index}`}>{error}</li>)}
+      </ul>}
       {summaryState.summary.warnings.length > 0 && <ul className="grid gap-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
         {summaryState.summary.warnings.map((warning, index) => <li key={`${warning}-${index}`}>تنبيه: {warning}</li>)}
       </ul>}
@@ -347,14 +428,14 @@ export function SupervisorPlanGenerator({
         <table className="min-w-full text-center text-sm">
           <thead className="bg-slate-100"><tr><th className="p-2 text-start">المشرف / اليوم</th>{summaryState.summary.days.map((day) => <th key={day} className="p-2">{day}</th>)}</tr></thead>
           <tbody>{summaryState.summary.matrix.map((row) => <tr key={row.supervisorId ?? '__unassigned__'} className="border-b border-slate-100">
-            <th className="p-2 text-start">{row.supervisorName} (حد {row.maxSchoolsPerDay})</th>
-            {summaryState.summary?.days.map((day) => <td key={day} className={`p-2 ${row.counts[day] > row.maxSchoolsPerDay ? 'font-bold text-rose-700' : ''}`}>{row.counts[day]}</td>)}
+            <th className="p-2 text-start">{row.supervisorName} (حد {maintenanceMode ? 1 : row.maxSchoolsPerDay})</th>
+            {summaryState.summary?.days.map((day) => <td key={day} className={`p-2 ${row.counts[day] > (maintenanceMode ? 1 : row.maxSchoolsPerDay) ? 'font-bold text-rose-700' : ''}`}>{row.counts[day]}</td>)}
           </tr>)}</tbody>
         </table>
       </div>
     </>}
     {summaryState?.error && preview && <p role="alert" className="text-sm text-rose-700">{summaryState.error}</p>}
-    {message && <p role="status" className="text-sm text-slate-700">{message}</p>}
+    {message && <p role={isSuccessMessage ? 'status' : 'alert'} className={`text-sm ${isSuccessMessage ? 'text-slate-700' : 'text-rose-700'}`}>{message}</p>}
     </div>
   </details>;
 }

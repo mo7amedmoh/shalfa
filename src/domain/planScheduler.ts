@@ -26,6 +26,8 @@ export type PlanScheduleOptions = {
   startDate: string;
   endDate: string;
   weekendDays: readonly number[];
+  holidays?: readonly string[];
+  singleVisitPerDay?: boolean;
   defaultMaxSchoolsPerDay: number;
   supervisors: readonly SchedulerSupervisor[];
   assignmentMode: 'keep' | 'balanced';
@@ -43,19 +45,26 @@ export type PlanScheduleSummary = {
   days: string[];
   matrix: ScheduleMatrixRow[];
   warnings: string[];
+  errors: string[];
   hasInvalidDates: boolean;
 };
 
 function parseIsoDate(value: string): Date {
-  const date = new Date(`${value}T00:00:00.000Z`);
-  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
     throw new RangeError('يجب إدخال تاريخ صحيح بصيغة YYYY-MM-DD.');
   }
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (
+    date.getFullYear() !== Number(match[1])
+    || date.getMonth() !== Number(match[2]) - 1
+    || date.getDate() !== Number(match[3])
+  ) throw new RangeError('يجب إدخال تاريخ صحيح بصيغة YYYY-MM-DD.');
   return date;
 }
 
 function isoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 function validateCapacity(value: number, label: string): void {
@@ -64,7 +73,12 @@ function validateCapacity(value: number, label: string): void {
   }
 }
 
-function dateList(startDate: string, endDate: string, weekendDays: readonly number[]): string[] {
+function dateList(
+  startDate: string,
+  endDate: string,
+  weekendDays: readonly number[],
+  holidays: readonly string[] = [],
+): string[] {
   const start = parseIsoDate(startDate);
   const end = parseIsoDate(endDate);
   if (start > end) throw new RangeError('تاريخ البداية يجب أن يسبق تاريخ النهاية.');
@@ -72,9 +86,11 @@ function dateList(startDate: string, endDate: string, weekendDays: readonly numb
     throw new RangeError('أيام العطلة غير صالحة.');
   }
   const weekends = new Set(weekendDays);
+  const holidayDates = new Set(holidays.map((holiday) => isoDate(parseIsoDate(holiday))));
   const days: string[] = [];
-  for (const date = new Date(start); date <= end; date.setUTCDate(date.getUTCDate() + 1)) {
-    if (!weekends.has(date.getUTCDay())) days.push(isoDate(date));
+  for (const date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) {
+    const formatted = isoDate(date);
+    if (!weekends.has(date.getDay()) && !holidayDates.has(formatted)) days.push(formatted);
   }
   if (!days.length) throw new RangeError('لا توجد أيام عمل ضمن الفترة المحددة.');
   return days;
@@ -123,19 +139,79 @@ function uniqueSupervisors(supervisors: readonly SchedulerSupervisor[]): Schedul
 function capacitiesFor(
   supervisors: readonly SchedulerSupervisor[],
   defaultCapacity: number,
+  singleVisitPerDay = false,
 ): Map<string, number> {
   return new Map(supervisors.map((supervisor) => [
     supervisor.id,
-    supervisor.maxSchoolsPerDay ?? defaultCapacity,
+    singleVisitPerDay ? 1 : supervisor.maxSchoolsPerDay ?? defaultCapacity,
   ]));
+}
+
+function supervisorsFor(
+  schools: readonly SchedulerSchool[],
+  configuredSupervisors: readonly SchedulerSupervisor[],
+  assignmentMode: PlanScheduleOptions['assignmentMode'],
+): SchedulerSupervisor[] {
+  const supervisors = [...configuredSupervisors];
+  if (assignmentMode === 'keep') {
+    const configuredNames = new Set(supervisors.map((supervisor) => normalizeImportName(supervisor.name)));
+    for (const name of schools.map((school) => school.supervisorName?.trim() ?? '').filter(Boolean)) {
+      const normalized = normalizeImportName(name);
+      if (!configuredNames.has(normalized)) {
+        supervisors.push({ id: `name:${normalized}`, name });
+        configuredNames.add(normalized);
+      }
+    }
+    if (schools.some((school) => !school.supervisorName?.trim())) {
+      supervisors.push({ id: '__unassigned__', name: 'غير محدد' });
+    }
+    if (!supervisors.length) supervisors.push({ id: '__unassigned__', name: 'غير محدد' });
+  }
+  return supervisors;
+}
+
+function capacityErrors(
+  schools: readonly SchedulerSchool[],
+  supervisors: readonly SchedulerSupervisor[],
+  assignmentMode: PlanScheduleOptions['assignmentMode'],
+  availableDays: number,
+): string[] {
+  const counts = new Map<string, number>();
+  if (assignmentMode === 'balanced') {
+    const ordered = [...supervisors].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+    if (ordered.length) {
+      const base = Math.floor(schools.length / ordered.length);
+      const remainder = schools.length % ordered.length;
+      ordered.forEach((supervisor, index) => {
+        counts.set(supervisor.id, base + Number(index < remainder));
+      });
+    }
+  } else {
+    const supervisorByName = new Map(supervisors.map((supervisor) => [
+      normalizeImportName(supervisor.name),
+      supervisor,
+    ]));
+    for (const school of schools) {
+      const supervisor = school.supervisorName?.trim()
+        ? supervisorByName.get(normalizeImportName(school.supervisorName))
+        : supervisors.find((candidate) => candidate.id === '__unassigned__');
+      if (supervisor) counts.set(supervisor.id, (counts.get(supervisor.id) ?? 0) + 1);
+    }
+  }
+  return supervisors
+    .filter((supervisor) => (counts.get(supervisor.id) ?? 0) > availableDays)
+    .map((supervisor) =>
+      `${supervisor.name}: ${counts.get(supervisor.id)} مدرسة و${availableDays} يوم عمل فقط.`,
+    );
 }
 
 export function summarizePlanSchedule(
   assignments: readonly ScheduleAssignment[],
-  options: Pick<PlanScheduleOptions, 'startDate' | 'endDate' | 'weekendDays' | 'defaultMaxSchoolsPerDay' | 'supervisors'>,
+  options: Pick<PlanScheduleOptions, 'startDate' | 'endDate' | 'weekendDays' | 'defaultMaxSchoolsPerDay' | 'supervisors'>
+    & Partial<Pick<PlanScheduleOptions, 'holidays' | 'singleVisitPerDay'>>,
 ): PlanScheduleSummary {
   validateCapacity(options.defaultMaxSchoolsPerDay, 'الحد اليومي الافتراضي');
-  const days = dateList(options.startDate, options.endDate, options.weekendDays);
+  const days = dateList(options.startDate, options.endDate, options.weekendDays, options.holidays);
   const supervisors = uniqueSupervisors(options.supervisors);
   const byName = new Map(supervisors.map((supervisor) => [normalizeImportName(supervisor.name), supervisor]));
   const loads = new Map<string, Map<string, number>>();
@@ -143,9 +219,13 @@ export function summarizePlanSchedule(
   for (const supervisor of supervisors) found.set(supervisor.id, supervisor);
 
   for (const assignment of assignments) {
-    const resolved = assignment.supervisorId
+    const namedSupervisor = byName.get(normalizeImportName(assignment.supervisorName ?? ''));
+    const idSupervisor = assignment.supervisorId
       ? supervisors.find((supervisor) => supervisor.id === assignment.supervisorId)
-      : byName.get(normalizeImportName(assignment.supervisorName ?? ''));
+      : undefined;
+    const resolved = options.singleVisitPerDay
+      ? namedSupervisor ?? idSupervisor
+      : idSupervisor ?? namedSupervisor;
     const id = resolved?.id ?? assignment.supervisorId ?? (assignment.supervisorName ? `name:${normalizeImportName(assignment.supervisorName)}` : '__unassigned__');
     const name = resolved?.name ?? assignment.supervisorName?.trim() ?? 'غير محدد';
     const supervisor = resolved ?? { id, name, maxSchoolsPerDay: null };
@@ -156,7 +236,7 @@ export function summarizePlanSchedule(
   }
 
   const orderedSupervisors = [...found.values()].sort((a, b) => a.name.localeCompare(b.name, 'ar'));
-  const effectiveCaps = capacitiesFor(orderedSupervisors, options.defaultMaxSchoolsPerDay);
+  const effectiveCaps = capacitiesFor(orderedSupervisors, options.defaultMaxSchoolsPerDay, options.singleVisitPerDay);
   const matrix = orderedSupervisors.map((supervisor) => {
     const counts: Record<string, number> = Object.fromEntries(days.map((day) => [day, loads.get(supervisor.id)?.get(day) ?? 0]));
     return {
@@ -169,6 +249,7 @@ export function summarizePlanSchedule(
   const totalSchools = assignments.length;
   const totalCapacity = days.length * matrix.reduce((sum, row) => sum + row.maxSchoolsPerDay, 0);
   const warnings: string[] = [];
+  const errors: string[] = [];
   if (totalSchools > totalCapacity) {
     warnings.push(`إجمالي المدارس (${totalSchools}) يتجاوز السعة المتاحة في أيام العمل (${totalCapacity}).`);
   }
@@ -184,18 +265,24 @@ export function summarizePlanSchedule(
   });
   if (outOfRange.length) {
     hasInvalidDates = true;
-    warnings.push(`${outOfRange.length} موعد خارج الفترة أو يقع في يوم عطلة.`);
+    const message = `${outOfRange.length} موعد خارج الفترة أو يقع في يوم عطلة.`;
+    if (options.singleVisitPerDay) errors.push(message);
+    else warnings.push(message);
   }
 
   for (const row of matrix) {
     for (const day of days) {
       const count = row.counts[day];
       if (count > row.maxSchoolsPerDay) {
-        warnings.push(`${row.supervisorName} لديه ${count} مدارس في ${day}، والحد ${row.maxSchoolsPerDay}.`);
+        const message = options.singleVisitPerDay
+          ? `${row.supervisorName}: ${count} زيارات في ${day}؛ المسموح زيارة واحدة يوميًا.`
+          : `${row.supervisorName} لديه ${count} مدارس في ${day}، والحد ${row.maxSchoolsPerDay}.`;
+        if (options.singleVisitPerDay) errors.push(message);
+        else warnings.push(message);
       }
     }
   }
-  return { days, matrix, warnings, hasInvalidDates };
+  return { days, matrix, warnings, errors, hasInvalidDates };
 }
 
 export function schedulePlan(
@@ -203,7 +290,7 @@ export function schedulePlan(
   options: PlanScheduleOptions,
 ): { assignments: ScheduleAssignment[]; summary: PlanScheduleSummary } {
   validateCapacity(options.defaultMaxSchoolsPerDay, 'الحد اليومي الافتراضي');
-  const days = dateList(options.startDate, options.endDate, options.weekendDays);
+  const days = dateList(options.startDate, options.endDate, options.weekendDays, options.holidays);
   if (!schools.length) throw new RangeError('اختر مدرسة واحدة على الأقل.');
   const ids = new Set<string>();
   for (const school of schools) {
@@ -215,31 +302,22 @@ export function schedulePlan(
   if (options.assignmentMode === 'balanced' && !configuredSupervisors.length) {
     throw new RangeError('أضف مشرفاً واحداً على الأقل للتوزيع المتوازن.');
   }
-  const supervisors = [...configuredSupervisors];
-  if (options.assignmentMode === 'keep') {
-    const configuredNames = new Set(supervisors.map((supervisor) => normalizeImportName(supervisor.name)));
-    for (const name of schools.map((school) => school.supervisorName?.trim() ?? '').filter(Boolean)) {
-      const normalized = normalizeImportName(name);
-      if (!configuredNames.has(normalized)) {
-        supervisors.push({ id: `name:${normalized}`, name });
-        configuredNames.add(normalized);
-      }
-    }
-    if (schools.some((school) => !school.supervisorName?.trim())) {
-      supervisors.push({ id: '__unassigned__', name: 'غير محدد' });
-    }
-    if (!supervisors.length) supervisors.push({ id: '__unassigned__', name: 'غير محدد' });
+  const supervisors = supervisorsFor(schools, configuredSupervisors, options.assignmentMode);
+  if (options.singleVisitPerDay) {
+    const errors = capacityErrors(schools, supervisors, options.assignmentMode, days.length);
+    if (errors.length) throw new RangeError(errors.join(' '));
   }
-  const capacities = capacitiesFor(supervisors, options.defaultMaxSchoolsPerDay);
-  const ordered = orderedSchools(schools, options.clusterBy);
+  const capacities = capacitiesFor(supervisors, options.defaultMaxSchoolsPerDay, options.singleVisitPerDay);
+  const ordered = orderedSchools(schools, options.singleVisitPerDay ? 'none' : options.clusterBy);
   const loadBySupervisor = new Map<string, Map<string, number>>();
   const totalBySupervisor = new Map<string, number>();
   const assignments: ScheduleAssignment[] = [];
   const supervisorByNormalizedName = new Map(supervisors.map((supervisor) => [normalizeImportName(supervisor.name), supervisor]));
 
-  const bestDay = (supervisor: SchedulerSupervisor, allowOverflow: boolean) => {
+  const bestDay = (supervisor: SchedulerSupervisor, allowOverflow: boolean): string | undefined => {
     const daily = loadBySupervisor.get(supervisor.id) ?? new Map<string, number>();
     const candidates = days.filter((day) => allowOverflow || (daily.get(day) ?? 0) < (capacities.get(supervisor.id) ?? options.defaultMaxSchoolsPerDay));
+    if (options.singleVisitPerDay && !candidates.length) return undefined;
     const pool = candidates.length ? candidates : days;
     return [...pool].sort((a, b) => (daily.get(a) ?? 0) - (daily.get(b) ?? 0) || a.localeCompare(b))[0];
   };
@@ -258,6 +336,7 @@ export function schedulePlan(
     } else {
       const available = supervisors.filter((candidate) => {
         const day = bestDay(candidate, false);
+        if (!day) return false;
         const count = loadBySupervisor.get(candidate.id)?.get(day) ?? 0;
         return count < (capacities.get(candidate.id) ?? options.defaultMaxSchoolsPerDay);
       });
@@ -270,6 +349,7 @@ export function schedulePlan(
     if (!supervisor) throw new Error('تعذر تحديد مشرف للمدرسة.');
 
     const date = bestDay(supervisor, false);
+    if (!date) throw new RangeError(`${supervisor.name}: لا توجد أيام عمل متاحة لإسناد الزيارة.`);
     const dailyLoads = loadBySupervisor.get(supervisor.id) ?? new Map<string, number>();
     dailyLoads.set(date, (dailyLoads.get(date) ?? 0) + 1);
     loadBySupervisor.set(supervisor.id, dailyLoads);
@@ -286,6 +366,8 @@ export function schedulePlan(
     startDate: options.startDate,
     endDate: options.endDate,
     weekendDays: options.weekendDays,
+    holidays: options.holidays,
+    singleVisitPerDay: options.singleVisitPerDay,
     defaultMaxSchoolsPerDay: options.defaultMaxSchoolsPerDay,
     supervisors,
   });

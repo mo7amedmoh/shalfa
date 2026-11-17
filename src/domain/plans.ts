@@ -58,6 +58,33 @@ export interface PlanSchoolSearchFields {
   ministryKey?: string | null;
 }
 
+export function matchPlanSchoolsByMinistryNumbers(
+  pastedNumbers: string,
+  schools: readonly { id: string; ministryNumber: string }[],
+): { schoolIds: string[]; unmatchedNumbers: string[]; inputCount: number } {
+  const requestedNumbers = new Map<string, string>();
+  for (const value of pastedNumbers.split(/[\s,،;؛|]+/u)) {
+    const number = normalizeMinistryNumber(value);
+    if (number && !requestedNumbers.has(number)) requestedNumbers.set(number, value.trim());
+  }
+
+  const matchedNumbers = new Set<string>();
+  const schoolIds = schools.flatMap((school) => {
+    const number = normalizeMinistryNumber(school.ministryNumber);
+    if (!number || !requestedNumbers.has(number)) return [];
+    matchedNumbers.add(number);
+    return [school.id];
+  });
+
+  return {
+    schoolIds,
+    unmatchedNumbers: [...requestedNumbers]
+      .filter(([number]) => !matchedNumbers.has(number))
+      .map(([, original]) => original),
+    inputCount: requestedNumbers.size,
+  };
+}
+
 export function matchesPlanSchoolSearch(
   row: PlanSchoolSearchFields,
   search: string,

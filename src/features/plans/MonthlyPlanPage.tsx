@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
+import { Pencil } from 'lucide-react';
 import { loadXlsx } from '../../lib/xlsx';
 import {
   cleaningSupervisorName,
@@ -21,6 +22,8 @@ import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
 import { BulkPlanUpdates } from './BulkPlanUpdates';
+import { MonthlyPlanRedistribution } from './MonthlyPlanRedistribution';
+import { MonthlyPlanRowEditDialog } from './MonthlyPlanRowEditDialog';
 import { SupervisorPlanGenerator } from './SupervisorPlanGenerator';
 
 const sourceSchoolSchema = z.object({
@@ -57,6 +60,11 @@ const rowSchema = z.object({
   supervisor_name: z.string().nullable(),
   engineer_name: z.string().nullable(),
   contractor_name: z.string().nullable(),
+  original_planned_date: z.string().nullable(),
+  original_school_id: z.string().uuid().nullable(),
+  original_supervisor_id: z.string().uuid().nullable(),
+  edited_at: z.string().nullable(),
+  edited_by: z.string().uuid().nullable(),
   school: z.object({
     school_name: z.string(),
     ministry_number: z.string(),
@@ -142,6 +150,8 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const [reportFilter, setReportFilter] = useState<PlanCompletionFilter>('all');
   const [schoolSearch, setSchoolSearch] = useState('');
   const [message, setMessage] = useState('');
+  const [editingRowId, setEditingRowId] = useState('');
+  const [redistributionOpen, setRedistributionOpen] = useState(false);
   const candidates = useQuery({ queryKey: ['monthly-plan-candidates'], queryFn: loadCandidates });
   const plans = useQuery({ queryKey: ['monthly-plans', planType], queryFn: () => loadPlans(planType) });
   const eligibleIds = useMemo(() => {
@@ -162,15 +172,38 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
     queryFn: () => loadPlanRows(activePlanId),
     enabled: Boolean(activePlanId),
   });
+  const canEditSchedule = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
   const canCreate = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
   const canUpdate = Boolean(profile && ['admin', 'project_manager', 'area_engineer', 'report_follower'].includes(profile.role));
+  const editSupervisors = useQuery({
+    queryKey: ['monthly-plan-edit-supervisors'],
+    queryFn: async () => {
+      if (!supabase) return [];
+      const { data, error } = await supabase.from('employees')
+        .select('id,full_name')
+        .eq('category', 'supervisor')
+        .eq('status', 'active')
+        .order('full_name');
+      if (error) throw error;
+      return z.array(z.object({ id: z.string().uuid(), full_name: z.string() })).parse(data);
+    },
+    enabled: canEditSchedule,
+  });
+  const editableRows = useMemo(() => (rows.data ?? []).map((row) => ({
+    ...row,
+    plannedDate: row.planned_date,
+    supervisorId: row.supervisor_id,
+  })), [rows.data]);
+  const editingRow = editableRows.find((row) => row.id === editingRowId);
   const loadError = candidates.error ?? plans.error ?? rows.error;
   const loadErrorMessage = loadError instanceof Error ? loadError.message : String(loadError ?? '');
   const loadErrorDetails = /late_by_planned_date/i.test(loadErrorMessage)
     ? `طبّق الترحيل 202611110001_monthly_late_accounting.sql. ${loadErrorMessage}`
-    : /ministry_key/i.test(loadErrorMessage)
-      ? `طبّق الترحيل 202611070001_ministry_key.sql. ${loadErrorMessage}`
-      : loadErrorMessage;
+    : /original_planned_date|edited_at|original_school_id|original_supervisor_id/i.test(loadErrorMessage)
+      ? `طبّق الترحيل 202611170002_plan_row_edits.sql. ${loadErrorMessage}`
+      : /ministry_key/i.test(loadErrorMessage)
+        ? `طبّق الترحيل 202611070001_ministry_key.sql. ${loadErrorMessage}`
+        : loadErrorMessage;
 
   useEffect(() => {
     if (!plans.data?.length) return;
@@ -326,6 +359,34 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
       await queryClient.invalidateQueries({ queryKey: ['monthly-plan-rows', activePlanId] });
     },
     onError: (error: Error) => setMessage(`تعذر تحديث السجل: ${error.message}`),
+  });
+
+  const editPlanRow = useMutation({
+    mutationFn: async ({ rowId, changes, reason }: { rowId: string; changes: Record<string, string | null>; reason: string | null }) => {
+      if (!supabase || !profile) throw new Error('يلزم تسجيل الدخول لتعديل صف الخطة.');
+      if (!canEditSchedule) throw new Error('تعديل صفوف الخطة متاح لمدير النظام ومدير المشروع فقط.');
+      const { error } = await supabase.rpc('edit_plan_row', {
+        p_plan_kind: 'monthly',
+        p_row_id: rowId,
+        p_changes: changes,
+        p_reason: reason,
+      });
+      if (error) {
+        const migrationHint = error.code === 'PGRST202' || error.code === '42883'
+          ? ' يلزم تطبيق ترحيل 202611170002_plan_row_edits.sql.'
+          : '';
+        throw new Error(`${error.message}${migrationHint}`);
+      }
+    },
+    onSuccess: async () => {
+      setEditingRowId('');
+      setMessage('تم تعديل صف الخطة وتسجيل التغيير في سجل التدقيق.');
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['monthly-plan-rows', activePlanId] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard-plan-rows'] }),
+        queryClient.invalidateQueries({ queryKey: ['monthly-report'] }),
+      ]);
+    },
   });
 
   const deletePlan = useMutation({
@@ -511,6 +572,13 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                 ? 'جارٍ تحديث الأسماء…'
                 : `تحديث المشرفين من قاعدة المدارس (${formatNumber(cleaningSupervisorChanges.length)})`}
             </button>}
+            {activePlan && canEditSchedule && rows.data && <button
+                type="button"
+                onClick={() => setRedistributionOpen(true)}
+                className="rounded-lg bg-brand-700 px-3 py-2 text-sm font-semibold text-white"
+            >
+                إعادة توزيع المتبقي
+            </button>}
           </div>
         </div>
         {activePlan && rows.data && <div className="flex flex-wrap items-end gap-3 rounded-lg bg-slate-50 p-3">
@@ -584,7 +652,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
             />
             <div className="table-scroll monthly-plan-table-scroll">
               <table className="monthly-plan-table">
-                <thead><tr><th>المدرسة</th><th>الموعد المخطط</th>{planType === 'security_safety' || planType === 'elevators' ? <th>الشركة</th> : null}<th>تاريخ الزيارة</th><th>تاريخ إنجاز التقرير</th><th>الحالة</th></tr></thead>
+                <thead><tr><th>المدرسة</th><th>الموعد المخطط</th>{planType === 'security_safety' || planType === 'elevators' ? <th>الشركة</th> : null}<th>تاريخ الزيارة</th><th>تاريخ إنجاز التقرير</th><th>الحالة والإجراءات</th></tr></thead>
                 <tbody>{filteredPlanRows.map((row) => {
                   const dates = actualDates[row.id] ?? { visited: row.visited_at ?? '', report: row.report_completed_at ?? '' };
                   const overdue = activePlan.late_by_planned_date
@@ -603,11 +671,24 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                     : row.supervisor_name;
                   return <tr key={row.id}>
                     <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small>{supervisorName && <small className="block text-xs text-slate-500">المشرف: {supervisorName}</small>}</td>
-                    <td>{formatDate(row.planned_date)}</td>
+                    <td>{formatDate(row.planned_date)}{row.edited_at && <span
+                      className="ms-2 inline-flex rounded-full bg-indigo-50 px-2 py-1 text-[0.68rem] font-semibold text-indigo-800"
+                      title={`الموعد الأصلي: ${row.original_planned_date ? formatDate(row.original_planned_date) : 'غير متاح'}`}
+                      aria-label={`معدّلة. الموعد الأصلي: ${row.original_planned_date ? formatDate(row.original_planned_date) : 'غير متاح'}`}
+                    >معدّلة</span>}</td>
                     {(planType === 'security_safety' || planType === 'elevators') && <td>{row.contractor_name ?? '—'}</td>}
                     <td><DateEditor value={dates.visited} onChange={(value) => setActualDates((current) => ({ ...current, [row.id]: { ...dates, visited: value } }))} onSave={() => updateRow.mutate({ rowId: row.id, field: 'visited_at', value: dates.visited || null })} label="حفظ الزيارة" disabled={!canUpdate || updateRow.isPending} /></td>
                     <td><DateEditor value={dates.report} onChange={(value) => setActualDates((current) => ({ ...current, [row.id]: { ...dates, report: value } }))} onSave={() => updateRow.mutate({ rowId: row.id, field: 'report_completed_at', value: dates.report || null })} label="حفظ التقرير" disabled={!canUpdate || updateRow.isPending} /></td>
-                    <td>{overdue ? <span className="rounded-full bg-rose-50 px-2 py-1 text-xs text-rose-800">متأخر</span> : row.visited_at && row.report_completed_at ? 'مكتمل' : 'قيد المتابعة'}{canCreate && <button type="button" className="ms-2 text-xs text-rose-700 underline" onClick={() => deleteRow.mutate(row.id)}>حذف الصف</button>}</td>
+                    <td>
+                      <span>{overdue ? <span className="rounded-full bg-rose-50 px-2 py-1 text-xs text-rose-800">متأخر</span> : row.visited_at && row.report_completed_at ? 'مكتمل' : 'قيد المتابعة'}</span>
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        {canEditSchedule && <button type="button" className="inline-flex items-center gap-1 rounded border border-brand-200 px-2 py-1 text-xs font-semibold text-brand-800" onClick={() => {
+                          editPlanRow.reset();
+                          setEditingRowId(row.id);
+                        }}><Pencil size={13} aria-hidden="true" />تعديل</button>}
+                        {canCreate && <button type="button" className="text-xs text-rose-700 underline" onClick={() => deleteRow.mutate(row.id)}>حذف الصف</button>}
+                      </div>
+                    </td>
                   </tr>;
                 })}</tbody>
               </table>
@@ -618,6 +699,45 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
         )}
       </section>
       <p className="text-xs leading-6 text-slate-400">تُستثنى الجمعة والسبت افتراضياً ويمكن تعديل أيام العطلة عند التوزيع. قواعد الأهلية قابلة للتهيئة؛ راجع <Link to="/schools" className="text-brand-700 underline">بيانات المدارس</Link>.</p>
+      {editingRow && <MonthlyPlanRowEditDialog
+        row={editingRow}
+        rows={editableRows}
+        allSchools={(candidates.data?.schools ?? []).map((school) => ({
+          id: school.id,
+          school_name: school.school_name,
+          ministry_number: school.ministry_number,
+          ministry_key: school.ministry_key,
+        }))}
+        eligibleSchools={eligibleSchools.map((school) => ({
+          id: school.id,
+          school_name: school.school_name,
+          ministry_number: school.ministry_number,
+          ministry_key: school.ministry_key,
+        }))}
+        supervisors={editSupervisors.data ?? []}
+        supervisorError={editSupervisors.error instanceof Error ? editSupervisors.error.message : undefined}
+        saving={editPlanRow.isPending}
+        error={editPlanRow.error instanceof Error ? editPlanRow.error.message : undefined}
+        onClose={() => {
+          if (!editPlanRow.isPending) setEditingRowId('');
+        }}
+        onSave={(request) => editPlanRow.mutate(request)}
+      />}
+      {redistributionOpen && activePlan && <MonthlyPlanRedistribution
+        planId={activePlan.id}
+        planMonth={activePlan.plan_month}
+        rows={(rows.data ?? []).map((row) => ({
+          id: row.id,
+          schoolId: row.school_id,
+          schoolName: row.school?.school_name ?? row.school_id,
+          supervisorId: row.supervisor_id,
+          supervisorName: row.supervisor_name,
+          plannedDate: row.planned_date,
+          visited: row.visited,
+        }))}
+        onClose={() => setRedistributionOpen(false)}
+        onSaved={() => setMessage('تمت إعادة توزيع الزيارات المتبقية وتسجيل التغييرات.')}
+      />}
     </div>
   );
 }

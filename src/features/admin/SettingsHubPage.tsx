@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { z } from 'zod';
+import { Lock } from 'lucide-react';
 import { getUnlinkedPlanNames } from '../../domain/planNameLinking';
 import { defaultReportLayout } from '../plans/reportSections';
 import { supabase } from '../../lib/supabase';
@@ -141,19 +142,43 @@ export function SettingsHubPage({ isAdmin }: { isAdmin: boolean }) {
     { title: 'افتراضات التقرير', description: `الأقسام الافتراضية: ${defaultReportLayout.length} · يمكن تخصيصها وحفظها لكل مستخدم`, href: '/plans/report', action: 'فتح التقرير' },
     { title: 'المستخدمون والصلاحيات', description: `الحسابات المسجلة: ${status.data?.users ?? '—'}`, href: '/admin/users', action: 'إدارة المستخدمين', adminOnly: true },
   ];
+  const sections = [
+    { title: 'الربط ومصادر البيانات', cards: [cards[0], cards[4], cards[5]] },
+    { title: 'الخطط والعمالة', cards: [cards[1], cards[3], cards[2], cards[7]] },
+    { title: 'المستخدمون والصلاحيات', cards: [cards[8]] },
+    { title: 'منطقة الإجراءات الخطرة', cards: [cards[6]], warning: true },
+  ];
   return <div className="grid gap-5">
     <section>
       <p className="text-sm text-slate-500">مركز إعدادات المنصة وحالة تكاملاتها</p>
       <h2 className="mt-1 text-2xl font-bold text-brand-900">الإعدادات</h2>
     </section>
     {status.error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">تعذر تحميل حالة الإعدادات: {status.error.message}</p>}
-    <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {cards.filter((card) => !card.adminOnly || isAdmin).map((card) => <Link key={card.title} to={card.href} className="card grid gap-2 p-4 transition hover:border-brand-300 hover:shadow-md">
-        <h3 className="font-bold text-brand-900">{card.title}</h3>
-        <p className="min-h-10 text-sm text-slate-600">{card.description}</p>
-        <span className="text-sm font-semibold text-brand-700">{card.action} ←</span>
-      </Link>)}
-    </section>
+    {sections.map((section) => {
+      const visibleCards = section.cards;
+      if (!visibleCards.length) return null;
+      return <section key={section.title} className={section.warning ? 'grid gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 sm:p-5' : 'grid gap-3'}>
+        <div>
+          <h3 className="text-xl font-bold text-brand-900">{section.title}</h3>
+          {section.warning && <p className="mt-1 text-sm leading-6 text-rose-800">هذه العمليات قد تدمج أو تحذف سجلات ولا يمكن التراجع عنها بسهولة. تُنزَّل نسخة احتياطية قبل التنفيذ.</p>}
+        </div>
+        <div className="grid auto-rows-fr gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {visibleCards.map((card) => {
+            const restricted = Boolean(card.adminOnly && !isAdmin);
+            const content = <>
+              <h4 className="font-bold text-brand-900">{card.title}</h4>
+              <p className="min-h-10 text-sm text-slate-600">{card.description}</p>
+              {restricted
+                ? <span className="inline-flex items-center gap-1 text-sm font-semibold text-slate-500"><Lock size={15} aria-hidden="true" />لمدير النظام فقط</span>
+                : <span className="text-sm font-semibold text-brand-700">{card.action} ←</span>}
+            </>;
+            return restricted
+              ? <div key={card.title} aria-disabled="true" className="card grid h-full cursor-not-allowed gap-2 p-4 opacity-50">{content}</div>
+              : <Link key={card.title} to={card.href} className="card grid h-full gap-2 p-4 transition hover:border-brand-300 hover:shadow-md">{content}</Link>;
+          })}
+        </div>
+      </section>;
+    })}
     <section id="schema-check" className="card grid gap-3 p-5">
       <h3 className="text-lg font-bold text-brand-900">حالة المخطط والترحيلات المطلوبة</h3>
       {status.isLoading ? <p role="status">جارٍ فحص المخطط…</p> : <ul className="grid gap-2 text-sm">

@@ -85,6 +85,7 @@ export function StaffingRulesSettingsPage({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <section className="card grid gap-5 p-5 md:p-6">
+      {!isAdmin && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">هذه الصفحة للقراءة فقط. التعديل لمدير النظام.</p>}
       <div>
         <h2 className="text-xl font-bold text-brand-900">قواعد احتياج عمال النظافة حسب الحجم</h2>
         <p className="mt-1 text-sm leading-7 text-slate-500">أولوية احتياج العمالة: تصحيح الحجم اليدوي، ثم استثناء المدرسة، ثم مؤشر الحجم الصريح، ثم عدد الفصول كمرجع احتياطي.</p>
@@ -107,9 +108,7 @@ export function StaffingRulesSettingsPage({ isAdmin }: { isAdmin: boolean }) {
         </label>)}
       </div>}
       <div>
-        {isAdmin
-          ? <button type="button" disabled={isLoading || save.isPending} onClick={() => void saveValues()} className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">حفظ قواعد العمالة</button>
-          : <p className="text-sm text-slate-500">يمكن لمدير النظام تعديل هذه القيم.</p>}
+        {isAdmin && <button type="button" disabled={isLoading || save.isPending} onClick={() => void saveValues()} className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">حفظ قواعد العمالة</button>}
         {message && <p role="status" className="mt-3 text-sm text-slate-700">{message}</p>}
       </div>
     </section>

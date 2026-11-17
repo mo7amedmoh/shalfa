@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
   BadgeCheck, Building2, CalendarDays, ChevronDown, ClipboardCheck, FileText, Gauge,
-  LayoutDashboard, ListChecks, LogOut, Menu, Settings2,
+  LayoutDashboard, LogOut, Menu, Settings2,
   UserRound, Users, X,
 } from 'lucide-react';
 import { NavLink, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
@@ -335,7 +335,6 @@ function AppShell({
             {canManagePlanNames && adminNavigation.filter((item) => item.path !== '/admin/audit' || isAdmin).map(({ label, path, icon: Icon }) => (
               <NavLink key={path} to={path} title={label} className="nav-link"><Icon size={19} /><span>{label}</span></NavLink>
             ))}
-            {canCreateCustom && <NavLink to="/settings/plans" className="nav-link"><ListChecks size={19} /><span>إدارة الخطط</span></NavLink>}
           </div> : null}
         </nav>
         <div className="relative mt-6 border-t border-slate-100 pt-4">

@@ -5,3 +5,7 @@ dist/
 !.env.example
 coverage/
 *.tsbuildinfo
+scripts/private/
+*.private.sql
+data/*.xlsx
+data/*.csv

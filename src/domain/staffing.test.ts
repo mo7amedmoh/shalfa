@@ -5,6 +5,7 @@ import {
   getSizeFromClasses,
   hasSizeClassDifference,
   normalizeSchoolSize,
+  mergeStaffingRules,
   parseClassCount,
   requiredCleanersForSize,
 } from './staffing';
@@ -30,17 +31,114 @@ describe('staffing rules', () => {
     expect(getSizeFromClasses(classes)).toBe(size);
   });
 
-  it('normalizes all six size indicators including spaced and full-width plus signs', () => {
-    expect(['S', 's +', 'M', 'm＋', 'L', 'l +'].map(normalizeSchoolSize)).toEqual([
-      'small', 'small_plus', 'medium', 'medium_plus', 'large', 'large_plus',
-    ]);
-    expect(normalizeSchoolSize('XL')).toBeNull();
-    expect(normalizeSchoolSize('')).toBeNull();
+  it.each([
+    ['small', 'small'],
+    ['small_plus', 'small_plus'],
+    ['medium', 'medium'],
+    ['medium_plus', 'medium_plus'],
+    ['large', 'large'],
+    ['large_plus', 'large_plus'],
+    ['large_plus_plus', 'large_plus_plus'],
+  ] as const)('accepts stored size key %s', (value, size) => {
+    expect(normalizeSchoolSize(value)).toBe(size);
+  });
+
+  it.each([
+    ['S', 'small'],
+    ['s', 'small'],
+    ['small', 'small'],
+    ['صغير', 'small'],
+    ['صغيرة', 'small'],
+    ['S+', 'small_plus'],
+    ['s +', 'small_plus'],
+    ['s＋', 'small_plus'],
+    ['small+', 'small_plus'],
+    ['صغير+', 'small_plus'],
+    ['صغيرة+', 'small_plus'],
+    ['M', 'medium'],
+    ['m', 'medium'],
+    ['medium', 'medium'],
+    ['متوسط', 'medium'],
+    ['متوسطة', 'medium'],
+    ['M+', 'medium_plus'],
+    ['m＋', 'medium_plus'],
+    ['medium+', 'medium_plus'],
+    ['متوسط+', 'medium_plus'],
+    ['متوسطة+', 'medium_plus'],
+    ['L', 'large'],
+    ['l', 'large'],
+    ['large', 'large'],
+    ['كبير', 'large'],
+    ['كبيرة', 'large'],
+    ['L+', 'large_plus'],
+    ['l +', 'large_plus'],
+    ['l＋', 'large_plus'],
+    ['large+', 'large_plus'],
+    ['كبير+', 'large_plus'],
+    ['كبيرة+', 'large_plus'],
+    ['L++', 'large_plus_plus'],
+    ['l++', 'large_plus_plus'],
+    ['large++', 'large_plus_plus'],
+    ['large_plus_plus', 'large_plus_plus'],
+    ['كبير++', 'large_plus_plus'],
+    ['كبيرة++', 'large_plus_plus'],
+    ['L ++', 'large_plus_plus'],
+    ['L＋＋', 'large_plus_plus'],
+  ] as const)('continues to normalize sheet value %s to %s', (value, size) => {
+    expect(normalizeSchoolSize(value)).toBe(size);
+  });
+
+  it.each(['XL', '', null, undefined, 1])('returns null for unknown size %s', (value) => {
+    expect(normalizeSchoolSize(value)).toBeNull();
   });
 
   it('sets the staffing rule for every indicator', () => {
-    expect(Object.values(DEFAULT_STAFFING_RULES)).toEqual([1, 2, 2, 3, 3, 4]);
+    expect(Object.values(DEFAULT_STAFFING_RULES)).toEqual([1, 2, 2, 3, 3, 4, 5]);
     expect(requiredCleanersForSize('large_plus')).toBe(4);
+    expect(requiredCleanersForSize('large_plus_plus')).toBe(5);
+  });
+
+  it('fills missing persisted staffing rules with defaults', () => {
+    expect(mergeStaffingRules({
+      small: 2,
+      small_plus: 2,
+      medium: 2,
+      medium_plus: 3,
+      large: 3,
+      large_plus: 4,
+    })).toEqual({ ...DEFAULT_STAFFING_RULES, small: 2 });
+  });
+
+  it('calculates five cleaners for a large-plus-plus school', () => {
+    expect(calculateStaffing({
+      classes: 5,
+      declaredSize: 'L++',
+      assignedCleaners: 0,
+    })).toMatchObject({ size: 'large_plus_plus', requiredCleaners: 5, shortage: 5 });
+  });
+
+  it.each([
+    ['small_plus', 2],
+    ['medium_plus', 3],
+    ['large_plus', 4],
+  ] as const)('uses stored plus size %s instead of the class-count fallback', (size, requiredCleaners) => {
+    expect(calculateStaffing({
+      classes: 5,
+      declaredSize: size,
+      assignedCleaners: 0,
+    })).toMatchObject({ size, requiredCleaners });
+  });
+
+  it.each([
+    ['small_plus', 2],
+    ['medium_plus', 3],
+    ['large_plus', 4],
+  ] as const)('accepts stored plus size %s as a manual correction', (size, requiredCleaners) => {
+    expect(calculateStaffing({
+      classes: 5,
+      manualSizeOverride: size,
+      assignedCleaners: 0,
+    })).toMatchObject({ size, requiredCleaners });
   });
 
   it('uses the explicit size as authoritative and flags a difference from class count', () => {

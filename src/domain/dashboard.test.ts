@@ -146,6 +146,7 @@ describe('dashboard summaries', () => {
       medium_plus: { required: 0, assigned: 0, shortage: 0, surplus: 0 },
       large: { required: 3, assigned: 2, shortage: 1, surplus: 0 },
       large_plus: { required: 0, assigned: 0, shortage: 0, surplus: 0 },
+      large_plus_plus: { required: 0, assigned: 0, shortage: 0, surplus: 0 },
     });
     const workforce = summarizeWorkforce([
       { size: 'small_plus', requiredCleaners: 2, assignedCleaners: 1, shortage: 1, surplus: 0 },

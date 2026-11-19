@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
-import { DEFAULT_STAFFING_RULES, SCHOOL_SIZE_CODES, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize, type StaffingRuleTable } from '../../domain/staffing';
+import { DEFAULT_STAFFING_RULES, mergeStaffingRules, SCHOOL_SIZE_CODES, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize, type StaffingRuleTable } from '../../domain/staffing';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 
@@ -12,6 +12,7 @@ const staffingRulesSchema = z.object({
   medium_plus: z.number().int().min(0).max(10),
   large: z.number().int().min(0).max(10),
   large_plus: z.number().int().min(0).max(10),
+  large_plus_plus: z.number().int().min(0).max(10),
 });
 
 function toFormValues(rules: StaffingRuleTable): Record<SchoolSize, string> {
@@ -22,6 +23,7 @@ function toFormValues(rules: StaffingRuleTable): Record<SchoolSize, string> {
     medium_plus: String(rules.medium_plus),
     large: String(rules.large),
     large_plus: String(rules.large_plus),
+    large_plus_plus: String(rules.large_plus_plus),
   };
 }
 
@@ -32,7 +34,9 @@ async function loadStaffingRules(): Promise<StaffingRuleTable> {
     .eq('key', 'staffing_rules')
     .maybeSingle();
   if (error) throw error;
-  return data ? staffingRulesSchema.parse(data.value) : DEFAULT_STAFFING_RULES;
+  return data
+    ? mergeStaffingRules(staffingRulesSchema.partial().parse(data.value))
+    : DEFAULT_STAFFING_RULES;
 }
 
 export function StaffingRulesSettingsPage({ isAdmin }: { isAdmin: boolean }) {
@@ -75,6 +79,7 @@ export function StaffingRulesSettingsPage({ isAdmin }: { isAdmin: boolean }) {
       medium_plus: asNumber(values.medium_plus),
       large: asNumber(values.large),
       large_plus: asNumber(values.large_plus),
+      large_plus_plus: asNumber(values.large_plus_plus),
     });
     if (!parsed.success) {
       setMessage('أدخل أعداداً صحيحة من صفر إلى 10 لكل حجم.');

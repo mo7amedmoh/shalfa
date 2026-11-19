@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { exportBrandedXlsx } from '../../lib/brandedXlsx';
 import { revealResidenceNumbers } from '../../lib/residence';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
-import { calculateStaffing, DEFAULT_STAFFING_RULES, normalizeSchoolSize, parseClassCount, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize, type StaffingResult, type StaffingRuleTable } from '../../domain/staffing';
+import { calculateStaffing, DEFAULT_STAFFING_RULES, mergeStaffingRules, normalizeSchoolSize, parseClassCount, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize, type StaffingResult, type StaffingRuleTable } from '../../domain/staffing';
 import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
@@ -96,14 +96,17 @@ async function loadPlacementData(): Promise<SchoolData> {
   for (const [schoolId, exception] of exceptions) {
     if (!overrides.has(schoolId)) overrides.set(schoolId, { correctedSize: null, exception });
   }
-  const staffingRules = rulesResult.data ? z.object({
-    small: z.number().int().min(0),
-    small_plus: z.number().int().min(0),
-    medium: z.number().int().min(0),
-    medium_plus: z.number().int().min(0),
-    large: z.number().int().min(0),
-    large_plus: z.number().int().min(0),
-  }).parse(rulesResult.data.value) : DEFAULT_STAFFING_RULES;
+  const staffingRules = rulesResult.data
+    ? mergeStaffingRules(z.object({
+      small: z.number().int().min(0),
+      small_plus: z.number().int().min(0),
+      medium: z.number().int().min(0),
+      medium_plus: z.number().int().min(0),
+      large: z.number().int().min(0),
+      large_plus: z.number().int().min(0),
+      large_plus_plus: z.number().int().min(0),
+    }).partial().parse(rulesResult.data.value))
+    : DEFAULT_STAFFING_RULES;
   return {
     schools: z.array(schoolSchema).parse(schoolsResult.data),
     employees: z.array(employeeSchema).parse(employeeResult.data),

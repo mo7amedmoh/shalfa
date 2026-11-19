@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { dashboardAccessForRole } from '../../domain/dashboardAccess';
 import { cleanerShortageSchools, countDashboardActions, eligibleSchoolsMissingClassCount, schoolsWithSizeClassDifference, staffingRowsForEligibleSchools, summarizeDashboardServices, summarizeSupervisorCompliance, summarizeWorkforce, type DashboardCleanerShortageSchool, type DashboardStaffingRow, type WorkforceSummary } from '../../domain/dashboard';
-import { DEFAULT_STAFFING_RULES, SCHOOL_SIZES } from '../../domain/staffing';
+import { DEFAULT_STAFFING_RULES, mergeStaffingRules, SCHOOL_SIZES } from '../../domain/staffing';
 import { formatDashboardActivity } from '../../domain/dashboardActivity';
 import { summarizeDeliverables } from '../../domain/deliverables';
 import { KPI_WORK_ORDER } from '../../domain/kpi/config';
@@ -60,6 +60,7 @@ const staffingRulesSchema = z.object({
   medium_plus: z.number().int().min(0),
   large: z.number().int().min(0),
   large_plus: z.number().int().min(0),
+  large_plus_plus: z.number().int().min(0),
 });
 const exceptionSchema = z.object({ requiredCleaners: z.number().int().min(0), reason: z.string().trim().min(1) });
 const syncSchema = z.object({ synced_at: z.string().nullable() });
@@ -220,7 +221,7 @@ async function loadStaffingData(): Promise<StaffingData> {
     };
   });
   const rules = staffingRulesResult.data
-    ? staffingRulesSchema.parse(staffingRulesResult.data.value)
+    ? mergeStaffingRules(staffingRulesSchema.partial().parse(staffingRulesResult.data.value))
     : DEFAULT_STAFFING_RULES;
   const eligibility: EligibilitySettings & { staffingRules: typeof rules } = { ...config, staffingRules: rules };
   const rows = staffingRowsForEligibleSchools(dashboardSchools, eligibility);

@@ -12,11 +12,12 @@ function markerColour(size: SlimMapSchool['size']): string {
     medium_plus: '#8b5cf6',
     large: '#c43d4d',
     large_plus: '#7f1d1d',
+    large_plus_plus: '#581c87',
   } as const)[size];
 }
 
 function markerRadius(size: SlimMapSchool['size']): number {
-  return size === 'large_plus' ? 9 : size === 'large' || size === 'medium_plus' ? 8 : size === 'medium' ? 7 : 6;
+  return size === 'large_plus_plus' ? 10 : size === 'large_plus' ? 9 : size === 'large' || size === 'medium_plus' ? 8 : size === 'medium' ? 7 : 6;
 }
 
 export function SchoolMapMarkers({

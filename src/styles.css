@@ -3223,6 +3223,7 @@ th {
 .school-map-legend-medium_plus { background: #8b5cf6; }
 .school-map-legend-large { background: #c43d4d; }
 .school-map-legend-large_plus { background: #7f1d1d; }
+.school-map-legend-large_plus_plus { background: #581c87; }
 
 .report-design-page {
   display: grid;

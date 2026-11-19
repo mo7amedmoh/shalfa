@@ -5,6 +5,7 @@ export const SCHOOL_SIZES = [
   'medium_plus',
   'large',
   'large_plus',
+  'large_plus_plus',
 ] as const;
 
 export type SchoolSize = (typeof SCHOOL_SIZES)[number];
@@ -17,7 +18,12 @@ export const DEFAULT_STAFFING_RULES: StaffingRuleTable = {
   medium_plus: 3,
   large: 3,
   large_plus: 4,
+  large_plus_plus: 5,
 };
+
+export function mergeStaffingRules(rules: Partial<StaffingRuleTable> = {}): StaffingRuleTable {
+  return { ...DEFAULT_STAFFING_RULES, ...rules };
+}
 
 export const SCHOOL_SIZE_CODES: Record<SchoolSize, string> = {
   small: 'S',
@@ -26,6 +32,7 @@ export const SCHOOL_SIZE_CODES: Record<SchoolSize, string> = {
   medium_plus: 'M+',
   large: 'L',
   large_plus: 'L+',
+  large_plus_plus: 'L++',
 };
 
 export const SCHOOL_SIZE_LABELS: Record<SchoolSize, string> = {
@@ -35,6 +42,7 @@ export const SCHOOL_SIZE_LABELS: Record<SchoolSize, string> = {
   medium_plus: 'متوسطة+ (M+)',
   large: 'كبيرة (L)',
   large_plus: 'كبيرة+ (L+)',
+  large_plus_plus: 'كبيرة++ (L++)',
 };
 
 export interface StaffingInput {
@@ -67,12 +75,13 @@ export function parseClassCount(value: unknown): number | null {
 }
 
 const SIZE_ALIASES: Record<SchoolSize, readonly string[]> = {
-  small: ['s', 'small', 'صغير', 'صغيرة'],
-  small_plus: ['s+', 'small+', 'صغير+', 'صغيرة+'],
-  medium: ['m', 'medium', 'متوسط', 'متوسطة'],
-  medium_plus: ['m+', 'medium+', 'متوسط+', 'متوسطة+'],
-  large: ['l', 'large', 'كبير', 'كبيرة'],
-  large_plus: ['l+', 'large+', 'كبير+', 'كبيرة+'],
+  small: ['small', 's', 'صغير', 'صغيرة'],
+  small_plus: ['small_plus', 's+', 'small+', 'صغير+', 'صغيرة+'],
+  medium: ['medium', 'm', 'متوسط', 'متوسطة'],
+  medium_plus: ['medium_plus', 'm+', 'medium+', 'متوسط+', 'متوسطة+'],
+  large: ['large', 'l', 'كبير', 'كبيرة'],
+  large_plus: ['large_plus', 'l+', 'large+', 'كبير+', 'كبيرة+'],
+  large_plus_plus: ['large_plus_plus', 'l++', 'large++', 'كبير++', 'كبيرة++'],
 };
 
 export function normalizeSchoolSize(value: unknown): SchoolSize | null {

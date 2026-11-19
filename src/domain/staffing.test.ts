@@ -3,6 +3,7 @@ import {
   calculateStaffing,
   DEFAULT_STAFFING_RULES,
   getSizeFromClasses,
+  hasSizeCorrectionMismatch,
   hasSizeClassDifference,
   normalizeSchoolSize,
   mergeStaffingRules,
@@ -90,6 +91,13 @@ describe('staffing rules', () => {
 
   it.each(['XL', '', null, undefined, 1])('returns null for unknown size %s', (value) => {
     expect(normalizeSchoolSize(value)).toBeNull();
+  });
+
+  it('detects size corrections that differ from the sheet value', () => {
+    expect(hasSizeCorrectionMismatch('small', 'M')).toBe(true);
+    expect(hasSizeCorrectionMismatch('small', 'S')).toBe(false);
+    expect(hasSizeCorrectionMismatch('small', '')).toBe(true);
+    expect(hasSizeCorrectionMismatch(null, 'M')).toBe(false);
   });
 
   it('sets the staffing rule for every indicator', () => {

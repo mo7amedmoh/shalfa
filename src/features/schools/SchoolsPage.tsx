@@ -10,9 +10,11 @@ import { resolveSchoolBuildingNames } from '../../domain/schoolBuildings';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
+import { loadSchoolSizeCorrections } from '../../lib/schoolSizeCorrections';
 import { DuplicateSchoolWarning } from './SchoolSyncWarnings';
 import { SchoolDetails } from './SchoolDetails';
 import { SchoolMapMarkers } from './SchoolMapMarkers';
+import { SchoolSizeCorrectionBadge } from './SchoolSizeCorrectionBadge';
 import { selectSchoolOnMap } from './schoolMapView';
 import type { SchoolRecord } from './schoolTypes';
 import { hasSizeClassDifference, normalizeSchoolSize, SCHOOL_SIZE_CODES, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize } from '../../domain/staffing';
@@ -41,12 +43,16 @@ const categoricalHeaders = ['الحي', 'نوع المبنى', 'حجم المد�
 
 async function loadSchools(): Promise<SchoolRecord[]> {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('schools')
-    .select(APP_SCHEMA_SELECT.schoolsMap)
-    .order('source_row');
-  if (error) throw error;
-  return z.array(schoolSchema).parse(data);
+  const [schoolsResult, corrections] = await Promise.all([
+    supabase.from('schools')
+      .select(APP_SCHEMA_SELECT.schoolsMap)
+      .order('source_row'),
+    loadSchoolSizeCorrections(),
+  ]);
+  if (schoolsResult.error) throw schoolsResult.error;
+  const correctionBySchool = new Map(corrections.map((correction) => [correction.schoolId, correction]));
+  return z.array(schoolSchema).parse(schoolsResult.data)
+    .map((school) => ({ ...school, sizeCorrection: correctionBySchool.get(school.id) ?? null }));
 }
 
 function cellValue(school: SchoolRecord, header: string): string {
@@ -126,6 +132,10 @@ function normalizedSchoolValue(value: string): string {
 
 function schoolSizeFor(school: SchoolRecord): SchoolSize | null {
   return school.size_source ?? school.size_calc ?? normalizeSchoolSize(cellValue(school, 'حجم المدرسة'));
+}
+
+function displayedSchoolSizeFor(school: SchoolRecord): SchoolSize | null {
+  return school.sizeCorrection?.correctedSize ?? schoolSizeFor(school);
 }
 
 function MapViewport({
@@ -552,12 +562,19 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
                       </td>
                     );
                   })() : (
-                    <td key={index} style={styleForColumn(index, header, false)} title={header === 'حجم المدرسة' && schoolSizeFor(school)
-                      ? SCHOOL_SIZE_LABELS[schoolSizeFor(school)!]
+                    <td key={index} style={styleForColumn(index, header, false)} title={header === 'حجم المدرسة' && displayedSchoolSizeFor(school)
+                      ? SCHOOL_SIZE_LABELS[displayedSchoolSizeFor(school)!]
                       : formatPhoneValue(school.source_columns[index]?.value, header)}>
-                      {header === 'حجم المدرسة' && schoolSizeFor(school)
-                        ? SCHOOL_SIZE_CODES[schoolSizeFor(school)!]
-                        : formatPhoneValue(school.source_columns[index]?.value, header)}
+                      {header === 'حجم المدرسة' && displayedSchoolSizeFor(school) ? <>
+                        {SCHOOL_SIZE_CODES[displayedSchoolSizeFor(school)!]}
+                        <SchoolSizeCorrectionBadge
+                          sheetSize={school.size_source ?? cellValue(school, 'حجم المدرسة')}
+                          correctedSize={school.sizeCorrection?.correctedSize ?? null}
+                          updatedByName={school.sizeCorrection?.updatedByName ?? null}
+                          updatedAt={school.sizeCorrection?.updatedAt ?? null}
+                          formatDateTime={formatDateTime}
+                        />
+                      </> : formatPhoneValue(school.source_columns[index]?.value, header)}
                     </td>
                   )
                 ))}

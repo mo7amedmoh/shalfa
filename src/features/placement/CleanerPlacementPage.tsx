@@ -6,13 +6,15 @@ import { z } from 'zod';
 import { exportBrandedXlsx } from '../../lib/brandedXlsx';
 import { revealResidenceNumbers } from '../../lib/residence';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
-import { calculateStaffing, DEFAULT_STAFFING_RULES, mergeStaffingRules, normalizeSchoolSize, parseClassCount, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize, type StaffingResult, type StaffingRuleTable } from '../../domain/staffing';
+import { calculateStaffing, DEFAULT_STAFFING_RULES, hasSizeCorrectionMismatch, mergeStaffingRules, normalizeSchoolSize, parseClassCount, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize, type StaffingResult, type StaffingRuleTable } from '../../domain/staffing';
 import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
+import { loadSchoolSizeCorrections } from '../../lib/schoolSizeCorrections';
 import { preferencesContext } from '../../app/preferencesContext';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
+import { SchoolSizeCorrectionBadge } from '../schools/SchoolSizeCorrectionBadge';
 import { Link } from 'react-router-dom';
 import { paginateRows, TABLE_PAGE_SIZE } from '../../lib/pagination';
 import { TablePagination } from '../../components/TablePagination';
@@ -41,10 +43,6 @@ const assignmentSchema = z.object({
   labour_source: z.string().nullable(),
   employee: z.object({ full_name: z.string(), employee_number: z.string().nullable() }).nullable(),
 });
-const schoolSizeSchema = z.object({
-  school_id: z.string().uuid(),
-  corrected_size: z.enum(SCHOOL_SIZES),
-});
 const exceptionRowSchema = z.object({ school_id: z.string().uuid(), required_count: z.number().int(), reason: z.string() });
 const exceptionSchema = z.object({ requiredCleaners: z.number().int().min(0), reason: z.string().trim().min(1) });
 type School = z.infer<typeof schoolSchema>;
@@ -58,7 +56,12 @@ type SchoolData = {
   schools: School[];
   employees: z.infer<typeof employeeSchema>[];
   assignments: Assignment[];
-  overrides: Map<string, { correctedSize: SchoolSize | null; exception: z.infer<typeof exceptionSchema> | null }>;
+  overrides: Map<string, {
+    correctedSize: SchoolSize | null;
+    correctedBy: string | null;
+    correctedAt: string | null;
+    exception: z.infer<typeof exceptionSchema> | null;
+  }>;
   config: StaffingConfig | null;
 };
 type SchoolSummary = {
@@ -67,34 +70,46 @@ type SchoolSummary = {
   neighborhood: string;
   exception: z.infer<typeof exceptionSchema> | null;
   correctedSize: SchoolSize | null;
+  correctedBy: string | null;
+  correctedAt: string | null;
+  sheetDeclaredSize: string | null;
+  correctionMismatch: boolean;
 };
 
 async function loadPlacementData(): Promise<SchoolData> {
   if (!supabase) return { schools: [], employees: [], assignments: [], overrides: new Map(), config: null };
-  const [schoolsResult, employeeResult, assignmentResult, sizesResult, exceptionResult, configResult, rulesResult] = await Promise.all([
+  const [schoolsResult, employeeResult, assignmentResult, correctionRows, exceptionResult, configResult, rulesResult] = await Promise.all([
     supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsWithSize).order('name'),
     supabase.from('employees').select(APP_SCHEMA_SELECT.employeesBasic).eq('category', 'cleaner').order('full_name'),
     supabase.from('cleaner_assignments').select(APP_SCHEMA_SELECT.cleanerAssignments),
-    supabase.from('school_size_corrections').select(APP_SCHEMA_SELECT.schoolSizeCorrection),
+    loadSchoolSizeCorrections(),
     supabase.from('staffing_exceptions').select(APP_SCHEMA_SELECT.staffingException),
     supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
     supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'staffing_rules').maybeSingle(),
   ]);
-  for (const result of [schoolsResult, employeeResult, assignmentResult, sizesResult, exceptionResult, configResult, rulesResult]) {
+  for (const result of [schoolsResult, employeeResult, assignmentResult, exceptionResult, configResult, rulesResult]) {
     if (result.error) throw result.error;
   }
-  const overrides = new Map<string, { correctedSize: SchoolSize | null; exception: z.infer<typeof exceptionSchema> | null }>();
-  const sizeRows = z.array(schoolSizeSchema).parse(sizesResult.data);
+  const overrides = new Map<string, {
+    correctedSize: SchoolSize | null;
+    correctedBy: string | null;
+    correctedAt: string | null;
+    exception: z.infer<typeof exceptionSchema> | null;
+  }>();
   const exceptions = new Map(z.array(exceptionRowSchema).parse(exceptionResult.data)
     .map((item) => [item.school_id, { requiredCleaners: item.required_count, reason: item.reason }]));
-  for (const item of sizeRows) {
-    overrides.set(item.school_id, {
-      correctedSize: item.corrected_size,
-      exception: exceptions.get(item.school_id) ?? null,
+  for (const item of correctionRows) {
+    overrides.set(item.schoolId, {
+      correctedSize: item.correctedSize,
+      correctedBy: item.updatedByName,
+      correctedAt: item.updatedAt,
+      exception: exceptions.get(item.schoolId) ?? null,
     });
   }
   for (const [schoolId, exception] of exceptions) {
-    if (!overrides.has(schoolId)) overrides.set(schoolId, { correctedSize: null, exception });
+    if (!overrides.has(schoolId)) {
+      overrides.set(schoolId, { correctedSize: null, correctedBy: null, correctedAt: null, exception });
+    }
   }
   const staffingRules = rulesResult.data
     ? mergeStaffingRules(z.object({
@@ -120,12 +135,13 @@ async function loadPlacementData(): Promise<SchoolData> {
 
 export function CleanerPlacementPage({ profile }: { profile: UserProfile | null }) {
   const client = useQueryClient();
-  const { formatNumber } = useDisplayFormat();
+  const { formatNumber, formatDateTime } = useDisplayFormat();
   const [searchParams] = useSearchParams();
   const shortageOnly = searchParams.get('shortage') === 'true';
   const preferences = useContext(preferencesContext);
   const [viewMode, setViewMode] = useState(preferences.cleaner_placement_view);
   const [search, setSearch] = useState('');
+  const [correctionMismatchOnly, setCorrectionMismatchOnly] = useState(false);
   const [tablePage, setTablePage] = useState(1);
   const [newCleaner, setNewCleaner] = useState<Record<string, string>>({});
   const [exceptions, setExceptions] = useState<Record<string, { requiredCleaners: string; reason: string }>>({});
@@ -150,10 +166,11 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
       const sourceDeclaredSize = school.size_source ?? (data.data!.config!.schoolSizeHeader
         ? String(school.source_fields[data.data!.config!.schoolSizeHeader] ?? '')
         : null);
+      const correctedSize = override?.correctedSize ?? null;
       const staffing = calculateStaffing({
         classes,
         declaredSize: sourceDeclaredSize,
-        manualSizeOverride: override?.correctedSize,
+        manualSizeOverride: correctedSize,
         assignedCleaners: currentAssignments.length,
         exception: override?.exception,
         rules: data.data!.config!.staffingRules,
@@ -163,18 +180,24 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
         staffing,
         neighborhood: String(school.source_fields['الحي'] ?? 'غير محدد'),
         exception: override?.exception ?? null,
-        correctedSize: override?.correctedSize ?? null,
+        correctedSize,
+        correctedBy: override?.correctedBy ?? null,
+        correctedAt: override?.correctedAt ?? null,
+        sheetDeclaredSize: sourceDeclaredSize,
+        correctionMismatch: hasSizeCorrectionMismatch(correctedSize, sourceDeclaredSize),
       };
     });
   }, [data.data, eligibleIds]);
+  const correctionMismatchCount = summaries.filter((row) => row.correctionMismatch).length;
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
-    return summaries.filter(({ school, neighborhood, staffing }) =>
+    return summaries.filter(({ school, neighborhood, staffing, correctionMismatch }) =>
       (!shortageOnly || staffing.shortage > 0)
+      && (!correctionMismatchOnly || correctionMismatch)
       && `${school.school_name} ${school.ministry_number} ${neighborhood}`.toLocaleLowerCase().includes(query),
     );
-  }, [summaries, search, shortageOnly]);
-  useEffect(() => setTablePage(1), [shortageOnly]);
+  }, [summaries, search, shortageOnly, correctionMismatchOnly]);
+  useEffect(() => setTablePage(1), [shortageOnly, correctionMismatchOnly]);
   const pagedSchools = paginateRows(filtered, tablePage);
 
   const persistAssignment = useMutation({
@@ -228,8 +251,13 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
     mutationFn: async ({ schoolId, correctedSize }: { schoolId: string; correctedSize: SchoolSize | null }) => {
       if (!supabase || !profile || !canManageStaffingRules) throw new Error('لا تملك صلاحية تصحيح الحجم.');
       if (correctedSize === null) {
-        const { error } = await supabase.from('school_size_corrections').delete().eq('school_id', schoolId);
-        if (error) throw error;
+        const { error } = await supabase.rpc('delete_school_size_correction', { p_school_id: schoolId });
+        if (error) {
+          const migrationHint = error.code === 'PGRST202' || error.code === '42883'
+            ? ' يلزم تطبيق ترحيل 202611190003_delete_school_size_correction_audit.sql.'
+            : '';
+          throw new Error(`${error.message}${migrationHint}`);
+        }
         return;
       }
       const { error } = await supabase.from('school_size_corrections').upsert({
@@ -239,9 +267,15 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
       });
       if (error) throw error;
     },
-    onSuccess: async () => {
-      setMessage('تم حفظ تصحيح حجم المدرسة.');
-      await client.invalidateQueries({ queryKey: ['cleaner-placement-data'] });
+    onSuccess: async (_result, { correctedSize }) => {
+      setMessage(correctedSize === null
+        ? 'تم إلغاء التصحيح اليدوي للحجم.'
+        : 'تم حفظ تصحيح حجم المدرسة.');
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['cleaner-placement-data'] }),
+        client.invalidateQueries({ queryKey: ['schools'] }),
+        client.invalidateQueries({ queryKey: ['dashboard-staffing-data'] }),
+      ]);
     },
     onError: (error: Error) => setMessage(`تعذر تصحيح الحجم: ${error.message}`),
   });
@@ -338,6 +372,11 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
     }
   }
 
+  function requestCorrectionRemoval(schoolId: string) {
+    if (!window.confirm('هل تريد إلغاء التصحيح اليدوي للحجم؟ سيعود الحجم إلى مؤشر الشيت أو مرجع عدد الفصول.')) return;
+    saveCorrection.mutate({ schoolId, correctedSize: null });
+  }
+
   const totals = filtered.reduce((result, row) => ({
     required: result.required + (row.staffing.requiredCleaners ?? 0),
     assigned: result.assigned + row.staffing.assignedCleaners,
@@ -391,6 +430,14 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
         <div className="flex flex-wrap items-end justify-between gap-3">
           <label className="min-w-60 flex-1 text-sm font-semibold">بحث باسم المدرسة أو الرقم الوزاري أو الحي<input value={search} onChange={(event) => { setSearch(event.target.value); setTablePage(1); }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              aria-pressed={correctionMismatchOnly}
+              onClick={() => setCorrectionMismatchOnly((current) => !current)}
+              className={`rounded-lg border px-3 py-2 text-sm font-semibold ${correctionMismatchOnly ? 'border-violet-700 bg-violet-50 text-violet-900' : 'border-slate-300 text-slate-700'}`}
+            >
+              مدارس عليها تصحيح يخالف الشيت · {formatNumber(correctionMismatchCount)}
+            </button>
             <label className="flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm">
               <span>طريقة العرض</span>
               <select value={viewMode} disabled={saveViewMode.isPending} onChange={(event) => {
@@ -414,8 +461,9 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
                   <thead><tr>
                     <th scope="col">الرقم الوزاري</th><th scope="col">المدرسة</th><th scope="col">الحجم</th>
                     <th scope="col">مطلوب / مسند</th><th scope="col">أسماء العمال</th><th scope="col">الحالة</th>
+                    {canManageStaffingRules && <th scope="col">إجراء</th>}
                   </tr></thead>
-                  <tbody>{pagedSchools.rows.map(({ school, staffing }) => {
+                  <tbody>{pagedSchools.rows.map(({ school, staffing, correctedSize, correctedBy, correctedAt, sheetDeclaredSize }) => {
                   const assignments = data.data?.assignments.filter((item) => item.school_id === school.id) ?? [];
                   const balance = staffing.requiredCleaners === null
                     ? { label: 'الاحتياج غير محدد', style: 'bg-slate-100 text-slate-700' }
@@ -427,10 +475,20 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
                     return <tr key={school.id}>
                         <td data-label="الرقم الوزاري"><span dir="ltr">{school.ministry_number}</span></td>
                         <td data-label="المدرسة" className="cleaner-placement-school-name">{school.school_name}</td>
-                        <td data-label="الحجم">{sizeLabel(staffing.size)}</td>
+                        <td data-label="الحجم">
+                          {sizeLabel(staffing.size)}
+                          <SchoolSizeCorrectionBadge
+                            sheetSize={sheetDeclaredSize}
+                            correctedSize={correctedSize}
+                            updatedByName={correctedBy}
+                            updatedAt={correctedAt}
+                            formatDateTime={formatDateTime}
+                          />
+                        </td>
                         <td data-label="مطلوب / مسند">{formatNumber(staffing.requiredCleaners ?? '—')} / {formatNumber(staffing.assignedCleaners)}</td>
                         <td data-label="أسماء العمال">{assignments.map((item) => item.employee?.full_name ?? item.employee_id).join('، ') || '—'}</td>
                         <td data-label="الحالة"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${balance.style}`}>{balance.label}</span></td>
+                        {canManageStaffingRules && <td data-label="إجراء">{correctedSize && <button type="button" onClick={() => requestCorrectionRemoval(school.id)} disabled={saveCorrection.isPending} className="rounded border border-rose-300 px-2 py-1 text-xs font-semibold text-rose-800 disabled:opacity-50">إلغاء التصحيح</button>}</td>}
                     </tr>;
                   })}</tbody>
                 </table>
@@ -446,14 +504,22 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
               />
             </div>
           ) : <div className="grid gap-3">
-            {pagedSchools.rows.map(({ school, staffing, neighborhood, exception, correctedSize }) => <article key={school.id} className="rounded-xl border border-slate-200 p-4">
+            {pagedSchools.rows.map(({ school, staffing, neighborhood, exception, correctedSize, correctedBy, correctedAt, sheetDeclaredSize }) => <article key={school.id} className="rounded-xl border border-slate-200 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div><h3 className="font-bold">{school.school_name}</h3><p className="mt-1 text-xs text-slate-500">الرقم الوزاري: {school.ministry_number} · الحي: {neighborhood}</p></div>
                 <div className="flex flex-wrap gap-2 text-xs">
                   <span className="rounded-full bg-brand-50 px-2.5 py-1 text-brand-900">الحجم: {sizeLabel(staffing.size)}</span>
+                  <SchoolSizeCorrectionBadge
+                    sheetSize={sheetDeclaredSize}
+                    correctedSize={correctedSize}
+                    updatedByName={correctedBy}
+                    updatedAt={correctedAt}
+                    formatDateTime={formatDateTime}
+                  />
                   {staffing.sizeDiffersFromClassCount && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-900">الحجم يختلف عن عدد الفصول</span>}
                   {correctedSize && <span className="rounded-full bg-violet-50 px-2.5 py-1 text-violet-900">تصحيح يدوي: {sizeLabel(correctedSize)}</span>}
                   {exception && <span className="rounded-full bg-violet-50 px-2.5 py-1 text-violet-900">استثناء معتمد</span>}
+                  {canManageStaffingRules && correctedSize && <button type="button" onClick={() => requestCorrectionRemoval(school.id)} disabled={saveCorrection.isPending} className="rounded border border-rose-300 px-2.5 py-1 font-semibold text-rose-800 disabled:opacity-50">إلغاء التصحيح</button>}
                 </div>
               </div>
               <div className="mt-3 grid gap-2 text-sm sm:grid-cols-4">

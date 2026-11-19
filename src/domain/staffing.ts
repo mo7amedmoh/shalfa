@@ -91,6 +91,11 @@ export function normalizeSchoolSize(value: unknown): SchoolSize | null {
   return SCHOOL_SIZES.find((size) => SIZE_ALIASES[size].includes(normalized)) ?? null;
 }
 
+export function hasSizeCorrectionMismatch(correctedSize: string | null | undefined, sheetSize: unknown): boolean {
+  const normalizedCorrection = normalizeSchoolSize(correctedSize);
+  return normalizedCorrection !== null && normalizedCorrection !== normalizeSchoolSize(sheetSize);
+}
+
 export function getSizeFromClasses(classes: number): SchoolSize {
   if (!Number.isInteger(classes) || classes < 1) {
     throw new RangeError('Class count must be a positive integer.');

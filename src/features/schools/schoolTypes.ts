@@ -1,4 +1,5 @@
 import type { SchoolSize } from '../../domain/staffing';
+import type { SchoolSizeCorrectionDetails } from '../../lib/schoolSizeCorrections';
 
 export type SchoolSourceColumn = { header: string; value: unknown };
 
@@ -14,6 +15,7 @@ export type SchoolRecord = {
   missing_from_sheet_at: string | null;
   plan_scope: boolean;
   size_source: SchoolSize | null;
+  sizeCorrection?: SchoolSizeCorrectionDetails | null;
   size_calc: 'small' | 'medium' | 'large' | null;
   class_count: number | null;
   building_type: string | null;

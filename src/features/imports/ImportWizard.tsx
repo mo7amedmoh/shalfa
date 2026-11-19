@@ -142,7 +142,6 @@ function fieldsFor(target: ImportTarget): Field[] {
       { key: 'ministry', label: 'الرقم الوزاري', aliases: ['الرقم الوزاري'], required: true },
       { key: 'fullName', label: 'اسم العامل', aliases: ['اسم العامل', 'اسم عامل النظافة', 'اسم العامل / ة', 'اسم الموظف'], required: true },
       { key: 'residence', label: 'رقم الإقامة', aliases: ['رقم الإقامة', 'رقم الاقامة'] },
-      { key: 'labourSource', label: 'مصدر العمالة', aliases: ['مصدر العمالة', 'مصدر العامل'] },
       { key: 'employeeNo', label: 'الرقم الوظيفي', aliases: ['الرقم الوظيفي', 'رقم الموظف'] },
     ];
   }
@@ -599,7 +598,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
         p_full_name: '',
         p_employee_no: null,
         p_residence_no: null,
-        p_labour_source: 'org_structure',
+        p_labour_source: 'ajeer',
       });
       if (error?.code === 'PGRST202') {
         throw new ImportSchemaError(`تحتاج قاعدة البيانات إلى الترحيل 202611050003_import_support.sql قبل الكتابة. PostgreSQL (${error.code}): ${error.message}`);
@@ -758,13 +757,12 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
       for (let offset = 0; offset < writable.length; offset += 50) {
         const batch = writable.slice(offset, offset + 50);
         for (const { row, state } of batch) {
-          const labourSource = normalizeImportName(row.values.labourSource).includes('اجير') ? 'ajeer' : 'org_structure';
           const result = await supabase.rpc('resolve_import_cleaner', {
             p_school_id: state.school!.id,
             p_full_name: String(row.values.fullName).trim(),
             p_employee_no: String(row.values.employeeNo ?? '').trim() || null,
             p_residence_no: String(row.values.residence ?? '').trim() || null,
-            p_labour_source: labourSource,
+            p_labour_source: 'ajeer',
           });
           if (result.error) {
             reports.push({ line: row.line, ministryNumber: String(row.values.ministry), status: 'needs_attention', note: databaseErrorDetails(result.error) });

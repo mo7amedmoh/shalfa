@@ -3,6 +3,8 @@ import type { InputHTMLAttributes } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { loadXlsx } from '../../lib/xlsx';
+import { exportBrandedXlsx } from '../../lib/brandedXlsx';
+import { revealResidenceNumbers } from '../../lib/residence';
 import { z } from 'zod';
 import { FileDown, Eye, EyeOff, Search, Upload } from 'lucide-react';
 import type { UserProfile } from '../../lib/auth';
@@ -214,9 +216,8 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
   });
   const visibleEmployees = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
-    return (employees.data ?? []).filter((employee) =>
-      `${employee.full_name} ${employee.employee_number ?? ''} ${employee.job_title ?? ''} ${employee.department ?? ''}`.toLocaleLowerCase().includes(query),
-    );
+    return (employees.data ?? []).filter((employee) => employee.employee_category !== 'cleaner'
+      && `${employee.full_name} ${employee.employee_number ?? ''} ${employee.job_title ?? ''} ${employee.department ?? ''}`.toLocaleLowerCase().includes(query));
   }, [employees.data, search]);
   const pagedEmployees = paginateRows(visibleEmployees, employeePage);
   const residenceIssues = residenceQuality.data?.issues ?? [];
@@ -326,57 +327,84 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
 
   async function exportEmployees() {
     if (!visibleEmployees.length) return setMessage('لا توجد سجلات مطابقة للتصدير.');
-    const XLSX = await loadXlsx();
-    const records = visibleEmployees.map((employee) => ({
-        الاسم: employee.full_name,
-        'الرقم الوظيفي': employee.employee_number,
-        الوظيفة: employee.job_title,
-        القسم: employee.department,
-        'رقم التواصل': employee.phone ?? '',
-        ...(isPrivileged ? { التقييم: ratings.data?.get(employee.id) ?? '' } : {}),
-      }));
-    const sheet = XLSX.utils.json_to_sheet(records);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, sheet, 'القوى العاملة');
-    XLSX.writeFile(workbook, 'القوى-العاملة.xlsx');
-    setMessage('تم تصدير البيانات المعروضة دون أرقام الإقامة.');
+    if (isPrivileged && ratings.isLoading) return setMessage('انتظر اكتمال تحميل تقييمات الموظفين قبل التصدير.');
+    if (isPrivileged && ratings.error) return setMessage(`تعذر تصدير التقييمات: ${ratings.error instanceof Error ? ratings.error.message : String(ratings.error)}`);
+    if (isPrivileged && !ratings.data) return setMessage('تعذر تصدير البيانات: لم تُحمّل تقييمات الموظفين.');
+    try {
+      const canExportResidence = ['admin', 'project_manager', 'area_engineer'].includes(profile?.role ?? '');
+      const residenceNumbers = canExportResidence
+        ? await revealResidenceNumbers('employees', visibleEmployees.map(({ id }) => id))
+        : new Map<string, string>();
+      await exportBrandedXlsx('القوى-العاملة.xlsx', [{
+        name: 'القوى العاملة',
+        title: 'القوى العاملة',
+        columns: ['الاسم', 'الرقم الوظيفي', 'الوظيفة', 'الفئة الوظيفية', 'القسم', 'رقم الإقامة', 'التقييم'],
+        rows: visibleEmployees.map((employee) => [
+          employee.full_name,
+          employee.employee_number ?? '',
+          employee.job_title ?? '',
+          employeeCategoryLabels[employee.employee_category],
+          employee.department ?? '',
+          canExportResidence ? residenceNumbers.get(employee.id) ?? '' : '••••••',
+          isPrivileged ? ratings.data?.get(employee.id) ?? '' : '',
+        ]),
+      }]);
+      setMessage(canExportResidence
+        ? 'تم تصدير بيانات القوى العاملة بالأعمدة الأساسية وأرقام الإقامة المتاحة.'
+        : 'تم تصدير بيانات القوى العاملة؛ أرقام الإقامة مقنعة لعدم توفر الصلاحية.');
+    } catch (error) {
+      setMessage(`تعذر تصدير بيانات القوى العاملة: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async function exportResidenceQuality() {
     const report = residenceQuality.data;
     if (!report) return setMessage('لا توجد بيانات جودة أرقام الإقامة للتصدير.');
-    const XLSX = await loadXlsx();
-    const protectCell = (value: string | null) => {
-      const text = value ?? '';
-      return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
-    };
-    const issueRows = report.issues.map((employee) => ({
-      'نوع التنبيه': employee.issue === 'missing'
-        ? 'رقم غير مسجل'
-        : employee.issue === 'passport-like'
-          ? 'رقم شبيه بجواز السفر'
-          : 'رقم ليس من 10 خانات',
-      'اسم الموظف': protectCell(employee.fullName),
-      'الرقم الوظيفي': protectCell(employee.employeeNumber),
-      'رقم الإقامة/الوثيقة': protectCell(employee.residenceNumber),
-      'المدارس': protectCell(employee.schools.map(({ name }) => name).join('، ')),
-    }));
-    const sharedRows = report.shared.flatMap(({ residenceNumber, employees: matched }) => matched.map((employee) => ({
-      'رقم الإقامة/الوثيقة': protectCell(residenceNumber),
-      'اسم الموظف': protectCell(employee.fullName),
-      'الرقم الوظيفي': protectCell(employee.employeeNumber),
-      'المدارس': protectCell(employee.schools.map(({ name }) => name).join('، ')),
-    })));
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(issueRows), 'أرقام تحتاج مراجعة');
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(sharedRows), 'أرقام مشتركة');
-    XLSX.writeFile(workbook, 'جودة-أرقام-الإقامة.xlsx');
-    setMessage('تم تصدير تقرير جودة أرقام الإقامة.');
+    try {
+      const protectCell = (value: string | null) => {
+        const text = value ?? '';
+        return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+      };
+      const issueRows = report.issues.map((employee) => [
+        employee.issue === 'missing'
+          ? 'رقم غير مسجل'
+          : employee.issue === 'passport-like'
+            ? 'رقم شبيه بجواز السفر'
+            : 'رقم ليس من 10 خانات',
+        protectCell(employee.fullName),
+        protectCell(employee.employeeNumber),
+        protectCell(employee.residenceNumber),
+        protectCell(employee.schools.map(({ name }) => name).join('، ')),
+      ]);
+      const sharedRows = report.shared.flatMap(({ residenceNumber, employees: matched }) => matched.map((employee) => [
+        protectCell(residenceNumber),
+        protectCell(employee.fullName),
+        protectCell(employee.employeeNumber),
+        protectCell(employee.schools.map(({ name }) => name).join('، ')),
+      ]));
+      await exportBrandedXlsx('جودة-أرقام-الإقامة.xlsx', [
+        {
+          name: 'أرقام تحتاج مراجعة',
+          title: 'أرقام تحتاج مراجعة',
+          columns: ['نوع التنبيه', 'اسم الموظف', 'الرقم الوظيفي', 'رقم الإقامة/الوثيقة', 'المدارس'],
+          rows: issueRows,
+        },
+        {
+          name: 'أرقام مشتركة',
+          title: 'أرقام إقامة مشتركة',
+          columns: ['رقم الإقامة/الوثيقة', 'اسم الموظف', 'الرقم الوظيفي', 'المدارس'],
+          rows: sharedRows,
+        },
+      ]);
+      setMessage('تم تصدير تقرير جودة أرقام الإقامة.');
+    } catch (error) {
+      setMessage(`تعذر تصدير تقرير جودة أرقام الإقامة: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   return (
     <div className="workforce-page grid min-w-0 gap-5">
-      <section className="min-w-0"><p className="text-xs text-slate-500 sm:text-sm">سجل الموظفين والصلاحيات</p><h2 className="mt-1 text-xl font-bold text-brand-900 sm:text-2xl">القوى العاملة</h2></section>
+      <section className="min-w-0"><p className="text-xs text-slate-500 sm:text-sm">طاقم الشركة الداخلي؛ لا يشمل عمال النظافة بعقد أجير</p><h2 className="mt-1 text-xl font-bold text-brand-900 sm:text-2xl">القوى العاملة</h2></section>
       {(employees.error || (isPrivileged && ratings.error)) && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
         تعذر تحميل بيانات القوى العاملة: {employees.error ? `سجل الموظفين: ${employees.error.message}` : `التقييمات: ${ratings.error instanceof Error ? ratings.error.message : String(ratings.error)}`}
       </div>}

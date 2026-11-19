@@ -12,6 +12,12 @@ import {
   matchesPlanSchoolSearch,
   type PlanCompletionFilter,
 } from '../../domain/plans';
+import {
+  buildPlanEditReason,
+  getPlanEditWarnings,
+  planEditWarningLabel,
+  requiresVisitEditReason,
+} from '../../domain/planRowEdit';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import { schoolPersonDefault } from '../../domain/imports';
 import type { ScheduleAssignment } from '../../domain/planScheduler';
@@ -144,6 +150,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const [month, setMonth] = useState(() => validInitialMonth(searchParams.get('month')));
   const [activePlanId, setActivePlanId] = useState('');
   const [actualDates, setActualDates] = useState<Record<string, { visited: string; report: string }>>({});
+  const [plannedDates, setPlannedDates] = useState<Record<string, string>>({});
   const [newPlanLateByPlannedDate, setNewPlanLateByPlannedDate] = useState(true);
   const [activePlanLateByPlannedDate, setActivePlanLateByPlannedDate] = useState(true);
   const [visitFilter, setVisitFilter] = useState<PlanCompletionFilter>('all');
@@ -220,6 +227,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
       visited: row.visited_at ?? '',
       report: row.report_completed_at ?? '',
     }])));
+    setPlannedDates(Object.fromEntries(rows.data.map((row) => [row.id, row.planned_date])));
   }, [rows.data]);
 
   const createPlan = useMutation({
@@ -387,7 +395,44 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
         queryClient.invalidateQueries({ queryKey: ['monthly-report'] }),
       ]);
     },
+    onError: (error: Error) => setMessage(`تعذر تعديل صف الخطة: ${error.message}`),
   });
+
+  function savePlannedDate(row: PlanRow) {
+    const plannedDate = plannedDates[row.id] ?? row.planned_date;
+    if (!plannedDate || plannedDate === row.planned_date) return;
+    const warnings = getPlanEditWarnings({
+      plannedDate,
+      supervisorId: row.supervisor_id,
+      rows: editableRows,
+      excludedRowIds: [row.id],
+      scheduleChanged: true,
+    });
+    if (warnings.length && !window.confirm(`تنبيهات الموعد الجديد:\n${warnings.map(planEditWarningLabel).join('\n')}\nهل تريد المتابعة؟`)) {
+      setPlannedDates((current) => ({ ...current, [row.id]: row.planned_date }));
+      return;
+    }
+
+    let reason = '';
+    if (requiresVisitEditReason({
+      visited: row.visited || Boolean(row.visited_at),
+      schoolChanged: false,
+      dateChanged: true,
+    })) {
+      const enteredReason = window.prompt('اكتب سبب تغيير موعد صف تمت زيارته:');
+      if (!enteredReason?.trim()) {
+        setPlannedDates((current) => ({ ...current, [row.id]: row.planned_date }));
+        return;
+      }
+      reason = enteredReason;
+    }
+
+    editPlanRow.mutate({
+      rowId: row.id,
+      changes: { planned_date: plannedDate },
+      reason: buildPlanEditReason(reason, warnings),
+    });
+  }
 
   const deletePlan = useMutation({
     mutationFn: async ({ rowsOnly }: { rowsOnly: boolean }) => {
@@ -671,14 +716,26 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                     : row.supervisor_name;
                   return <tr key={row.id}>
                     <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small>{supervisorName && <small className="block text-xs text-slate-500">المشرف: {supervisorName}</small>}</td>
-                    <td>{formatDate(row.planned_date)}{row.edited_at && <span
-                      className="ms-2 inline-flex rounded-full bg-indigo-50 px-2 py-1 text-[0.68rem] font-semibold text-indigo-800"
-                      title={`الموعد الأصلي: ${row.original_planned_date ? formatDate(row.original_planned_date) : 'غير متاح'}`}
-                      aria-label={`معدّلة. الموعد الأصلي: ${row.original_planned_date ? formatDate(row.original_planned_date) : 'غير متاح'}`}
-                    >معدّلة</span>}</td>
+                    <td>
+                      {canEditSchedule ? <DateEditor
+                        value={plannedDates[row.id] ?? row.planned_date}
+                        onChange={(value) => setPlannedDates((current) => ({ ...current, [row.id]: value }))}
+                        onSave={() => savePlannedDate(row)}
+                        label="حفظ الموعد"
+                        inputLabel={`الموعد المخطط لمدرسة ${row.school?.school_name ?? ''}`}
+                        disabled={editPlanRow.isPending
+                          || !(plannedDates[row.id] ?? row.planned_date)
+                          || (plannedDates[row.id] ?? row.planned_date) === row.planned_date}
+                      /> : formatDate(row.planned_date)}
+                      {row.edited_at && <span
+                        className="ms-2 inline-flex rounded-full bg-indigo-50 px-2 py-1 text-[0.68rem] font-semibold text-indigo-800"
+                        title={`الموعد الأصلي: ${row.original_planned_date ? formatDate(row.original_planned_date) : 'غير متاح'}`}
+                        aria-label={`معدّلة. الموعد الأصلي: ${row.original_planned_date ? formatDate(row.original_planned_date) : 'غير متاح'}`}
+                      >معدّلة</span>}
+                    </td>
                     {(planType === 'security_safety' || planType === 'elevators') && <td>{row.contractor_name ?? '—'}</td>}
-                    <td><DateEditor value={dates.visited} onChange={(value) => setActualDates((current) => ({ ...current, [row.id]: { ...dates, visited: value } }))} onSave={() => updateRow.mutate({ rowId: row.id, field: 'visited_at', value: dates.visited || null })} label="حفظ الزيارة" disabled={!canUpdate || updateRow.isPending} /></td>
-                    <td><DateEditor value={dates.report} onChange={(value) => setActualDates((current) => ({ ...current, [row.id]: { ...dates, report: value } }))} onSave={() => updateRow.mutate({ rowId: row.id, field: 'report_completed_at', value: dates.report || null })} label="حفظ التقرير" disabled={!canUpdate || updateRow.isPending} /></td>
+                    <td><DateEditor value={dates.visited} onChange={(value) => setActualDates((current) => ({ ...current, [row.id]: { ...dates, visited: value } }))} onSave={() => updateRow.mutate({ rowId: row.id, field: 'visited_at', value: dates.visited || null })} label="حفظ الزيارة" inputLabel="تاريخ الزيارة" disabled={!canUpdate || updateRow.isPending} /></td>
+                    <td><DateEditor value={dates.report} onChange={(value) => setActualDates((current) => ({ ...current, [row.id]: { ...dates, report: value } }))} onSave={() => updateRow.mutate({ rowId: row.id, field: 'report_completed_at', value: dates.report || null })} label="حفظ التقرير" inputLabel="تاريخ إنجاز التقرير" disabled={!canUpdate || updateRow.isPending} /></td>
                     <td>
                       <span>{overdue ? <span className="rounded-full bg-rose-50 px-2 py-1 text-xs text-rose-800">متأخر</span> : row.visited_at && row.report_completed_at ? 'مكتمل' : 'قيد المتابعة'}</span>
                       <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -742,9 +799,16 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   );
 }
 
-function DateEditor({ value, onChange, onSave, label, disabled }: { value: string; onChange: (value: string) => void; onSave: () => void; label: string; disabled: boolean }) {
+function DateEditor({ value, onChange, onSave, label, inputLabel, disabled }: {
+  value: string;
+  onChange: (value: string) => void;
+  onSave: () => void;
+  label: string;
+  inputLabel: string;
+  disabled: boolean;
+}) {
   return <div className="flex items-center gap-2">
-    <input type="date" value={value} onChange={(event) => onChange(event.target.value)} className="rounded border border-slate-300 px-2 py-1" />
+    <input type="date" aria-label={inputLabel} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} className="rounded border border-slate-300 px-2 py-1 disabled:bg-slate-50" />
     <button type="button" onClick={onSave} disabled={disabled} className="rounded border border-slate-300 px-2 py-1 text-xs disabled:opacity-50">{label}</button>
   </div>;
 }

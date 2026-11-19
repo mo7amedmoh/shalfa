@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
 import { z } from 'zod';
-import { loadXlsx } from '../../lib/xlsx';
+import { exportBrandedXlsx } from '../../lib/brandedXlsx';
+import { revealResidenceNumbers } from '../../lib/residence';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import { calculateStaffing, DEFAULT_STAFFING_RULES, normalizeSchoolSize, parseClassCount, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize, type StaffingResult, type StaffingRuleTable } from '../../domain/staffing';
 import type { UserProfile } from '../../lib/auth';
@@ -124,7 +125,6 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   const [search, setSearch] = useState('');
   const [tablePage, setTablePage] = useState(1);
   const [newCleaner, setNewCleaner] = useState<Record<string, string>>({});
-  const [labourSource, setLabourSource] = useState<Record<string, string>>({});
   const [exceptions, setExceptions] = useState<Record<string, { requiredCleaners: string; reason: string }>>({});
   const [correctedSizes, setCorrectedSizes] = useState<Record<string, SchoolSize | ''>>({});
   const [revealed, setRevealed] = useState<Record<string, string>>({});
@@ -175,10 +175,10 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   const pagedSchools = paginateRows(filtered, tablePage);
 
   const persistAssignment = useMutation({
-    mutationFn: async ({ schoolId, employeeId, source }: { schoolId: string; employeeId: string; source: string }) => {
+    mutationFn: async ({ schoolId, employeeId }: { schoolId: string; employeeId: string }) => {
       if (!supabase || !canManage) throw new Error('لا تملك صلاحية تعديل التسكين.');
       if (!employeeId) throw new Error('اختر عاملاً أولاً.');
-      const { error } = await supabase.from('cleaner_assignments').insert({ school_id: schoolId, employee_id: employeeId, labour_source: source.trim() || 'org_structure' });
+      const { error } = await supabase.from('cleaner_assignments').insert({ school_id: schoolId, employee_id: employeeId, labour_source: 'ajeer' });
       if (error) throw error;
     },
     onSuccess: async () => {
@@ -259,30 +259,80 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   }
 
   async function exportSummary() {
-    const XLSX = await loadXlsx();
-    const rows = filtered.map(({ school, staffing, neighborhood }) => ({
-      'الرقم الوزاري': school.ministry_number,
-      'اسم المدرسة': school.school_name,
-      'الحي': neighborhood,
-      'الحجم المعتمد': sizeLabel(staffing.size),
-      'عدد الفصول': parseClassCount(school.source_fields[data.data?.config?.classCountHeader ?? '']) ?? '',
-      'المطلوب': staffing.requiredCleaners ?? '',
-      'المسند': staffing.assignedCleaners,
-      'العجز': staffing.shortage,
-      'الفائض': staffing.surplus,
-    }));
-    const sheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, sheet, 'تسكين العمالة');
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(groupedBySize.map((row) => ({
-      'الحجم': row.label,
-      'عدد المدارس': row.schools,
-      'المطلوب': row.required, 'المسند': row.assigned, 'العجز': row.shortage, 'الفائض': row.surplus,
-    }))), 'حسب الحجم');
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(groupedByNeighborhood.map((row) => ({
-      'الحي': row.label, 'المطلوب': row.required, 'المسند': row.assigned, 'العجز': row.shortage, 'الفائض': row.surplus,
-    }))), 'حسب الحي');
-    XLSX.writeFile(workbook, 'تسكين-العمالة.xlsx');
+    try {
+      const assignments = data.data?.assignments ?? [];
+      const assignmentsBySchool = new Map<string, Assignment[]>();
+      for (const assignment of assignments) {
+        const current = assignmentsBySchool.get(assignment.school_id) ?? [];
+        current.push(assignment);
+        assignmentsBySchool.set(assignment.school_id, current);
+      }
+      for (const group of assignmentsBySchool.values()) {
+        group.sort((left, right) => (left.employee?.full_name ?? '').localeCompare(right.employee?.full_name ?? '', 'ar'));
+      }
+      const exportAssignments = filtered.flatMap(({ school }) => (assignmentsBySchool.get(school.id) ?? []).slice(0, 5));
+      const canExportResidence = ['admin', 'project_manager', 'area_engineer'].includes(profile?.role ?? '');
+      const residenceNumbers = canExportResidence
+        ? await revealResidenceNumbers('employees', exportAssignments.map(({ employee_id }) => employee_id))
+        : new Map<string, string>();
+      const workerColumns = Array.from({ length: 5 }, (_, index) => {
+        const ordinal = ['الأول', 'الثاني', 'الثالث', 'الرابع', 'الخامس'][index];
+        return [`اسم العامل ${ordinal}`, `رقم هوية العامل ${ordinal}`];
+      }).flat();
+      const rows = filtered.map(({ school, staffing, neighborhood }) => {
+        const schoolAssignments = assignmentsBySchool.get(school.id) ?? [];
+        return [
+          school.ministry_number,
+          school.school_name,
+          neighborhood,
+          sizeLabel(staffing.size),
+          parseClassCount(school.source_fields[data.data?.config?.classCountHeader ?? '']) ?? '',
+          staffing.requiredCleaners ?? '',
+          staffing.assignedCleaners,
+          staffing.shortage,
+          staffing.surplus,
+          ...Array.from({ length: 5 }, (_, index) => {
+            const assignment = schoolAssignments[index];
+            return [
+              assignment?.employee?.full_name ?? '',
+              canExportResidence
+                ? residenceNumbers.get(assignment?.employee_id ?? '') ?? ''
+                : assignment ? '••••••' : '',
+            ];
+          }).flat(),
+          schoolAssignments.length ? 'عقد أجير' : '',
+        ];
+      });
+
+      await exportBrandedXlsx('تسكين-العمالة.xlsx', [
+        {
+          name: 'تسكين العمالة',
+          title: 'تسكين العمالة',
+          columns: [
+            'الرقم الوزاري', 'اسم المدرسة', 'الحي', 'الحجم المعتمد', 'عدد الفصول',
+            'المطلوب', 'المسند', 'العجز', 'الفائض', ...workerColumns, 'مصدر العمالة',
+          ],
+          rows,
+        },
+        {
+          name: 'حسب الحجم',
+          title: 'تسكين العمالة حسب الحجم',
+          columns: ['الحجم', 'عدد المدارس', 'المطلوب', 'المسند', 'العجز', 'الفائض'],
+          rows: groupedBySize.map((row) => [row.label, row.schools, row.required, row.assigned, row.shortage, row.surplus]),
+        },
+        {
+          name: 'حسب الحي',
+          title: 'تسكين العمالة حسب الحي',
+          columns: ['الحي', 'المطلوب', 'المسند', 'العجز', 'الفائض'],
+          rows: groupedByNeighborhood.map((row) => [row.label, row.required, row.assigned, row.shortage, row.surplus]),
+        },
+      ]);
+      setMessage(canExportResidence
+        ? 'تم تصدير بيانات التسكين مع أسماء العمال وأرقام هوياتهم.'
+        : 'تم تصدير بيانات التسكين؛ أرقام الهوية مقنعة لعدم توفر الصلاحية.');
+    } catch (error) {
+      setMessage(`تعذر تصدير بيانات التسكين: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   const totals = filtered.reduce((result, row) => ({
@@ -410,7 +460,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
               <div className="mt-3 grid gap-2">
                 {(data.data?.assignments.filter((item) => item.school_id === school.id) ?? []).map((assignment) => <div key={assignment.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
                   <span className="font-semibold">{assignment.employee?.full_name ?? assignment.employee_id}</span>
-                  <span className="text-xs text-slate-500">{assignment.labour_source === 'ajeer' ? 'أجير' : assignment.labour_source === 'org_structure' ? 'الهيكل التنظيمي' : 'مصدر العمالة غير محدد'}</span>
+                  <span className="text-xs text-slate-500">{assignment.labour_source === 'ajeer' ? 'عقد أجير' : 'مصدر العمالة غير محدد'}</span>
                   <span className="text-xs text-slate-600">{revealed[assignment.employee_id] ?? '••••••'}</span>
                   {['admin', 'project_manager'].includes(profile?.role ?? '') && <button type="button" onClick={() => void revealResidence(assignment.employee_id)} aria-label={revealed[assignment.employee_id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="rounded p-1 text-brand-700">{revealed[assignment.employee_id] ? <EyeOff size={15} /> : <Eye size={15} />}</button>}
                   {canManage && <button type="button" onClick={() => deleteAssignment.mutate(assignment.id)} className="me-auto text-xs text-rose-700">إزالة</button>}
@@ -418,8 +468,8 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
               </div>
               {canManage && <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
                 <select value={newCleaner[school.id] ?? ''} onChange={(event) => setNewCleaner((current) => ({ ...current, [school.id]: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">اختر عاملاً</option>{(data.data?.employees ?? []).map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name} · {employee.job_title}</option>)}</select>
-                <select value={labourSource[school.id] ?? 'org_structure'} onChange={(event) => setLabourSource((current) => ({ ...current, [school.id]: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="org_structure">الهيكل التنظيمي</option><option value="ajeer">أجير</option></select>
-                <button type="button" onClick={() => persistAssignment.mutate({ schoolId: school.id, employeeId: newCleaner[school.id] ?? '', source: labourSource[school.id] ?? '' })} disabled={persistAssignment.isPending} className="rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50">إضافة عامل</button>
+                <p className="self-center text-sm text-slate-600">مصدر العمالة: عقد أجير</p>
+                <button type="button" onClick={() => persistAssignment.mutate({ schoolId: school.id, employeeId: newCleaner[school.id] ?? '' })} disabled={persistAssignment.isPending} className="rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50">إضافة عامل</button>
               </div>}
               {canManageStaffingRules && <details className="mt-3 rounded-lg border border-slate-200 p-3">
                 <summary className="cursor-pointer text-sm font-semibold">تصحيح يدوي للحجم</summary>

@@ -4,10 +4,10 @@ import { Download } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
 import { calculateRewardBalance, canAllocateReward } from '../../domain/rewards';
+import { exportBrandedXlsx } from '../../lib/brandedXlsx';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
-import { loadXlsx } from '../../lib/xlsx';
 
 const poolSchema = z.object({
   id: z.string().uuid(),
@@ -92,6 +92,7 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
   const [engineerId, setEngineerId] = useState('');
   const [amount, setAmount] = useState('');
   const [employeeId, setEmployeeId] = useState('');
+  const [selectedAllocationIds, setSelectedAllocationIds] = useState<string[]>([]);
   const [note, setNote] = useState('');
   const [poolAmount, setPoolAmount] = useState('');
   const [message, setMessage] = useState('');
@@ -111,12 +112,17 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
   }, [profile, privileged, engineers.data, engineerId]);
 
   const pool = pools.data?.find((item) => item.engineer_id === engineerId);
+  useEffect(() => setSelectedAllocationIds([]), [pool?.id]);
   const distributionsQuery = useQuery({
     queryKey: ['reward-distributions', pool?.id],
     queryFn: () => loadDistributions(pool!.id),
     enabled: Boolean(pool?.id),
   });
   const distributions = useMemo(() => distributionsQuery.data ?? [], [distributionsQuery.data]);
+  const selectedDistributions = useMemo(
+    () => distributions.filter((item) => selectedAllocationIds.includes(item.id)),
+    [distributions, selectedAllocationIds],
+  );
   const balance = useMemo(() => pool
     ? calculateRewardBalance(pool.amount, distributions.map((item) => item.amount))
     : null, [pool, distributions]);
@@ -128,26 +134,31 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
   const rewardEmployeesById = useMemo(() => new Map((employees.data ?? []).map((employee) => [employee.id, employee])), [employees.data]);
 
   async function exportRewardAllocations() {
-    if (!privileged) return;
-    if (!distributions.length) {
-      setMessage('لا توجد توزيعات مكافآت جاهزة للتصدير.');
+    if (!selectedDistributions.length) {
+      setMessage('حدد طلب مكافأة واحداً على الأقل للتصدير.');
       return;
     }
-    const XLSX = await loadXlsx();
-    const records = distributions.map((distribution) => {
-      const employee = rewardEmployeesById.get(distribution.employee_id);
-      return {
-        'اسم الموظف': distribution.employee?.full_name ?? employee?.full_name ?? '',
-        'الرقم الوظيفي': employee?.employee_no ?? '',
-        المهنة: employee?.job_title ?? '',
-        المشروع: 'SAFARY-RIYADH',
-        'قيمة المكافأة': distribution.amount,
-      };
-    });
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(records), 'مكافآت الموظفين');
-    XLSX.writeFile(workbook, `مكافآت-${month}.xlsx`);
-    setMessage('تم تصدير قائمة المكافآت بصيغة Excel.');
+    try {
+      await exportBrandedXlsx(`مكافآت-${month}.xlsx`, [{
+        name: 'مكافآت الموظفين',
+        title: 'طلبات مكافأة الفنيين',
+        columns: ['اسم الموظف', 'الرقم الوظيفي', 'المهنة', 'المشروع', 'قيمة المكافأة', 'الملاحظة'],
+        rows: selectedDistributions.map((distribution) => {
+          const employee = rewardEmployeesById.get(distribution.employee_id);
+          return [
+            distribution.employee?.full_name ?? employee?.full_name ?? '',
+            employee?.employee_no ?? '',
+            employee?.job_title ?? '',
+            'SAFARY-RIYADH',
+            distribution.amount,
+            distribution.note ?? '',
+          ];
+        }),
+      }]);
+      setMessage(`تم تصدير ${selectedDistributions.length} من طلبات المكافأة المحددة.`);
+    } catch (error) {
+      setMessage(`تعذر تصدير طلبات المكافأة: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   const savePool = useMutation({
@@ -285,7 +296,6 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
           <Metric label="الرصيد المتبقي" amount={balance?.remainingAmount ?? 0} />
         </div>}
         {pool?.status === 'approved' && <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">تم اعتماد المخصص وإقفال هذا الشهر.</p>}
-        {privileged && pool && <button type="button" onClick={() => void exportRewardAllocations()} disabled={distributionsQuery.isLoading || !distributions.length} className="inline-flex w-fit items-center gap-2 rounded-lg border border-brand-700 px-4 py-2 text-sm font-bold text-brand-800 disabled:opacity-50"><Download size={16} /> تصدير قائمة المكافآت Excel</button>}
         {!pool && <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">{privileged ? 'لم يُحدد مخصص لهذا المهندس والشهر.' : 'لم يُحدد مخصص متاح لحسابك لهذا الشهر.'}</p>}
       </section>
 
@@ -301,10 +311,23 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
       </section>}
 
       {pool && <section className="card grid gap-4 p-5">
-        <h3 className="font-bold">سجل التوزيع</h3>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 className="font-bold">سجل التوزيع</h3>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => setSelectedAllocationIds(distributions.map((item) => item.id))} disabled={!distributions.length} className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-50">تحديد الكل</button>
+            <button type="button" onClick={() => setSelectedAllocationIds([])} disabled={!selectedAllocationIds.length} className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-50">إلغاء التحديد</button>
+            <button type="button" onClick={() => void exportRewardAllocations()} disabled={distributionsQuery.isLoading || !selectedDistributions.length} className="inline-flex items-center gap-2 rounded-lg border border-brand-700 px-3 py-2 text-sm font-bold text-brand-800 disabled:opacity-50"><Download size={16} /> تصدير المحدد Excel</button>
+          </div>
+        </div>
         {distributionsQuery.isLoading ? <p role="status">جارٍ تحميل السجل…</p> : distributions.length === 0 ? <p className="text-sm text-slate-500">لا توجد توزيعات بعد.</p> : <div className="table-scroll"><table>
-          <thead><tr><th>الموظف</th><th>المبلغ</th><th>الملاحظة</th></tr></thead>
-          <tbody>{distributions.map((item) => <tr key={item.id}><td>{item.employee?.full_name ?? item.employee_id}</td><td>{item.amount.toFixed(2)}</td><td>{item.note ?? '—'}</td></tr>)}</tbody>
+          <thead><tr>
+            <th><input type="checkbox" aria-label="تحديد جميع طلبات المكافأة" checked={distributions.length > 0 && selectedDistributions.length === distributions.length} onChange={(event) => setSelectedAllocationIds(event.target.checked ? distributions.map((item) => item.id) : [])} /></th>
+            <th>الموظف</th><th>المبلغ</th><th>الملاحظة</th>
+          </tr></thead>
+          <tbody>{distributions.map((item) => <tr key={item.id}>
+            <td><input type="checkbox" aria-label={`تحديد مكافأة ${item.employee?.full_name ?? item.employee_id}`} checked={selectedAllocationIds.includes(item.id)} onChange={(event) => setSelectedAllocationIds((current) => event.target.checked ? [...new Set([...current, item.id])] : current.filter((id) => id !== item.id))} /></td>
+            <td>{item.employee?.full_name ?? item.employee_id}</td><td>{item.amount.toFixed(2)}</td><td>{item.note ?? '—'}</td>
+          </tr>)}</tbody>
         </table></div>}
       </section>}
       {message && <p role="status" className="text-sm text-slate-700">{message}</p>}

@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, Eye, EyeOff, X } from 'lucide-react';
-import { loadXlsx } from '../../lib/xlsx';
+import { exportBrandedXlsx } from '../../lib/brandedXlsx';
+import { revealResidenceNumbers } from '../../lib/residence';
 import { z } from 'zod';
 import type { UserProfile } from '../../lib/auth';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
@@ -224,23 +225,34 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
   }
 
   async function exportRows() {
-    const XLSX = await loadXlsx();
-    const worksheet = XLSX.utils.aoa_to_sheet([
-      ['المدرسة', 'الرقم الوزاري', 'الحي', 'اسم البواب', 'الرقم الوظيفي', 'رقم الجوال', 'رقم الإقامة', 'ملاحظات'],
-      ...rows.map(({ school, gatekeeper }) => [
-        school.school_name,
-        school.ministry_number,
-        school.neighbourhood ?? '',
-        gatekeeper?.full_name ?? '',
-        gatekeeper?.employee_no ?? '',
-        gatekeeper?.phone ?? '',
-        gatekeeper ? '••••••' : '',
-        gatekeeper?.notes ?? '',
-      ]),
-    ]);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'تسكين البوابين');
-    XLSX.writeFile(workbook, 'تسكين-البوابين.xlsx');
+    try {
+      const canExportResidence = ['admin', 'project_manager'].includes(profile?.role ?? '');
+      const residenceNumbers = canExportResidence
+        ? await revealResidenceNumbers('gatekeepers', rows.flatMap(({ gatekeeper }) => gatekeeper ? [gatekeeper.id] : []))
+        : new Map<string, string>();
+      await exportBrandedXlsx('تسكين-البوابين.xlsx', [{
+        name: 'تسكين البوابين',
+        title: 'تسكين البوابين',
+        columns: ['المدرسة', 'الرقم الوزاري', 'الحي', 'اسم البواب', 'الرقم الوظيفي', 'رقم الجوال', 'رقم الإقامة', 'ملاحظات'],
+        rows: rows.map(({ school, gatekeeper }) => [
+          school.school_name,
+          school.ministry_number,
+          school.neighbourhood ?? '',
+          gatekeeper?.full_name ?? '',
+          gatekeeper?.employee_no ?? '',
+          gatekeeper?.phone ?? '',
+          gatekeeper
+            ? canExportResidence ? residenceNumbers.get(gatekeeper.id) ?? '' : '••••••'
+            : '',
+          gatekeeper?.notes ?? '',
+        ]),
+      }]);
+      setMessage(canExportResidence
+        ? 'تم تصدير بيانات البوابين مع أرقام الإقامة.'
+        : 'تم تصدير بيانات البوابين؛ أرقام الإقامة مقنعة لعدم توفر الصلاحية.');
+    } catch (error) {
+      setMessage(`تعذر تصدير بيانات البوابين: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   return (

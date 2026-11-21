@@ -135,6 +135,12 @@ export function CleaningAttendanceReportForm() {
     setPhotos((previous) => previous.filter((_, photoIndex) => photoIndex !== index));
   }
 
+  function clearAllPhotos() {
+    setPhotos([]);
+    setError('');
+    setStatus('تم مسح جميع الصور المرفوعة.');
+  }
+
   async function exportReport() {
     setError('');
     setStatus('');
@@ -271,17 +277,29 @@ export function CleaningAttendanceReportForm() {
               <h3 className="font-bold text-brand-900">صور العمالة</h3>
               <p className="mt-1 text-xs text-slate-500">سيتم إنشاء شريحة مستقلة لكل صورة.</p>
             </div>
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 hover:bg-brand-50">
-              <ImagePlus size={16} /> إرفاق الصور
-              <input
-                type="file"
-                multiple
-                accept={imageAccept}
-                className="sr-only"
-                onChange={(event) => void addPhotos(event)}
-                disabled={busy}
-              />
-            </label>
+            <span className="flex flex-wrap items-center gap-2">
+              {photos.length > 0 && (
+                <button
+                  type="button"
+                  onClick={clearAllPhotos}
+                  disabled={busy}
+                  className="inline-flex items-center gap-2 rounded-lg border border-rose-300 px-3 py-2 text-sm font-bold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Trash2 size={16} /> مسح كل الصور
+                </button>
+              )}
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 hover:bg-brand-50">
+                <ImagePlus size={16} /> إرفاق الصور
+                <input
+                  type="file"
+                  multiple
+                  accept={imageAccept}
+                  className="sr-only"
+                  onChange={(event) => void addPhotos(event)}
+                  disabled={busy}
+                />
+              </label>
+            </span>
           </div>
           {photos.length > 0 ? (
             <ul className="grid gap-2 sm:grid-cols-2">

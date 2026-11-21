@@ -53,6 +53,9 @@ const RewardsPage = lazy(() =>
 const CleanerPlacementPage = lazy(() =>
   import('../features/placement/CleanerPlacementPage').then((module) => ({ default: module.CleanerPlacementPage })),
 );
+const AttendancePage = lazy(() =>
+  import('../features/attendance/AttendancePage').then((module) => ({ default: module.AttendancePage })),
+);
 const GatekeeperPlacementPage = lazy(() =>
   import('../features/placement/GatekeeperPlacementPage').then((module) => ({ default: module.GatekeeperPlacementPage })),
 );
@@ -131,6 +134,7 @@ const navigation = [
     icon: BadgeCheck,
     children: [
       ['تسكين العمالة', '/placement/cleaners'],
+      ['تحضير العمالة', '/placement/attendance'],
       ['تسكين البوابين', '/placement/gatekeepers'],
       ['مكافأة الفنيين', '/rewards'],
     ],
@@ -227,11 +231,17 @@ function AppShell({
   });
   const visibleNavigation = useMemo(() => navigation.map((item) => {
     if (!('children' in item)) return item;
+    if (item.label === 'أعمال إدارية') {
+      return {
+        ...item,
+        children: item.children?.filter((child) => child[1] !== '/placement/attendance' || canManagePlanNames),
+      };
+    }
     const group = item.label === 'الخطط الشهرية' ? 'monthly' : item.label === 'الخطط العامة' ? 'general' : null;
     if (!group) return item;
     const custom = buildCustomMenu(customTypes.data ?? [], group).map(({ label, path }) => [label, path] as [string, string]);
     return { ...item, children: [...(item.children ?? []), ...custom] };
-  }), [customTypes.data]);
+  }), [canManagePlanNames, customTypes.data]);
   const preferences = useQuery({
     queryKey: ['user-preferences', profile?.id],
     queryFn: () => loadUserPreferences(profile!.id),
@@ -408,6 +418,7 @@ function AppShell({
               <Route path="/plans/custom/:typeId" element={<CustomPlanPage profile={profile} />} />
               <Route path="/workforce" element={<WorkforcePage profile={profile} />} />
               <Route path="/placement/cleaners" element={<CleanerPlacementPage profile={profile} />} />
+              <Route path="/placement/attendance" element={canManagePlanNames && profile ? <AttendancePage profile={profile} /> : <Navigate to="/" replace />} />
               <Route path="/placement/gatekeepers" element={<GatekeeperPlacementPage profile={profile} />} />
               <Route path="/rewards" element={<RewardsPage profile={profile} />} />
               <Route path="/kpi/:type" element={<ModulePage section="kpi" profile={profile} />} />

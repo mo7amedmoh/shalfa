@@ -267,6 +267,12 @@ function ReportGeneratorForm({ toolId, title }: { toolId: ReportToolId; title: s
     }));
   }
 
+  function clearAllPhotos() {
+    setPhotos({});
+    setError('');
+    setStatus('تم مسح جميع الصور المرفوعة.');
+  }
+
   function handleSchoolSearchChange(value: string) {
     setSchoolSearch(value);
     setSelectedSchool(null);
@@ -520,6 +526,17 @@ function ReportGeneratorForm({ toolId, title }: { toolId: ReportToolId; title: s
             <button type="button" onClick={() => setPlanReportStatus(null)} disabled={savingPlanReport} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold disabled:opacity-50">ليس الآن</button>
           </div>
         </section>
+      )}
+
+      {Object.values(photos).some((group) => group.length > 0) && (
+        <button
+          type="button"
+          onClick={clearAllPhotos}
+          disabled={busy}
+          className="inline-flex w-fit items-center gap-2 rounded-lg border border-rose-300 px-4 py-2 text-sm font-bold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Trash2 size={16} /> مسح كل الصور
+        </button>
       )}
 
       {isMaintenance ? (

@@ -6,7 +6,7 @@ describe('create-user input validation', () => {
     expect(validateCreateUserInput({
       email: 'Engineer.One@Example.com',
       display_name: 'مهندس المنطقة',
-      role: 'area_engineer',
+      role_id: 3,
       password: 'StrongPass123!',
     })).toEqual({
       success: true,
@@ -14,7 +14,7 @@ describe('create-user input validation', () => {
         email: 'engineer.one@example.com',
         username: 'engineer.one',
         displayName: 'مهندس المنطقة',
-        role: 'area_engineer',
+        roleId: 3,
         password: 'StrongPass123!',
       },
     });
@@ -25,7 +25,7 @@ describe('create-user input validation', () => {
     [],
     { email: 'ab@example.com', display_name: 'اسم صحيح', role: 'viewer', password: 'StrongPass123!' },
     { email: 'valid.user@example.com', display_name: 'x', role: 'viewer', password: 'StrongPass123!' },
-    { email: 'valid.user@example.com', display_name: 'اسم صحيح', role: 'owner', password: 'StrongPass123!' },
+    { email: 'valid.user@example.com', display_name: 'اسم صحيح', role_id: 0, password: 'StrongPass123!' },
     { email: 'valid.user@example.com', display_name: 'اسم صحيح', role: 'viewer', password: 'weak' },
     { email: 'valid.user@shalfa.local', display_name: 'اسم صحيح', role: 'viewer', password: 'StrongPass123!' },
     { email: 'invalid local@example.com', display_name: 'اسم صحيح', role: 'viewer', password: 'StrongPass123!' },

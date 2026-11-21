@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { calculateMonthlyKpiTotal, scoreByIndicatorId, type FormulaInputs } from '../../domain/kpi/formulas';
 import { ratingBand } from '../../domain/kpi/scoring';
 import type { UserProfile } from '../../lib/auth';
+import { usePermission } from '../../app/permissionContext';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -211,7 +212,7 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
   const [invoiceAmount, setInvoiceAmount] = useState<number | undefined>();
   const [values, setValues] = useState<Record<string, IndicatorValues>>({});
   const [message, setMessage] = useState('');
-  const canEdit = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
+  const canEdit = usePermission('kpi.edit');
   const catalogQuery = useQuery({ queryKey: ['kpi-catalog'], queryFn: loadKpiCatalog, staleTime: Infinity, enabled: Boolean(supabase && canEdit) });
   const cards = useMemo(() => catalogQuery.data ?? [], [catalogQuery.data]);
   const scorecards = useQuery({
@@ -224,7 +225,7 @@ export function ScorecardsPage({ profile }: { profile: UserProfile | null }) {
     queryFn: loadDeliverablesSummary,
     enabled: Boolean(supabase && profile),
   });
-  const canApprove = profile?.role === 'admin' || profile?.role === 'project_manager';
+  const canApprove = usePermission('kpi.approve');
   const savedRows = scorecards.data?.entries ?? [];
   const locked = scorecards.data?.status === 'approved';
   const total = useMemo(() => calculateMonthlyKpiTotal(values), [values]);

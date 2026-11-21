@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { z } from 'zod';
-import { Lock } from 'lucide-react';
+import { usePermissions } from '../../app/permissionContext';
 import { getUnlinkedPlanNames } from '../../domain/planNameLinking';
+import { permissionKeys, type PermissionKey } from '../../domain/permissions';
 import { defaultReportLayout } from '../plans/reportSections';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
@@ -49,7 +50,7 @@ async function loadAliases(): Promise<string[]> {
   return aliases;
 }
 
-async function loadHubStatus(isAdmin: boolean): Promise<HubStatus> {
+async function loadHubStatus(canManageUsers: boolean, canCleanupSchools: boolean): Promise<HubStatus> {
   if (!supabase) throw new Error('يلزم إعداد Supabase.');
   const [
     latestSync, eligibility, planTypes, monthlyNames, generalNames, aliases,
@@ -77,15 +78,15 @@ async function loadHubStatus(isAdmin: boolean): Promise<HubStatus> {
   let cleanupRows: number | null = null;
   let userCount: number | null = null;
   let cleanupMigrationError: { message: string } | null = null;
-  if (isAdmin) {
-    const [cleanup, users] = await Promise.all([
-      supabase.rpc('admin_school_cleanup_list'),
-      supabase.from('profiles').select('id', { count: 'exact', head: true }),
-    ]);
+  if (canManageUsers) {
+    const users = await supabase.from('profiles').select('id', { count: 'exact', head: true });
     if (users.error) throw users.error;
+    userCount = users.count ?? 0;
+  }
+  if (canCleanupSchools) {
+    const cleanup = await supabase.rpc('admin_school_cleanup_list');
     cleanupMigrationError = cleanup.error;
     cleanupRows = !cleanup.error && Array.isArray(cleanup.data) ? cleanup.data.length : null;
-    userCount = users.count ?? 0;
   }
   const parsedGatekeeperStatus = gatekeeperStatus.error
     ? null
@@ -105,7 +106,7 @@ async function loadHubStatus(isAdmin: boolean): Promise<HubStatus> {
     check('فحص حالة ربط موظفي البوابين', '202611100002_gatekeeper_employee_links.sql', gatekeeperStatus.error),
     check('قواعد أحجام المدارس الستة', '202611140001_school_size_model.sql',
       staffingRulesCheck.error ?? (staffingRulesCheck.data ? null : { message: 'إعداد staffing_rules غير موجود' })),
-    ...(isAdmin ? [check('قائمة تنظيف المدارس', '202611090001_school_cleanup.sql', cleanupMigrationError)] : []),
+    ...(canCleanupSchools ? [check('قائمة تنظيف المدارس', '202611090001_school_cleanup.sql', cleanupMigrationError)] : []),
   ];
   const unlinkedNames = getUnlinkedPlanNames(
     [...monthlyNames, ...generalNames],
@@ -124,28 +125,37 @@ async function loadHubStatus(isAdmin: boolean): Promise<HubStatus> {
   };
 }
 
-export function SettingsHubPage({ isAdmin }: { isAdmin: boolean }) {
-  const status = useQuery({ queryKey: ['admin-settings-hub', isAdmin], queryFn: () => loadHubStatus(isAdmin) });
+type SettingsCard = { title: string; description: string; href: string; action: string; permission: PermissionKey };
+
+export function SettingsHubPage() {
+  const permissions = usePermissions(permissionKeys);
+  const canManageUsers = permissions.has('users.manage');
+  const canCleanupSchools = permissions.has('schools.cleanup');
+  const status = useQuery({
+    queryKey: ['admin-settings-hub', canManageUsers, canCleanupSchools],
+    queryFn: () => loadHubStatus(canManageUsers, canCleanupSchools),
+  });
   const checks = status.data?.schemaChecks ?? [];
   const missingMigrations = checks.filter((item) => !item.ready);
   const lastSync = status.data?.lastSync
     ? new Intl.DateTimeFormat('ar', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(status.data.lastSync))
     : 'لا توجد مزامنة مسجلة';
-  const cards = [
-    { title: 'مزامنة المدارس', description: `آخر مزامنة: ${lastSync}`, href: '/admin/settings/sync', action: 'إعداد الربط' },
-    { title: 'أهلية الخطط', description: status.data?.hasEligibility ? 'قواعد الأهلية محفوظة' : 'لم تُحفظ القواعد بعد', href: '/admin/settings/eligibility', action: 'إعداد الأهلية' },
-    { title: 'قواعد احتياج العمالة', description: 'توزيع العمال المطلوب حسب مؤشرات الأحجام الستة', href: '/admin/settings/staffing-rules', action: 'إدارة القواعد' },
-    { title: 'إدارة الخطط', description: `أنواع خطط مخصصة نشطة: ${status.data?.activePlanTypes ?? '—'}`, href: '/settings/plans', action: 'إدارة الخطط' },
-    { title: 'ربط الأسماء بالموظفين', description: `أسماء غير مرتبطة: ${status.data?.unlinkedNames ?? '—'}`, href: '/admin/settings/name-linking', action: 'مراجعة الأسماء' },
-    { title: 'فحص المخطط والترحيلات', description: status.isLoading ? 'جارٍ الفحص…' : missingMigrations.length ? `ترحيلات ناقصة: ${missingMigrations.length}` : 'كل الفحوصات الأساسية ناجحة', href: '#schema-check', action: 'عرض الفحص' },
-    { title: 'تنظيف المدارس', description: `مدارس تحتاج مراجعة: ${status.data?.cleanupRows ?? '—'}`, href: '/admin/school-cleanup', action: 'مراجعة المدارس', adminOnly: true },
-    { title: 'افتراضات التقرير', description: `الأقسام الافتراضية: ${defaultReportLayout.length} · يمكن تخصيصها وحفظها لكل مستخدم`, href: '/plans/report', action: 'فتح التقرير' },
-    { title: 'المستخدمون والصلاحيات', description: `الحسابات المسجلة: ${status.data?.users ?? '—'}`, href: '/admin/users', action: 'إدارة المستخدمين', adminOnly: true },
+  const cards: SettingsCard[] = [
+    { title: 'مزامنة المدارس', description: `آخر مزامنة: ${lastSync}`, href: '/admin/settings/sync', action: 'إعداد الربط', permission: 'settings.view' },
+    { title: 'أهلية الخطط', description: status.data?.hasEligibility ? 'قواعد الأهلية محفوظة' : 'لم تُحفظ القواعد بعد', href: '/admin/settings/eligibility', action: 'إعداد الأهلية', permission: 'plans.manage_types' },
+    { title: 'قواعد احتياج العمالة', description: 'توزيع العمال المطلوب حسب مؤشرات الأحجام الستة', href: '/admin/settings/staffing-rules', action: 'إدارة القواعد', permission: 'staffing.rules.view' },
+    { title: 'إدارة الخطط', description: `أنواع خطط مخصصة نشطة: ${status.data?.activePlanTypes ?? '—'}`, href: '/settings/plans', action: 'إدارة الخطط', permission: 'plans.manage_types' },
+    { title: 'ربط الأسماء بالموظفين', description: `أسماء غير مرتبطة: ${status.data?.unlinkedNames ?? '—'}`, href: '/admin/settings/name-linking', action: 'مراجعة الأسماء', permission: 'settings.view' },
+    { title: 'فحص المخطط والترحيلات', description: status.isLoading ? 'جارٍ الفحص…' : missingMigrations.length ? `ترحيلات ناقصة: ${missingMigrations.length}` : 'كل الفحوصات الأساسية ناجحة', href: '#schema-check', action: 'عرض الفحص', permission: 'settings.view' },
+    { title: 'تنظيف المدارس', description: `مدارس تحتاج مراجعة: ${status.data?.cleanupRows ?? '—'}`, href: '/admin/school-cleanup', action: 'مراجعة المدارس', permission: 'schools.cleanup' },
+    { title: 'افتراضات التقرير', description: `الأقسام الافتراضية: ${defaultReportLayout.length} · يمكن تخصيصها وحفظها لكل مستخدم`, href: '/plans/report', action: 'فتح التقرير', permission: 'plans.view' },
+    { title: 'المستخدمون والصلاحيات', description: `الحسابات المسجلة: ${status.data?.users ?? '—'}`, href: '/admin/users', action: 'إدارة المستخدمين', permission: 'users.manage' },
+    { title: 'الأدوار والصلاحيات', description: 'إدارة مصفوفة الصلاحيات والأدوار المخصصة', href: '/admin/settings/roles', action: 'إدارة الأدوار', permission: 'users.manage' },
   ];
   const sections = [
     { title: 'الربط ومصادر البيانات', cards: [cards[0], cards[4], cards[5]] },
     { title: 'الخطط والعمالة', cards: [cards[1], cards[3], cards[2], cards[7]] },
-    { title: 'المستخدمون والصلاحيات', cards: [cards[8]] },
+    { title: 'المستخدمون والصلاحيات', cards: [cards[8], cards[9]] },
     { title: 'منطقة الإجراءات الخطرة', cards: [cards[6]], warning: true },
   ];
   return <div className="grid gap-5">
@@ -155,7 +165,7 @@ export function SettingsHubPage({ isAdmin }: { isAdmin: boolean }) {
     </section>
     {status.error && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">تعذر تحميل حالة الإعدادات: {status.error.message}</p>}
     {sections.map((section) => {
-      const visibleCards = section.cards;
+      const visibleCards = section.cards.filter((card) => permissions.has(card.permission));
       if (!visibleCards.length) return null;
       return <section key={section.title} className={section.warning ? 'grid gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 sm:p-5' : 'grid gap-3'}>
         <div>
@@ -164,17 +174,12 @@ export function SettingsHubPage({ isAdmin }: { isAdmin: boolean }) {
         </div>
         <div className="grid auto-rows-fr gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {visibleCards.map((card) => {
-            const restricted = Boolean(card.adminOnly && !isAdmin);
             const content = <>
               <h4 className="font-bold text-brand-900">{card.title}</h4>
               <p className="min-h-10 text-sm text-slate-600">{card.description}</p>
-              {restricted
-                ? <span className="inline-flex items-center gap-1 text-sm font-semibold text-slate-500"><Lock size={15} aria-hidden="true" />لمدير النظام فقط</span>
-                : <span className="text-sm font-semibold text-brand-700">{card.action} ←</span>}
+              <span className="text-sm font-semibold text-brand-700">{card.action} ←</span>
             </>;
-            return restricted
-              ? <div key={card.title} aria-disabled="true" className="card grid h-full cursor-not-allowed gap-2 p-4 opacity-50">{content}</div>
-              : <Link key={card.title} to={card.href} className="card grid h-full gap-2 p-4 transition hover:border-brand-300 hover:shadow-md">{content}</Link>;
+            return <Link key={card.title} to={card.href} className="card grid h-full gap-2 p-4 transition hover:border-brand-300 hover:shadow-md">{content}</Link>;
           })}
         </div>
       </section>;

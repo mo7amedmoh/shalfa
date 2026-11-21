@@ -26,6 +26,7 @@ import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
+import { usePermission } from '../../app/permissionContext';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
 import { BulkPlanUpdates } from './BulkPlanUpdates';
 import { MonthlyPlanRedistribution } from './MonthlyPlanRedistribution';
@@ -179,9 +180,10 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
     queryFn: () => loadPlanRows(activePlanId),
     enabled: Boolean(activePlanId),
   });
-  const canEditSchedule = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
-  const canCreate = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
-  const canUpdate = Boolean(profile && ['admin', 'project_manager', 'area_engineer', 'report_follower'].includes(profile.role));
+  const canEditSchedule = usePermission('plans.edit_rows');
+  const canCreate = usePermission('plans.create_delete');
+  const canUpdate = usePermission('plans.record_visit_report');
+  const canRedistribute = usePermission('plans.redistribute_remaining');
   const editSupervisors = useQuery({
     queryKey: ['monthly-plan-edit-supervisors'],
     queryFn: async () => {
@@ -437,7 +439,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const deletePlan = useMutation({
     mutationFn: async ({ rowsOnly }: { rowsOnly: boolean }) => {
       if (!supabase || !profile || !activePlan) throw new Error('اختر خطة أولاً.');
-      if (!['admin', 'project_manager', 'area_engineer'].includes(profile.role)) throw new Error('لا تملك صلاحية الحذف.');
+      if (!canCreate) throw new Error('لا تملك صلاحية الحذف.');
       const currentRows = rows.data ?? [];
       const visited = currentRows.filter((row) => row.visited_at).length;
       const reports = currentRows.filter((row) => row.report_completed_at).length;
@@ -617,7 +619,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                 ? 'جارٍ تحديث الأسماء…'
                 : `تحديث المشرفين من قاعدة المدارس (${formatNumber(cleaningSupervisorChanges.length)})`}
             </button>}
-            {activePlan && canEditSchedule && rows.data && <button
+            {activePlan && canRedistribute && rows.data && <button
                 type="button"
                 onClick={() => setRedistributionOpen(true)}
                 className="rounded-lg bg-brand-700 px-3 py-2 text-sm font-semibold text-white"

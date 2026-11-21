@@ -4,9 +4,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { getAbsentRosterIds, isBulkAttendanceDateAllowed, getAttendanceDays, summarizeAttendance } from '../../domain/attendance';
 import { normalizeAttendanceIdentity, planAttendanceRosterImport } from '../../domain/attendanceImport';
-import type { UserProfile } from '../../lib/auth';
 import { getStampBytes, uploadStamp } from '../../lib/privateAssets';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
+import { usePermission } from '../../app/permissionContext';
 import { supabase } from '../../lib/supabase';
 import { loadXlsx } from '../../lib/xlsx';
 import { exportAttendanceXlsx } from './attendanceExcel';
@@ -181,10 +181,12 @@ function getMonthOptions(today: string): string[] {
   });
 }
 
-export function AttendancePage({ profile }: { profile: UserProfile | null }) {
+export function AttendancePage() {
   const queryClient = useQueryClient();
   const { formatNumber } = useDisplayFormat();
-  const canManage = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
+  const canManage = usePermission('attendance.manage');
+  const canImport = usePermission('attendance.import');
+  const canExport = usePermission('attendance.export');
   const today = currentIsoDate();
   const [month, setMonth] = useState(today.slice(0, 7));
   const [search, setSearch] = useState('');
@@ -321,7 +323,7 @@ export function AttendancePage({ profile }: { profile: UserProfile | null }) {
 
   const replaceRoster = useMutation({
     mutationFn: async ({ month: targetMonth, rows, confirmAttendanceDeletion }: ReplaceRosterMutation) => {
-      if (!supabase || !canManage) throw new Error('لا تملك صلاحية استيراد كشف التحضير.');
+      if (!supabase || !canImport) throw new Error('لا تملك صلاحية استيراد كشف التحضير.');
       const { data: count, error } = await supabase.rpc('replace_roster', {
         p_month: monthIsoDate(targetMonth),
         p_rows: rows,
@@ -659,7 +661,7 @@ export function AttendancePage({ profile }: { profile: UserProfile | null }) {
   }
 
   async function exportAttendance() {
-    if (!canManage || !data || data.rosters.length === 0 || exporting) return;
+    if (!canExport || !data || data.rosters.length === 0 || exporting) return;
     setExporting(true);
     setMessage('');
     try {
@@ -680,7 +682,7 @@ export function AttendancePage({ profile }: { profile: UserProfile | null }) {
   }
 
   async function exportAttendancePdf() {
-    if (!canManage || !data || data.rosters.length === 0 || exportingPdf) return;
+    if (!canExport || !data || data.rosters.length === 0 || exportingPdf) return;
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
       setMessage('تعذر فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة لهذه الصفحة.');
@@ -781,14 +783,14 @@ export function AttendancePage({ profile }: { profile: UserProfile | null }) {
               <LockKeyhole size={16} /> {lockMonth.isPending ? 'جارٍ قفل الشهر…' : 'قفل الشهر'}
             </button>
           )}
-          <button
+          {canImport && <button
             type="button"
             onClick={() => void downloadImportTemplate()}
             className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
           >
             <FileDown size={16} /> تحميل نموذج الاستيراد
-          </button>
-          <button
+          </button>}
+          {canExport && <button
             type="button"
             onClick={() => void exportAttendance()}
             disabled={!data || data.rosters.length === 0 || attendanceQuery.isLoading || exporting
@@ -796,8 +798,8 @@ export function AttendancePage({ profile }: { profile: UserProfile | null }) {
             className="inline-flex items-center gap-2 rounded-lg border border-brand-700 bg-white px-3 py-2 text-sm font-bold text-brand-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <FileSpreadsheet size={16} /> {exporting ? 'جارٍ التصدير…' : 'تصدير Excel'}
-          </button>
-          <button
+          </button>}
+          {canExport && <button
             type="button"
             onClick={() => void exportAttendancePdf()}
             disabled={!data || data.rosters.length === 0 || attendanceQuery.isLoading || exportingPdf
@@ -805,7 +807,7 @@ export function AttendancePage({ profile }: { profile: UserProfile | null }) {
             className="inline-flex items-center gap-2 rounded-lg border border-rose-700 bg-white px-3 py-2 text-sm font-bold text-rose-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Printer size={16} /> {exportingPdf ? 'جارٍ تجهيز PDF…' : 'تصدير PDF'}
-          </button>
+          </button>}
           <button
             type="button"
             onClick={() => stampFileInputRef.current?.click()}
@@ -827,14 +829,14 @@ export function AttendancePage({ profile }: { profile: UserProfile | null }) {
               event.currentTarget.value = '';
             }}
           />
-          <button
+          {canImport && <button
             type="button"
             onClick={openImportDialog}
-            disabled={locked || !data || attendanceQuery.isLoading || replaceRoster.isPending}
+            disabled={!canImport || locked || !data || attendanceQuery.isLoading || replaceRoster.isPending}
             className="inline-flex items-center gap-2 rounded-lg bg-brand-700 px-3 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Upload size={16} /> استيراد قائمة العمال
-          </button>
+          </button>}
         </div>
       </section>
 

@@ -2,17 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { canUseReportTools, reportTools } from './reportTools';
 
 describe('report tools access', () => {
-  it('exposes report generators to report followers, area engineers and admins', () => {
-    for (const role of ['report_follower', 'area_engineer', 'admin'] as const) {
-      expect(canUseReportTools(role)).toBe(true);
-    }
-  });
-
-  it('keeps report generators unavailable to unrelated roles', () => {
-    for (const role of ['supervisor', 'viewer'] as const) {
-      expect(canUseReportTools(role)).toBe(false);
-    }
-    expect(canUseReportTools(null)).toBe(false);
+  it('follows the effective reports.tools permission', () => {
+    expect(canUseReportTools(new Set(['reports.tools']))).toBe(true);
+    expect(canUseReportTools(new Set())).toBe(false);
   });
 
   it('lists the available report generators', () => {

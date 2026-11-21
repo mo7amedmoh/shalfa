@@ -2,13 +2,14 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, Eye, EyeOff, X } from 'lucide-react';
 import { exportBrandedXlsx } from '../../lib/brandedXlsx';
-import { revealResidenceNumbers } from '../../lib/residence';
+import { exportGatekeeperResidenceNumbers } from '../../lib/residence';
 import { z } from 'zod';
 import type { UserProfile } from '../../lib/auth';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { supabase } from '../../lib/supabase';
 import { ImportWizardLauncher } from '../imports/ImportWizard';
 import { summarizeGatekeeperCoverage } from '../../domain/gatekeeperCoverage';
+import { usePermission } from '../../app/permissionContext';
 
 const schoolSchema = z.object({
   id: z.string().uuid(),
@@ -75,13 +76,14 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
   const [editingSchool, setEditingSchool] = useState<School | null>(null);
   const [editor, setEditor] = useState<EditorValues | null>(null);
   const [message, setMessage] = useState('');
-  const canBackfill = profile?.role === 'admin' || profile?.role === 'project_manager';
+  const canBackfill = usePermission('gatekeepers.backfill');
   const data = useQuery({
     queryKey: ['gatekeeper-placement-data'],
     queryFn: loadGatekeeperData,
     enabled: Boolean(profile),
   });
-  const canManage = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
+  const canManage = usePermission('gatekeepers.manage');
+  const canExportResidence = usePermission('gatekeepers.export_residence');
   const rows = useMemo(() => {
     const gatekeepers = new Map((data.data?.gatekeepers ?? []).map((gatekeeper) => [gatekeeper.school_id, gatekeeper]));
     const query = search.trim().toLocaleLowerCase();
@@ -121,7 +123,7 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
       if (error) throw error;
       return z.object({ unlinked: z.number(), employees: z.number() }).parse(result);
     },
-    enabled: Boolean(profile && ['admin', 'project_manager'].includes(profile.role)),
+    enabled: canBackfill,
   });
 
   const save = useMutation({
@@ -226,9 +228,8 @@ export function GatekeeperPlacementPage({ profile }: { profile: UserProfile | nu
 
   async function exportRows() {
     try {
-      const canExportResidence = ['admin', 'project_manager'].includes(profile?.role ?? '');
       const residenceNumbers = canExportResidence
-        ? await revealResidenceNumbers('gatekeepers', rows.flatMap(({ gatekeeper }) => gatekeeper ? [gatekeeper.id] : []))
+        ? await exportGatekeeperResidenceNumbers(rows.flatMap(({ gatekeeper }) => gatekeeper ? [gatekeeper.id] : []))
         : new Map<string, string>();
       await exportBrandedXlsx('تسكين-البوابين.xlsx', [{
         name: 'تسكين البوابين',

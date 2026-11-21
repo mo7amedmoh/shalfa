@@ -7,6 +7,7 @@ import { summarizeGeneralPlanProgress } from '../../domain/generalPlans';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import type { GeneralPlanType } from '../../domain/types';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
+import { usePermission } from '../../app/permissionContext';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
@@ -101,7 +102,8 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
     enabled: Boolean(planType),
   });
   useEffect(() => setSelectedRowIds([]), [planType]);
-  const canManage = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
+  const canManage = usePermission('plans.create_delete');
+  const canBulkUpdate = usePermission('plans.bulk_update_general');
   const localToday = () => {
     const date = new Date();
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -156,6 +158,7 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   const updateRow = useMutation({
     mutationFn: async ({ row, status, notes, reportDone }: { row: GeneralRow; status: GeneralRow['status']; notes: string; reportDone: boolean }) => {
       if (!supabase) throw new Error('يلزم إعداد Supabase.');
+      if (!canBulkUpdate) throw new Error('لا تملك صلاحية التحديث الجماعي للخطط العامة.');
       const parsedNotes = z.string().max(2000).safeParse(notes);
       if (!parsedNotes.success) throw new Error('يجب ألا تتجاوز الملاحظات 2000 خانة.');
       const { error } = await supabase.from('general_plan_rows').update({
@@ -272,13 +275,13 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
                 ministryNumber: school.ministry_number,
               }))}
               selectedRows={selectedBulkRows}
-              disabled={!canManage}
+              disabled={!canBulkUpdate}
               onUpdated={() => queryClient.invalidateQueries({ queryKey: ['general-plan-rows', planType] }).then(() => undefined)}
               onClearSelected={() => setSelectedRowIds([])}
             />
             <div className="table-scroll general-plan-table-scroll"><table className="general-plan-table">
               <thead><tr>
-                <th><input type="checkbox" aria-label="تحديد جميع صفوف الخطة" checked={allRowsSelected} onChange={(event) => setSelectedRowIds(event.target.checked ? allRowIds : [])} disabled={!canManage} /></th>
+                <th><input type="checkbox" aria-label="تحديد جميع صفوف الخطة" checked={allRowsSelected} onChange={(event) => setSelectedRowIds(event.target.checked ? allRowIds : [])} disabled={!canBulkUpdate} /></th>
                 <th>المدرسة</th><th>التاريخ المخطط</th><th>المقاول</th><th>حالة التنفيذ</th><th>تاريخ الإنجاز</th><th>حالة التقرير</th><th>تاريخ إنجاز التقرير</th><th>الملاحظات</th><th>إجراء</th>
               </tr></thead>
               <tbody>{(rows.data ?? []).map((row) => <GeneralPlanRow
@@ -290,7 +293,7 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
                   : current.filter((id) => id !== row.id))}
                 onSave={(status, notes, reportDone) => updateRow.mutate({ row, status, notes, reportDone })}
                 onDelete={() => deletePlan.mutate({ rowId: row.id })}
-                disabled={!canManage || updateRow.isPending}
+                disabled={!canBulkUpdate || updateRow.isPending}
               />)}</tbody>
             </table></div>
           </>

@@ -1,10 +1,8 @@
-const roles = ['admin', 'project_manager', 'area_engineer', 'report_follower', 'supervisor', 'viewer'] as const;
-
 export type CreateUserInput = {
   email: string;
   username: string;
   displayName: string;
-  role: typeof roles[number];
+  roleId: number;
   password: string;
 };
 
@@ -21,7 +19,11 @@ export function validateCreateUserInput(input: unknown): ValidationResult {
   const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : '';
   const username = email.split('@')[0] ?? '';
   const displayName = typeof input.display_name === 'string' ? input.display_name.trim() : '';
-  const role = typeof input.role === 'string' ? input.role : '';
+  const roleId = typeof input.role_id === 'number'
+    ? input.role_id
+    : typeof input.role_id === 'string'
+      ? Number(input.role_id)
+      : Number.NaN;
   const password = typeof input.password === 'string' ? input.password : '';
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.endsWith('@shalfa.local')) {
@@ -33,8 +35,7 @@ export function validateCreateUserInput(input: unknown): ValidationResult {
   if (displayName.length < 2 || displayName.length > 120) {
     return { success: false, error: 'أدخل اسماً من خانتين إلى 120 خانة.' };
   }
-  const validRole = roles.find((candidate) => candidate === role);
-  if (!validRole) {
+  if (!Number.isSafeInteger(roleId) || roleId <= 0) {
     return { success: false, error: 'الدور المحدد غير صالح.' };
   }
   if (password.length < 12 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
@@ -43,6 +44,6 @@ export function validateCreateUserInput(input: unknown): ValidationResult {
 
   return {
     success: true,
-    data: { email, username, displayName, role: validRole, password },
+    data: { email, username, displayName, roleId, password },
   };
 }

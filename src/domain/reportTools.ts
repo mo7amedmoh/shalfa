@@ -1,4 +1,4 @@
-import type { UserProfile } from '../lib/auth';
+import type { PermissionKey } from './permissions';
 
 export const reportTools = [
   {
@@ -30,9 +30,6 @@ export const reportTools = [
 
 export type ReportToolId = (typeof reportTools)[number]['id'];
 
-export function canUseReportTools(role: UserProfile['role'] | null | undefined): boolean {
-  return role === 'admin'
-    || role === 'project_manager'
-    || role === 'area_engineer'
-    || role === 'report_follower';
+export function canUseReportTools(permissions: ReadonlySet<PermissionKey>): boolean {
+  return permissions.has('reports.tools');
 }

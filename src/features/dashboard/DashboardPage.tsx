@@ -5,6 +5,7 @@ import type { PlanType } from '../../domain/types';
 import { formatArabicCount, type ArabicCountForms } from '../../domain/arabicCount';
 import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
+import { usePermission } from '../../app/permissionContext';
 import { useDashboardData } from './useDashboardData';
 
 const serviceLabels: Record<PlanType, string> = {
@@ -84,6 +85,7 @@ function formatSyncDateTime(value: string): string {
 
 export function DashboardPage({ profile = null }: { profile?: UserProfile | null }) {
   const { formatDate, formatDateTime, formatNumber } = useDisplayFormat();
+  const canViewAudit = usePermission('audit.view');
   const [searchParams, setSearchParams] = useSearchParams();
   const [filtersOpen, setFiltersOpen] = useState(() => window.matchMedia('(min-width: 640px)').matches);
   const month = validMonth(searchParams.get('month'));
@@ -803,7 +805,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
               <h2>آخر النشاطات</h2>
               <p>أحدث التحديثات على الخطط والتقارير خلال الشهر المحدد</p>
             </div>
-            {profile?.role === 'admin' && dashboard.recentActivity.length > 3 && (
+            {canViewAudit && dashboard.recentActivity.length > 3 && (
               <Link to="/admin/audit" className="dashboard-panel-link">عرض الكل ←</Link>
             )}
           </div>

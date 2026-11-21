@@ -32,6 +32,7 @@ const actionLabels: Record<string, string> = {
   undo_plan_row_edit: 'تراجع عن تعديل خطة',
   redo_plan_row_edit: 'إعادة تعديل خطة',
   REVEAL_RESIDENCE: 'إظهار بيانات حساسة',
+  RBAC_SETTINGS_SAVE: 'حفظ الأدوار والصلاحيات',
   export: 'تصدير',
   reveal: 'إظهار بيانات حساسة',
   sync: 'مزامنة',

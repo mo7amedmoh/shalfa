@@ -14,6 +14,7 @@ import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { analyzeResidenceNumbers, employeeCategorySchema, type ResidenceEmployee } from '../../domain/workforce';
 import { paginateRows, TABLE_PAGE_SIZE } from '../../lib/pagination';
 import { TablePagination } from '../../components/TablePagination';
+import { usePermission } from '../../app/permissionContext';
 
 const employeeSchema = z.object({
   id: z.string().uuid(),
@@ -201,8 +202,9 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
   const [sharedPage, setSharedPage] = useState(1);
   const [revealedIds, setRevealedIds] = useState<Record<string, string>>({});
   const [message, setMessage] = useState('');
-  const isPrivileged = profile?.role === 'admin' || profile?.role === 'project_manager';
+  const isPrivileged = usePermission('settings.view');
   const canManage = Boolean(isPrivileged);
+  const canRevealResidence = usePermission('residence.reveal');
   const employees = useQuery({ queryKey: ['employees'], queryFn: loadEmployees, enabled: Boolean(profile) });
   const ratings = useQuery({ queryKey: ['employee-ratings'], queryFn: loadRatings, enabled: Boolean(profile && isPrivileged) });
   const residenceQuality = useQuery({
@@ -315,7 +317,7 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
       setRevealedIds((current) => { const next = { ...current }; delete next[employeeId]; return next; });
       return;
     }
-    if (!supabase || !profile || !['admin', 'project_manager', 'area_engineer'].includes(profile.role)) return;
+    if (!supabase || !profile || !canRevealResidence) return;
     const { data, error } = await supabase.rpc('reveal_residence', { p_kind: 'employees', p_ids: [employeeId] });
     if (error) return setMessage(`تعذر إظهار رقم الهوية: ${error.message}`);
     const parsed = z.array(z.object({ id: z.string().uuid(), residence_no: z.string().nullable() })).length(1).safeParse(data);
@@ -331,8 +333,7 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
     if (isPrivileged && ratings.error) return setMessage(`تعذر تصدير التقييمات: ${ratings.error instanceof Error ? ratings.error.message : String(ratings.error)}`);
     if (isPrivileged && !ratings.data) return setMessage('تعذر تصدير البيانات: لم تُحمّل تقييمات الموظفين.');
     try {
-      const canExportResidence = ['admin', 'project_manager', 'area_engineer'].includes(profile?.role ?? '');
-      const residenceNumbers = canExportResidence
+      const residenceNumbers = canRevealResidence
         ? await revealResidenceNumbers('employees', visibleEmployees.map(({ id }) => id))
         : new Map<string, string>();
       await exportBrandedXlsx('القوى-العاملة.xlsx', [{
@@ -345,11 +346,11 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
           employee.job_title ?? '',
           employeeCategoryLabels[employee.employee_category],
           employee.department ?? '',
-          canExportResidence ? residenceNumbers.get(employee.id) ?? '' : '••••••',
+          canRevealResidence ? residenceNumbers.get(employee.id) ?? '' : '••••••',
           isPrivileged ? ratings.data?.get(employee.id) ?? '' : '',
         ]),
       }]);
-      setMessage(canExportResidence
+      setMessage(canRevealResidence
         ? 'تم تصدير بيانات القوى العاملة بالأعمدة الأساسية وأرقام الإقامة المتاحة.'
         : 'تم تصدير بيانات القوى العاملة؛ أرقام الإقامة مقنعة لعدم توفر الصلاحية.');
     } catch (error) {
@@ -528,7 +529,7 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
                 <td data-label="رقم الإقامة">
                   <span className="workforce-identity-value">
                     <span dir="ltr" className="font-mono">{revealedIds[employee.id] ?? '••••••'}</span>
-                    {profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role) && <button type="button" onClick={() => void toggleResidence(employee.id)} aria-label={revealedIds[employee.id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="rounded p-1 text-brand-700">{revealedIds[employee.id] ? <EyeOff size={16} /> : <Eye size={16} />}</button>}
+                    {profile && canRevealResidence && <button type="button" onClick={() => void toggleResidence(employee.id)} aria-label={revealedIds[employee.id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="rounded p-1 text-brand-700">{revealedIds[employee.id] ? <EyeOff size={16} /> : <Eye size={16} />}</button>}
                   </span>
                 </td>
                 {isPrivileged && <td data-label="التقييم">{ratings.data?.get(employee.id) ?? '—'}</td>}

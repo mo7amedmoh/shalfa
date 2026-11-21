@@ -9,12 +9,15 @@ import { useForm } from 'react-hook-form';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { supabase } from '../lib/supabase';
-import { getUserProfile, signInWithEmail, type UserProfile } from '../lib/auth';
+import { getUserPermissions, getUserProfile, signInWithEmail, type UserProfile } from '../lib/auth';
 import { defaultPreferences, loadUserPreferences } from '../lib/preferences';
 import { PreferencesProvider } from './PreferencesProvider';
+import { Can, PermissionProvider, RequirePermission } from './PermissionProvider';
+import { usePermission, usePermissions } from './permissionContext';
 import type { PlanType } from '../domain/types';
 import { buildCustomMenu, customPlanTypeSchema, type CustomPlanType } from '../domain/customPlans';
 import { canUseReportTools, reportTools } from '../domain/reportTools';
+import { permissionKeys, type PermissionKey } from '../domain/permissions';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
 
 const SchoolsPage = lazy(() =>
@@ -62,6 +65,9 @@ const GatekeeperPlacementPage = lazy(() =>
 const AdminUsersPage = lazy(() =>
   import('../features/admin/AdminUsersPage').then((module) => ({ default: module.AdminUsersPage })),
 );
+const RolePermissionsPage = lazy(() =>
+  import('../features/admin/RolePermissionsPage').then((module) => ({ default: module.RolePermissionsPage })),
+);
 const PlanManagementPage = lazy(() =>
   import('../features/admin/PlanManagementPage').then((module) => ({ default: module.PlanManagementPage })),
 );
@@ -97,61 +103,71 @@ function MonthlyPlanRoute({ profile }: { profile: UserProfile | null }) {
   return planType ? <MonthlyPlanPage planType={planType} profile={profile} /> : <Navigate to="/" replace />;
 }
 
-const navigation = [
+type NavigationLink = { label: string; path: string; permission: PermissionKey };
+type NavigationEntry = {
+  label: string;
+  icon: typeof LayoutDashboard;
+  permission?: PermissionKey;
+  path?: string;
+  children?: NavigationLink[];
+};
+
+const navigation: NavigationEntry[] = [
   {
     label: 'لوحة التحكم',
     path: '/',
     icon: LayoutDashboard,
+    permission: 'dashboard.view',
   },
   {
     label: 'الخطط الشهرية',
     icon: CalendarDays,
     children: [
-      ['خطة الصيانة', '/plans/maintenance'],
-      ['خطة النظافة', '/plans/cleaning'],
-      ['خطة الأمن والسلامة', '/plans/security_safety'],
-      ['خطة المصاعد', '/plans/elevators'],
-      ['التقرير العام', '/plans/report'],
+      { label: 'خطة الصيانة', path: '/plans/maintenance', permission: 'plans.view' },
+      { label: 'خطة النظافة', path: '/plans/cleaning', permission: 'plans.view' },
+      { label: 'خطة الأمن والسلامة', path: '/plans/security_safety', permission: 'plans.view' },
+      { label: 'خطة المصاعد', path: '/plans/elevators', permission: 'plans.view' },
+      { label: 'التقرير العام', path: '/plans/report', permission: 'plans.view' },
     ],
   },
   {
     label: 'الخطط العامة',
     icon: ClipboardCheck,
     children: [
-      ['البستنة', '/general-plans/gardening'],
-      ['التنسيق', '/general-plans/landscaping'],
-      ['نزح مخلفات الصرف الصحي', '/general-plans/sewage_waste'],
-      ['توريد المياه', '/general-plans/water_supply'],
-      ['غسيل الخزانات', '/general-plans/tank_washing'],
-      ['مكافحة الآفات ورش المبيدات', '/general-plans/pest_control'],
-      ['خطط الاستعداد السنوية', '/general-plans/annual_readiness'],
+      { label: 'البستنة', path: '/general-plans/gardening', permission: 'plans.view' },
+      { label: 'التنسيق', path: '/general-plans/landscaping', permission: 'plans.view' },
+      { label: 'نزح مخلفات الصرف الصحي', path: '/general-plans/sewage_waste', permission: 'plans.view' },
+      { label: 'توريد المياه', path: '/general-plans/water_supply', permission: 'plans.view' },
+      { label: 'غسيل الخزانات', path: '/general-plans/tank_washing', permission: 'plans.view' },
+      { label: 'مكافحة الآفات ورش المبيدات', path: '/general-plans/pest_control', permission: 'plans.view' },
+      { label: 'خطط الاستعداد السنوية', path: '/general-plans/annual_readiness', permission: 'plans.view' },
     ],
   },
-  { label: 'المباني المدرسية', path: '/schools', icon: Building2 },
-  { label: 'القوى العاملة', path: '/workforce', icon: Users },
+  { label: 'المباني المدرسية', path: '/schools', icon: Building2, permission: 'schools.view' },
+  { label: 'القوى العاملة', path: '/workforce', icon: Users, permission: 'workforce.view' },
   {
     label: 'أعمال إدارية',
     icon: BadgeCheck,
     children: [
-      ['تسكين العمالة', '/placement/cleaners'],
-      ['تحضير العمالة', '/placement/attendance'],
-      ['تسكين البوابين', '/placement/gatekeepers'],
-      ['مكافأة الفنيين', '/rewards'],
+      { label: 'تسكين العمالة', path: '/placement/cleaners', permission: 'placement.cleaners.view' },
+      { label: 'تحضير العمالة', path: '/placement/attendance', permission: 'attendance.view' },
+      { label: 'تسكين البوابين', path: '/placement/gatekeepers', permission: 'placement.gatekeepers.view' },
+      { label: 'مكافأة الفنيين', path: '/rewards', permission: 'rewards.view' },
     ],
   },
   {
     label: 'مؤشرات الأداء',
     icon: Gauge,
     children: [
-      ['بطاقات الأداء الشهرية', '/kpi/scorecards'],
-      ['المخرجات التعاقدية', '/kpi/deliverables'],
+      { label: 'بطاقات الأداء الشهرية', path: '/kpi/scorecards', permission: 'kpi.view' },
+      { label: 'المخرجات التعاقدية', path: '/kpi/deliverables', permission: 'deliverables.view' },
     ],
   },
 ];
 
-const adminNavigation = [
-  { label: 'الإعدادات', path: '/admin/settings', icon: Settings2 },
-  { label: 'سجل التدقيق', path: '/admin/audit', icon: FileText },
+const adminNavigation: NavigationEntry[] = [
+  { label: 'الإعدادات', path: '/admin/settings', icon: Settings2, permission: 'settings.view' },
+  { label: 'سجل التدقيق', path: '/admin/audit', icon: FileText, permission: 'audit.view' },
 ];
 
 function LoginPage({ onSignedIn }: { onSignedIn: () => void }) {
@@ -214,10 +230,9 @@ function AppShell({
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const location = useLocation();
-  const isAdmin = profile?.role === 'admin';
-  const canCreateCustom = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
-  const canManagePlanNames = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
-  const canAccessReportTools = canUseReportTools(profile?.role);
+  const grantedPermissions = usePermissions(permissionKeys);
+  const canAccessReportTools = canUseReportTools(grantedPermissions);
+  const canManageTicketAnalysis = usePermission('tools.ticket_analysis');
   const customTypes = useQuery({
     queryKey: ['custom-plan-types'],
     queryFn: async () => {
@@ -229,32 +244,29 @@ function AppShell({
     },
     enabled: Boolean(profile),
   });
-  const visibleNavigation = useMemo(() => navigation.map((item) => {
-    if (!('children' in item)) return item;
-    if (item.label === 'أعمال إدارية') {
-      return {
-        ...item,
-        children: item.children?.filter((child) => child[1] !== '/placement/attendance' || canManagePlanNames),
-      };
-    }
+  const visibleNavigation = useMemo(() => navigation.flatMap((item) => {
+    if (item.path) return grantedPermissions.has(item.permission!) ? [item] : [];
+    const children = (item.children ?? []).filter((child) => grantedPermissions.has(child.permission));
     const group = item.label === 'الخطط الشهرية' ? 'monthly' : item.label === 'الخطط العامة' ? 'general' : null;
-    if (!group) return item;
-    const custom = buildCustomMenu(customTypes.data ?? [], group).map(({ label, path }) => [label, path] as [string, string]);
-    return { ...item, children: [...(item.children ?? []), ...custom] };
-  }), [canManagePlanNames, customTypes.data]);
+    if (group) {
+      children.push(...buildCustomMenu(customTypes.data ?? [], group)
+        .map(({ label, path }) => ({ label, path, permission: 'plans.view' as const }))
+        .filter((child) => grantedPermissions.has(child.permission)));
+    }
+    return children.length ? [{ ...item, children }] : [];
+  }), [customTypes.data, grantedPermissions]);
+  const visibleAdminNavigation = adminNavigation.filter((item) => grantedPermissions.has(item.permission!));
   const preferences = useQuery({
     queryKey: ['user-preferences', profile?.id],
     queryFn: () => loadUserPreferences(profile!.id),
     enabled: Boolean(profile?.id),
   });
   const pageTitle = useMemo(() => {
-    const allItems = [...visibleNavigation, ...adminNavigation];
+    const allItems = [...visibleNavigation, ...visibleAdminNavigation];
     for (const item of allItems) {
-      if ('path' in item && item.path === location.pathname) return item.label;
-      if ('children' in item) {
-        const found = item.children?.find((child) => child[1] === location.pathname);
-        if (found) return found[0];
-      }
+      if (item.path === location.pathname) return item.label;
+      const found = item.children?.find((child) => child.path === location.pathname);
+      if (found) return found.label;
     }
     if (location.pathname.startsWith('/general-plans/')) return 'الخطة العامة';
     if (location.pathname.startsWith('/plans/')) return 'الخطط الشهرية';
@@ -270,13 +282,13 @@ function AppShell({
     if (location.pathname === '/admin/school-cleanup') return 'تنظيف المدارس';
     if (location.pathname === '/admin/users') return 'المستخدمون والصلاحيات';
     return 'منصة إدارة المرافق المدرسية';
-  }, [location.pathname, visibleNavigation]);
+  }, [location.pathname, visibleAdminNavigation, visibleNavigation]);
 
   useEffect(() => {
     setSidebarOpen(false);
     setProfileMenuOpen(false);
     const activeGroup = visibleNavigation.find((item) =>
-      'children' in item && item.children?.some(([, path]) => path === location.pathname),
+      item.children?.some((child) => child.path === location.pathname),
     );
     if (activeGroup) {
       setExpandedGroups((current) => ({ ...current, [activeGroup.label]: true }));
@@ -305,8 +317,8 @@ function AppShell({
             const Icon = item.icon;
             return (
               <section key={item.label}>
-                {'path' in item ? (
-                  <NavLink to={item.path!} end className="nav-link" title={item.label}><Icon size={19} /><span>{item.label}</span></NavLink>
+                {item.path ? (
+                <NavLink to={item.path} end className="nav-link" title={item.label}><Icon size={19} /><span>{item.label}</span></NavLink>
                 ) : (
                   <>
                     <button
@@ -332,7 +344,7 @@ function AppShell({
                       <ChevronDown size={16} className={`me-auto transition-transform ${expandedGroups[item.label] ? 'rotate-180' : ''}`} />
                     </button>
                     {expandedGroups[item.label] && <div id={`nav-group-${visibleNavigation.indexOf(item)}`} className="me-4 grid border-e border-slate-200 pe-2">
-                      {item.children?.map(([label, path]) => (
+                      {item.children?.map(({ label, path }) => (
                         <NavLink key={path} to={path} title={label} className="nav-link min-h-9 text-sm" aria-current={location.pathname === path ? 'page' : undefined}>{label}</NavLink>
                       ))}
                     </div>}
@@ -341,9 +353,9 @@ function AppShell({
               </section>
             );
           })}
-          {isAdmin || canCreateCustom ? <div className="mt-3 border-t border-slate-100 pt-3">
-            {canManagePlanNames && adminNavigation.filter((item) => item.path !== '/admin/audit' || isAdmin).map(({ label, path, icon: Icon }) => (
-              <NavLink key={path} to={path} title={label} className="nav-link"><Icon size={19} /><span>{label}</span></NavLink>
+          {visibleAdminNavigation.length > 0 ? <div className="mt-3 border-t border-slate-100 pt-3">
+            {visibleAdminNavigation.map(({ label, path, icon: Icon }) => (
+              <NavLink key={path} to={path!} title={label} className="nav-link"><Icon size={19} /><span>{label}</span></NavLink>
             ))}
           </div> : null}
         </nav>
@@ -363,11 +375,11 @@ function AppShell({
               </button>
               {profileMenuOpen && (
                 <div id="profile-menu" className="absolute inset-x-0 bottom-full z-20 mb-2 grid gap-1 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
-                  <NavLink to="/account" className="nav-link min-h-9 text-sm" onClick={() => setProfileMenuOpen(false)}>
+                  <Can permission="dashboard.view"><NavLink to="/account" className="nav-link min-h-9 text-sm" onClick={() => setProfileMenuOpen(false)}>
                     <UserRound size={17} />
                     <span>حسابي</span>
-                  </NavLink>
-                  {(canManagePlanNames || canAccessReportTools) && (
+                  </NavLink></Can>
+                  {(canManageTicketAnalysis || canAccessReportTools) && (
                     <div className="border-t border-slate-100 pt-2">
                       <p className="px-3 pb-1 text-xs font-bold text-slate-500">أدواتي</p>
                       {canAccessReportTools && (
@@ -376,7 +388,7 @@ function AppShell({
                           <span>منجز التقارير</span>
                         </NavLink>
                       )}
-                      {canManagePlanNames && (
+                      {canManageTicketAnalysis && (
                         <NavLink to="/tools/ticket-analysis" className="nav-link min-h-9 text-sm" onClick={() => setProfileMenuOpen(false)}>
                           <FileText size={17} />
                           <span>تحليل البلاغات</span>
@@ -410,34 +422,35 @@ function AppShell({
             <Routes>
               {import.meta.env.DEV && DevReportFixture && <Route path="/__dev/report-fixture" element={<DevReportFixture />} />}
               {import.meta.env.DEV && DevMapFixture && <Route path="/__dev/map-fixture" element={<DevMapFixture />} />}
-              <Route path="/" element={<DashboardPage profile={profile} />} />
-              <Route path="/schools" element={<SchoolsPage profile={profile} />} />
-              <Route path="/plans/report" element={<MonthlyReportPage />} />
-              <Route path="/plans/:type" element={<MonthlyPlanRoute profile={profile} />} />
-              <Route path="/general-plans/:type" element={<GeneralPlansPage profile={profile} />} />
-              <Route path="/plans/custom/:typeId" element={<CustomPlanPage profile={profile} />} />
-              <Route path="/workforce" element={<WorkforcePage profile={profile} />} />
-              <Route path="/placement/cleaners" element={<CleanerPlacementPage profile={profile} />} />
-              <Route path="/placement/attendance" element={canManagePlanNames && profile ? <AttendancePage profile={profile} /> : <Navigate to="/" replace />} />
-              <Route path="/placement/gatekeepers" element={<GatekeeperPlacementPage profile={profile} />} />
-              <Route path="/rewards" element={<RewardsPage profile={profile} />} />
-              <Route path="/kpi/:type" element={<ModulePage section="kpi" profile={profile} />} />
-              <Route path="/account" element={<AccountPage profile={profile} />} />
-              <Route path="/tools/ticket-analysis" element={canManagePlanNames ? <TicketAnalysisPage /> : <Navigate to="/" replace />} />
-              <Route path="/tools/reports" element={canAccessReportTools ? <ReportToolsPage /> : <Navigate to="/" replace />} />
-              <Route path="/tools/reports/:toolId" element={canAccessReportTools ? <ReportGeneratorPage /> : <Navigate to="/" replace />} />
-              <Route path="/admin/users" element={isAdmin ? <AdminUsersPage /> : <Navigate to="/" replace />} />
-              <Route path="/admin/audit" element={isAdmin ? <AuditLogPage /> : <Navigate to="/" replace />} />
-              <Route path="/admin/school-cleanup" element={isAdmin ? <SchoolCleanupPage /> : <Navigate to="/" replace />} />
-              <Route path="/admin/plan-name-linking" element={<Navigate to="/admin/settings/name-linking" replace />} />
-              <Route path="/admin/settings" element={canManagePlanNames ? <SettingsHubPage isAdmin={isAdmin} /> : <Navigate to="/" replace />} />
-              <Route path="/admin/settings/sync" element={canManagePlanNames ? <ModulePage section="admin" type="sync" /> : <Navigate to="/" replace />} />
-              <Route path="/admin/settings/eligibility" element={canManagePlanNames ? <ModulePage section="admin" type="eligibility" /> : <Navigate to="/" replace />} />
-              <Route path="/admin/settings/staffing-rules" element={canManagePlanNames ? <StaffingRulesSettingsPage isAdmin={isAdmin} /> : <Navigate to="/" replace />} />
-              <Route path="/admin/settings/name-linking" element={canManagePlanNames ? <PlanNameLinkingPage profile={profile} /> : <Navigate to="/" replace />} />
-              <Route path="/admin/settings/school-cleanup" element={isAdmin ? <SchoolCleanupPage /> : <Navigate to="/" replace />} />
-              <Route path="/admin/settings/users" element={isAdmin ? <AdminUsersPage /> : <Navigate to="/" replace />} />
-              <Route path="/settings/plans" element={canCreateCustom && profile ? <PlanManagementPage profile={profile} /> : <Navigate to="/" replace />} />
+              <Route path="/" element={<RequirePermission permission="dashboard.view"><DashboardPage profile={profile} /></RequirePermission>} />
+              <Route path="/schools" element={<RequirePermission permission="schools.view"><SchoolsPage profile={profile} /></RequirePermission>} />
+              <Route path="/plans/report" element={<RequirePermission permission="plans.view"><MonthlyReportPage /></RequirePermission>} />
+              <Route path="/plans/:type" element={<RequirePermission permission="plans.view"><MonthlyPlanRoute profile={profile} /></RequirePermission>} />
+              <Route path="/general-plans/:type" element={<RequirePermission permission="plans.view"><GeneralPlansPage profile={profile} /></RequirePermission>} />
+              <Route path="/plans/custom/:typeId" element={<RequirePermission permission="plans.view"><CustomPlanPage /></RequirePermission>} />
+              <Route path="/workforce" element={<RequirePermission permission="workforce.view"><WorkforcePage profile={profile} /></RequirePermission>} />
+              <Route path="/placement/cleaners" element={<RequirePermission permission="placement.cleaners.view"><CleanerPlacementPage profile={profile} /></RequirePermission>} />
+              <Route path="/placement/attendance" element={<RequirePermission permission="attendance.view"><AttendancePage /></RequirePermission>} />
+              <Route path="/placement/gatekeepers" element={<RequirePermission permission="placement.gatekeepers.view"><GatekeeperPlacementPage profile={profile} /></RequirePermission>} />
+              <Route path="/rewards" element={<RequirePermission permission="rewards.view"><RewardsPage profile={profile} /></RequirePermission>} />
+              <Route path="/kpi/:type" element={<RequirePermission permission="kpi.view"><ModulePage section="kpi" profile={profile} /></RequirePermission>} />
+              <Route path="/account" element={<RequirePermission permission="dashboard.view"><AccountPage profile={profile} /></RequirePermission>} />
+              <Route path="/tools/ticket-analysis" element={<RequirePermission permission="tools.ticket_analysis"><TicketAnalysisPage /></RequirePermission>} />
+              <Route path="/tools/reports" element={<RequirePermission permission="reports.tools"><ReportToolsPage /></RequirePermission>} />
+              <Route path="/tools/reports/:toolId" element={<RequirePermission permission="reports.tools"><ReportGeneratorPage /></RequirePermission>} />
+              <Route path="/admin/users" element={<RequirePermission permission="users.manage"><AdminUsersPage /></RequirePermission>} />
+              <Route path="/admin/audit" element={<RequirePermission permission="audit.view"><AuditLogPage /></RequirePermission>} />
+              <Route path="/admin/school-cleanup" element={<RequirePermission permission="schools.cleanup"><SchoolCleanupPage /></RequirePermission>} />
+              <Route path="/admin/plan-name-linking" element={<RequirePermission permission="settings.view"><Navigate to="/admin/settings/name-linking" replace /></RequirePermission>} />
+              <Route path="/admin/settings" element={<RequirePermission permission="settings.view"><SettingsHubPage /></RequirePermission>} />
+              <Route path="/admin/settings/sync" element={<RequirePermission permission="settings.view"><ModulePage section="admin" type="sync" /></RequirePermission>} />
+              <Route path="/admin/settings/eligibility" element={<RequirePermission permission="plans.manage_types"><ModulePage section="admin" type="eligibility" /></RequirePermission>} />
+              <Route path="/admin/settings/staffing-rules" element={<RequirePermission permission="staffing.rules.view"><StaffingRulesSettingsPage /></RequirePermission>} />
+              <Route path="/admin/settings/name-linking" element={<RequirePermission permission="settings.view"><PlanNameLinkingPage /></RequirePermission>} />
+              <Route path="/admin/settings/school-cleanup" element={<RequirePermission permission="schools.cleanup"><SchoolCleanupPage /></RequirePermission>} />
+              <Route path="/admin/settings/users" element={<RequirePermission permission="users.manage"><AdminUsersPage /></RequirePermission>} />
+              <Route path="/admin/settings/roles" element={<RequirePermission permission="users.manage"><RolePermissionsPage /></RequirePermission>} />
+              <Route path="/settings/plans" element={<RequirePermission permission="plans.manage_types">{profile ? <PlanManagementPage profile={profile} /> : <Navigate to="/" replace />}</RequirePermission>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
@@ -453,6 +466,8 @@ export function App() {
   const queryClient = useQueryClient();
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [effectivePermissions, setEffectivePermissions] = useState<PermissionKey[] | null>(null);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
   const [syncNotice, setSyncNotice] = useState('');
   const [authChecked, setAuthChecked] = useState(Boolean(supabase));
 
@@ -474,7 +489,11 @@ export function App() {
     });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setSessionUserId(session?.user.id ?? null);
-      if (!session) setProfile(null);
+      if (!session) {
+        setProfile(null);
+        setEffectivePermissions(null);
+        setPermissionError(null);
+      }
     });
     return () => {
       active = false;
@@ -485,17 +504,27 @@ export function App() {
   useEffect(() => {
     if (!sessionUserId) return;
     let active = true;
-    void getUserProfile(sessionUserId)
-      .then((userProfile) => { if (active) setProfile(userProfile); })
+    setProfile(null);
+    setEffectivePermissions(null);
+    setPermissionError(null);
+    void Promise.all([getUserProfile(sessionUserId), getUserPermissions()])
+      .then(([userProfile, permissions]) => {
+        if (!active) return;
+        setProfile(userProfile);
+        setEffectivePermissions(permissions);
+      })
       .catch((error: unknown) => {
         console.error('تعذر تحميل صلاحيات المستخدم.', error);
-        if (active) setProfile(null);
+        if (active) {
+          setProfile(null);
+          setPermissionError(error instanceof Error ? error.message : 'تعذر تحميل الصلاحيات.');
+        }
       });
     return () => { active = false; };
   }, [sessionUserId]);
 
   useEffect(() => {
-    if (profile?.role !== 'admin') return;
+    if (!effectivePermissions?.includes('schools.sync')) return;
     let active = true;
     void import('../lib/schoolSync').then(({ runThrottledSchoolSync }) => runThrottledSchoolSync())
       .then((result) => {
@@ -523,7 +552,7 @@ export function App() {
         if (active) setSyncNotice('تعذرت المزامنة التلقائية. راجع إعدادات المصدر والاتصال.');
       });
     return () => { active = false; };
-  }, [profile, queryClient]);
+  }, [effectivePermissions, queryClient]);
 
   async function signOut() {
     if (!supabase) return;
@@ -557,8 +586,18 @@ export function App() {
   }
   if (!authChecked) return <div className="grid min-h-screen place-items-center text-slate-600">جارٍ التحقق من الجلسة…</div>;
   if (!sessionUserId) return <LoginPage onSignedIn={() => setAuthChecked(true)} />;
-  if (sessionUserId && !profile) {
+  if (permissionError) {
+    return <main className="grid min-h-screen place-items-center p-4">
+      <section className="card grid max-w-lg gap-4 p-6 text-center">
+        <p role="alert" className="text-sm text-rose-800">تعذر تحميل ملف المستخدم أو صلاحياته: {permissionError}</p>
+        <button type="button" onClick={() => void signOut()} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold">تسجيل الخروج</button>
+      </section>
+    </main>;
+  }
+  if (sessionUserId && (!profile || !effectivePermissions)) {
     return <div role="status" className="grid min-h-screen place-items-center text-slate-600">جارٍ تحميل ملف المستخدم والصلاحيات…</div>;
   }
-  return <AppShell profile={profile} onSignOut={() => void signOut()} syncNotice={syncNotice} />;
+  return <PermissionProvider permissions={effectivePermissions ?? []}>
+    <AppShell profile={profile} onSignOut={() => void signOut()} syncNotice={syncNotice} />
+  </PermissionProvider>;
 }

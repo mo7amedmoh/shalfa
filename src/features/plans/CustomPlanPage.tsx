@@ -8,7 +8,7 @@ import { describeDatabaseError, eligibleCustomSchoolIds, customPlanTypeSchema, t
 import { normalizeMinistryNumber, parseImportDate, schoolPersonDefault } from '../../domain/imports';
 import type { ScheduleAssignment } from '../../domain/planScheduler';
 import type { PlanEligibilityConfig } from '../../domain/planEligibility';
-import type { UserProfile } from '../../lib/auth';
+import { usePermission } from '../../app/permissionContext';
 import { supabase } from '../../lib/supabase';
 import { BulkPlanUpdates } from './BulkPlanUpdates';
 import { SupervisorPlanGenerator } from './SupervisorPlanGenerator';
@@ -46,8 +46,6 @@ const configSchema = z.object({
   buildingTypeHeader: z.string(), independentBuildingValues: z.array(z.string()),
   primarySharedValues: z.array(z.string()), elevatorContractorHeader: z.string(), noElevatorValues: z.array(z.string()),
 });
-const canManage = (profile: UserProfile | null) => Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
-const canTypeManage = (profile: UserProfile | null) => Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
 const periodFor = (cadence: CustomPlanType['cadence'], value: string) => cadence === 'monthly' ? `${value}-01` : `${value}-01-01`;
 const noSchoolSelection: string[] = [];
 
@@ -73,7 +71,11 @@ async function loadCandidates(): Promise<{ schools: School[]; config: PlanEligib
   })).parse(schoolsResult.data), config: configResult.data ? configSchema.parse(configResult.data.value) : null };
 }
 
-export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
+export function CustomPlanPage() {
+  const canManage = usePermission('plans.create_delete');
+  const canTypeManage = usePermission('plans.manage_types');
+  const canUpdate = usePermission('plans.record_visit_report');
+  const canImport = usePermission('plans.import');
   const { typeId = '' } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -147,7 +149,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
   }, [type, period]);
   const createPlan = useMutation({
     mutationFn: async (assignments: ScheduleAssignment[]) => {
-      if (!supabase || !type || !canManage(profile)) throw new Error('لا تملك صلاحية إدارة الخطة.');
+      if (!supabase || !type || !canManage) throw new Error('لا تملك صلاحية إدارة الخطة.');
       if (!assignments.length) throw new Error('اختر مدرسة واحدة على الأقل وأنشئ معاينة التوزيع.');
       const allowedIds = new Set(eligibleIds);
       if (assignments.some((assignment) => !allowedIds.has(assignment.schoolId))
@@ -186,7 +188,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
   });
   const updateRow = useMutation({
     mutationFn: async ({ id, field, value }: { id: string; field: string; value: unknown }) => {
-      if (!supabase || !canManage(profile)) throw new Error('لا تملك صلاحية تعديل الصف.');
+      if (!supabase || !canManage) throw new Error('لا تملك صلاحية تعديل الصف.');
       if (field === 'report_done' && value === true && !rows.data?.find((row) => row.id === id)?.visited) {
         throw new Error('لا يمكن إكمال التقرير قبل تسجيل الزيارة.');
       }
@@ -198,7 +200,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
   });
   const deleteRows = useMutation({
     mutationFn: async ({ rowId }: { rowId?: string }) => {
-      if (!supabase || !canManage(profile) || !planId) throw new Error('لا تملك صلاحية الحذف.');
+      if (!supabase || !canManage || !planId) throw new Error('لا تملك صلاحية الحذف.');
       const answer = window.prompt('اكتب حذف للتأكيد:');
       if (answer !== 'حذف') throw new Error('لم يتم تأكيد الحذف.');
       const backupRows = rowId ? (rows.data ?? []).filter((row) => row.id === rowId) : (rows.data ?? []);
@@ -215,7 +217,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
   });
   const deletePlan = useMutation({
     mutationFn: async () => {
-      if (!supabase || !canManage(profile) || !planId) throw new Error('لا تملك صلاحية الحذف.');
+      if (!supabase || !canManage || !planId) throw new Error('لا تملك صلاحية الحذف.');
       if (window.prompt('اكتب حذف للتأكيد على حذف فترة الخطة:') !== 'حذف') throw new Error('لم يتم تأكيد الحذف.');
       const XLSX = await loadXlsx();
       const book = XLSX.utils.book_new();
@@ -229,7 +231,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
   });
   const deleteType = useMutation({
     mutationFn: async (action: 'hide' | 'delete') => {
-      if (!supabase || !type || !canTypeManage(profile)) throw new Error('لا تملك صلاحية إدارة قائمة الخطط.');
+      if (!supabase || !type || !canTypeManage) throw new Error('لا تملك صلاحية إدارة قائمة الخطط.');
       const answer = window.prompt(`اكتب ${action === 'hide' ? 'إخفاء' : 'حذف'} للتأكيد:`);
       if (answer !== (action === 'hide' ? 'إخفاء' : 'حذف')) throw new Error('لم يتم تأكيد العملية.');
       if (action === 'hide') {
@@ -351,7 +353,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
     }
   };
   const previewImportRows = async (file: File | undefined) => {
-    if (!file || !canManage(profile)) return;
+    if (!file || !canImport) return;
     setMessage('');
     setImportPreview(null);
     setImportResult([]);
@@ -390,7 +392,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
     }
   };
   const applyImportRows = async () => {
-    if (!supabase || !canManage(profile) || !importPreview || !type) return;
+    if (!supabase || !canImport || !importPreview || !type) return;
     setMessage('');
     const result: CustomImportResult[] = [];
     try {
@@ -474,8 +476,9 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
     : '';
   return <div className="grid gap-5">
     <section className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-sm text-slate-500">خطة مخصصة</p><h2 className="mt-1 text-2xl font-bold text-brand-900">{type.name}</h2></div><div className="flex flex-wrap gap-2">
-      {canManage(profile) && <><label className="cursor-pointer rounded-lg border border-slate-300 px-3 py-2 text-sm">معاينة استيراد Excel<input className="hidden" type="file" accept=".xlsx,.xls" disabled={candidates.isLoading || Boolean(candidateError)} onChange={(event) => { void previewImportRows(event.target.files?.[0]); event.currentTarget.value = ''; }} /></label><button type="button" onClick={async () => { const XLSX = await loadXlsx(); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['الرقم الوزاري', 'التاريخ المخطط', 'اسم المشرف', 'اسم المهندس']]), 'قالب'); XLSX.writeFile(book, `قالب-${type.name}.xlsx`); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">تنزيل قالب Excel</button><button type="button" disabled={!planId || rows.isLoading || !rows.data?.length || exportingRows} onClick={() => void exportRows()} className="inline-flex items-center gap-2 rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50"><Download size={16} />{exportingRows ? 'جارٍ التصدير…' : 'تصدير الخطة Excel'}</button></>}
-      {canTypeManage(profile) && <><button type="button" onClick={() => deleteType.mutate('hide')} className="rounded-lg border border-amber-300 px-3 py-2 text-sm text-amber-800">إخفاء من القائمة</button><button type="button" onClick={() => deleteType.mutate('delete')} className="rounded-lg bg-rose-700 px-3 py-2 text-sm text-white">حذف الخطة من القائمة</button></>}</div></section>
+      {canImport && <label className="cursor-pointer rounded-lg border border-slate-300 px-3 py-2 text-sm">معاينة استيراد Excel<input className="hidden" type="file" accept=".xlsx,.xls" disabled={candidates.isLoading || Boolean(candidateError)} onChange={(event) => { void previewImportRows(event.target.files?.[0]); event.currentTarget.value = ''; }} /></label>}
+      {canManage && <><button type="button" onClick={async () => { const XLSX = await loadXlsx(); const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['الرقم الوزاري', 'التاريخ المخطط', 'اسم المشرف', 'اسم المهندس']]), 'قالب'); XLSX.writeFile(book, `قالب-${type.name}.xlsx`); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">تنزيل قالب Excel</button><button type="button" disabled={!planId || rows.isLoading || !rows.data?.length || exportingRows} onClick={() => void exportRows()} className="inline-flex items-center gap-2 rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50"><Download size={16} />{exportingRows ? 'جارٍ التصدير…' : 'تصدير الخطة Excel'}</button></>}
+      {canTypeManage && <><button type="button" onClick={() => deleteType.mutate('hide')} className="rounded-lg border border-amber-300 px-3 py-2 text-sm text-amber-800">إخفاء من القائمة</button><button type="button" onClick={() => deleteType.mutate('delete')} className="rounded-lg bg-rose-700 px-3 py-2 text-sm text-white">حذف الخطة من القائمة</button></>}</div></section>
     <section className="card grid gap-4 p-5">
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="grid gap-1 text-sm font-semibold">{type.cadence === 'monthly' ? 'الشهر' : 'السنة'}
@@ -497,7 +500,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
         endDate={customRange.end}
         minDate={customRange.start}
         maxDate={customRange.end}
-        disabled={!canManage(profile) || candidates.isLoading || Boolean(candidateError)}
+        disabled={!canManage || candidates.isLoading || Boolean(candidateError)}
         saving={createPlan.isPending}
         onSave={(assignments) => createPlan.mutate(assignments)}
       />}
@@ -522,7 +525,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
           </tr>)}</tbody>
         </table>
       </div>
-      <button type="button" disabled={!canManage(profile) || !importPreview.some((row) => row.schoolId && !row.plannedDateInvalid)} onClick={() => void applyImportRows()} className="w-fit rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">استيراد الصفوف الجاهزة فقط</button>
+      <button type="button" disabled={!canImport || !importPreview.some((row) => row.schoolId && !row.plannedDateInvalid)} onClick={() => void applyImportRows()} className="w-fit rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">استيراد الصفوف الجاهزة فقط</button>
       {importResult.length > 0 && <div className="grid gap-2"><div className="max-h-40 overflow-auto rounded border">{importResult.map((row) => <p key={`${row.line}-${row.status}`} className="border-b p-2 text-sm last:border-0">صف {row.line} · {row.status} · {row.note || '—'}</p>)}</div><button type="button" onClick={() => void downloadImportResult()} className="w-fit rounded-lg border px-3 py-2 text-sm">تنزيل تقرير الاستيراد</button></div>}
     </section>}
     {message && <p role="status" className="text-sm text-slate-700">{message}</p>}
@@ -530,7 +533,7 @@ export function CustomPlanPage({ profile }: { profile: UserProfile | null }) {
       key={planId}
       planKind="custom"
       planId={planId}
-      disabled={!profile || !['admin', 'project_manager', 'area_engineer', 'report_follower'].includes(profile.role)}
+      disabled={!canUpdate}
       rows={(rows.data ?? []).map((row) => ({
         id: row.id,
         schoolName: row.school?.name ?? 'مدرسة محذوفة',

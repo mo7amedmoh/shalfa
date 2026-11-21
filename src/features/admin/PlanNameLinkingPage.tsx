@@ -2,16 +2,16 @@ import { useCallback, useEffect, useState } from 'react';
 import { normalizeImportName } from '../../domain/imports';
 import { getUnlinkedPlanNames } from '../../domain/planNameLinking';
 import { supabase } from '../../lib/supabase';
-import type { UserProfile } from '../../lib/auth';
+import { usePermission } from '../../app/permissionContext';
 
 type Person = { id: string; full_name: string };
 type Unlinked = { name: string; employee: Person | null };
 
-export function PlanNameLinkingPage({ profile }: { profile: UserProfile | null }) {
+export function PlanNameLinkingPage() {
   const [items, setItems] = useState<Unlinked[]>([]);
   const [employees, setEmployees] = useState<Person[]>([]);
   const [message, setMessage] = useState('');
-  const canManage = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
+  const canManage = usePermission('settings.view');
   const load = useCallback(async () => {
     if (!supabase || !canManage) return;
     const [monthly, general, staff, aliases] = await Promise.all([

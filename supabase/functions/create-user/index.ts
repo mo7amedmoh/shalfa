@@ -35,14 +35,16 @@ Deno.serve(async (request) => {
 
   const admin = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
   const { data: actor, error: actorError } = await admin.from('profiles')
-    .select('role')
+    .select('role_id, role:roles(base_role)')
     .eq('id', userResult.user.id)
     .maybeSingle();
   if (actorError) {
     console.error('Unable to verify create-user requester role.', actorError);
     return response(500, { error: 'تعذر التحقق من صلاحيات المستخدم.' });
   }
-  if (actor?.role !== 'admin') return response(403, { error: 'إنشاء المستخدمين متاح لمدير النظام فقط.' });
+  const { data: canCreate, error: permissionError } = await requester.rpc('has_permission', { p_key: 'users.create' });
+  if (permissionError) return response(500, { error: 'تعذر التحقق من صلاحية إنشاء المستخدمين.' });
+  if (canCreate !== true) return response(403, { error: 'لا تملك صلاحية إنشاء المستخدمين.' });
 
   let input: unknown;
   try {
@@ -52,7 +54,30 @@ Deno.serve(async (request) => {
   }
   const validated = validateCreateUserInput(input);
   if (!validated.success) return response(400, { error: validated.error });
-  const { email, username, displayName, role, password } = validated.data;
+  const { email, username, displayName, roleId, password } = validated.data;
+  const { data: role, error: roleError } = await admin.from('roles')
+    .select('id,base_role')
+    .eq('id', roleId)
+    .maybeSingle();
+  if (roleError) return response(500, { error: 'تعذر التحقق من الدور.' });
+  if (!role) return response(400, { error: 'الدور المحدد غير موجود.' });
+
+  const actorIsAdmin = Array.isArray(actor?.role) ? actor.role[0]?.base_role === 'admin' : (actor as unknown as { role?: { base_role?: string } })?.role?.base_role === 'admin';
+  if (role.base_role === 'admin' && !actorIsAdmin) {
+    return response(403, { error: 'لا يجوز إسناد دور يتجاوز صلاحيات المنشئ.' });
+  }
+
+  if (role.base_role !== 'admin') {
+    const { data: rolePermissions, error: rolePermissionsError } = await admin.from('role_permissions')
+      .select('permission_key')
+      .eq('role_id', roleId);
+    if (rolePermissionsError) return response(500, { error: 'تعذر التحقق من صلاحيات الدور.' });
+    for (const row of rolePermissions ?? []) {
+      const { data: allowed, error: allowedError } = await requester.rpc('has_permission', { p_key: row.permission_key });
+      if (allowedError) return response(500, { error: 'تعذر التحقق من صلاحيات المنشئ.' });
+      if (allowed !== true) return response(403, { error: `الدور يتجاوز صلاحيات المنشئ: ${row.permission_key}` });
+    }
+  }
 
   const { data: created, error: createError } = await admin.auth.admin.createUser({
     email,
@@ -66,7 +91,7 @@ Deno.serve(async (request) => {
   }
 
   const { error: profileError } = await admin.from('profiles').update({
-    role,
+    role_id: roleId,
   }).eq('id', created.user.id);
   if (profileError) {
     console.error('Unable to assign role to automatically created profile.', profileError);

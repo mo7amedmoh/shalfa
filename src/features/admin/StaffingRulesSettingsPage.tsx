@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { usePermission } from '../../app/permissionContext';
 import { z } from 'zod';
 import { DEFAULT_STAFFING_RULES, mergeStaffingRules, SCHOOL_SIZE_CODES, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize, type StaffingRuleTable } from '../../domain/staffing';
 import { supabase } from '../../lib/supabase';
@@ -39,7 +40,8 @@ async function loadStaffingRules(): Promise<StaffingRuleTable> {
     : DEFAULT_STAFFING_RULES;
 }
 
-export function StaffingRulesSettingsPage({ isAdmin }: { isAdmin: boolean }) {
+export function StaffingRulesSettingsPage() {
+  const canEdit = usePermission('staffing.rules.edit');
   const client = useQueryClient();
   const { data: saved, isLoading, error } = useQuery({
     queryKey: ['staffing-rules'],
@@ -55,7 +57,7 @@ export function StaffingRulesSettingsPage({ isAdmin }: { isAdmin: boolean }) {
 
   const save = useMutation({
     mutationFn: async (rules: StaffingRuleTable) => {
-      if (!supabase || !isAdmin) throw new Error('تعديل قواعد العمالة متاح لمدير النظام فقط.');
+      if (!supabase || !canEdit) throw new Error('تعديل قواعد العمالة متاح لمدير النظام فقط.');
       const { error: saveError } = await supabase.from('app_config').upsert({ key: 'staffing_rules', value: rules });
       if (saveError) throw saveError;
     },
@@ -90,7 +92,7 @@ export function StaffingRulesSettingsPage({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <section className="card grid gap-5 p-5 md:p-6">
-      {!isAdmin && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">هذه الصفحة للقراءة فقط. التعديل لمدير النظام.</p>}
+      {!canEdit && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">هذه الصفحة للقراءة فقط. التعديل لمدير النظام.</p>}
       <div>
         <h2 className="text-xl font-bold text-brand-900">قواعد احتياج عمال النظافة حسب الحجم</h2>
         <p className="mt-1 text-sm leading-7 text-slate-500">أولوية احتياج العمالة: تصحيح الحجم اليدوي، ثم استثناء المدرسة، ثم مؤشر الحجم الصريح، ثم عدد الفصول كمرجع احتياطي.</p>
@@ -105,7 +107,7 @@ export function StaffingRulesSettingsPage({ isAdmin }: { isAdmin: boolean }) {
             max="10"
             step="1"
             value={values[size]}
-            disabled={!isAdmin}
+            disabled={!canEdit}
             aria-label={`عدد العمال المطلوب لحجم ${SCHOOL_SIZE_CODES[size]}`}
             onChange={(event) => setValues((current) => ({ ...current, [size]: event.target.value }))}
             className="rounded-lg border border-slate-300 px-3 py-2.5 font-normal disabled:bg-slate-50"
@@ -113,7 +115,7 @@ export function StaffingRulesSettingsPage({ isAdmin }: { isAdmin: boolean }) {
         </label>)}
       </div>}
       <div>
-        {isAdmin && <button type="button" disabled={isLoading || save.isPending} onClick={() => void saveValues()} className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">حفظ قواعد العمالة</button>}
+        {canEdit && <button type="button" disabled={isLoading || save.isPending} onClick={() => void saveValues()} className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">حفظ قواعد العمالة</button>}
         {message && <p role="status" className="mt-3 text-sm text-slate-700">{message}</p>}
       </div>
     </section>

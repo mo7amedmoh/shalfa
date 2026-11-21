@@ -1,42 +1,67 @@
 import { describe, expect, it } from 'vitest';
-import { dashboardAccessForRole } from './dashboardAccess';
+import { dashboardAccessForPermissions } from './dashboardAccess';
+import type { PermissionKey } from './permissions';
 
-describe('dashboard role visibility', () => {
-  it('grants full dashboard cards only to administrators and project managers', () => {
-    for (const role of ['admin', 'project_manager'] as const) {
-      expect(dashboardAccessForRole(role)).toEqual({
-        plans: true,
-        staffing: true,
-        syncTime: true,
-        actions: true,
-        workforce: true,
-        rewardsShortcut: false,
-        kpi: true,
-        deliverables: true,
-        activity: true,
-        reportFollowerView: false,
-      });
-    }
+const fullAccess = new Set<PermissionKey>([
+  'plans.view', 'plans.create_delete', 'workforce.assign_cleaners', 'settings.view',
+  'kpi.edit', 'deliverables.edit',
+]);
+
+describe('dashboard permission visibility', () => {
+  it('preserves the administrator and project-manager dashboard cards', () => {
+    expect(dashboardAccessForPermissions(new Set([...fullAccess, 'audit.view']))).toEqual({
+      plans: true,
+      staffing: true,
+      syncTime: true,
+      actions: true,
+      workforce: true,
+      rewardsShortcut: false,
+      kpi: true,
+      deliverables: true,
+      activity: true,
+      reportFollowerView: false,
+    });
+    expect(dashboardAccessForPermissions(fullAccess)).toEqual(dashboardAccessForPermissions(
+      new Set([...fullAccess, 'plans.edit_rows']),
+    ));
   });
 
-  it('limits area engineers to plans, placement and rewards surfaces', () => {
-    expect(dashboardAccessForRole('area_engineer')).toMatchObject({
-      plans: true, staffing: true, actions: true, workforce: true, rewardsShortcut: true,
-      syncTime: false, kpi: false, deliverables: false, activity: false,
+  it('limits area engineers to the existing plan, placement and rewards surfaces', () => {
+    expect(dashboardAccessForPermissions(new Set([
+      'plans.view', 'plans.create_delete', 'workforce.assign_cleaners', 'rewards.distribute',
+    ]))).toEqual({
+      plans: true,
+      staffing: true,
+      syncTime: false,
+      actions: true,
+      workforce: true,
+      rewardsShortcut: true,
+      kpi: false,
+      deliverables: false,
+      activity: false,
+      reportFollowerView: false,
     });
   });
 
-  it('shows report followers only their bulk-update and late-plan view', () => {
-    expect(dashboardAccessForRole('report_follower')).toMatchObject({
-      plans: true, reportFollowerView: true,
-      staffing: false, actions: false, workforce: false, kpi: false, deliverables: false, activity: false,
+  it('shows report followers only their late-plan view', () => {
+    expect(dashboardAccessForPermissions(new Set([
+      'plans.view', 'plans.record_visit_report',
+    ]))).toMatchObject({
+      plans: true,
+      reportFollowerView: true,
+      staffing: false,
+      actions: false,
+      workforce: false,
+      kpi: false,
+      deliverables: false,
+      activity: false,
     });
   });
 
-  it('keeps supervisors and viewers on read-only plan cards and unknown roles data-free', () => {
-    for (const role of ['supervisor', 'viewer'] as const) {
-      expect(dashboardAccessForRole(role)).toMatchObject({ plans: true, staffing: false, actions: false, kpi: false });
-    }
-    expect(dashboardAccessForRole(null).plans).toBe(false);
+  it('keeps supervisors and viewers on read-only plan cards and unknown permissions data-free', () => {
+    expect(dashboardAccessForPermissions(new Set(['plans.view']))).toMatchObject({
+      plans: true, staffing: false, actions: false, kpi: false,
+    });
+    expect(dashboardAccessForPermissions(new Set()).plans).toBe(false);
   });
 });

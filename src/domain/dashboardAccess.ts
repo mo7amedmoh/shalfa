@@ -1,4 +1,4 @@
-import type { UserProfile } from '../lib/auth';
+import type { PermissionKey } from './permissions';
 
 export interface DashboardAccess {
   plans: boolean;
@@ -13,49 +13,21 @@ export interface DashboardAccess {
   reportFollowerView: boolean;
 }
 
-const noAccess: DashboardAccess = {
-  plans: false,
-  staffing: false,
-  syncTime: false,
-  actions: false,
-  workforce: false,
-  rewardsShortcut: false,
-  kpi: false,
-  deliverables: false,
-  activity: false,
-  reportFollowerView: false,
-};
-
-const fullAccess: DashboardAccess = {
-  plans: true,
-  staffing: true,
-  syncTime: true,
-  actions: true,
-  workforce: true,
-  rewardsShortcut: false,
-  kpi: true,
-  deliverables: true,
-  activity: true,
-  reportFollowerView: false,
-};
-
-export function dashboardAccessForRole(role: UserProfile['role'] | null | undefined): DashboardAccess {
-  if (role === 'admin' || role === 'project_manager') return fullAccess;
-  if (role === 'area_engineer') {
-    return {
-      ...noAccess,
-      plans: true,
-      staffing: true,
-      actions: true,
-      workforce: true,
-      rewardsShortcut: true,
-    };
-  }
-  if (role === 'report_follower') {
-    return { ...noAccess, plans: true, reportFollowerView: true };
-  }
-  if (role === 'supervisor' || role === 'viewer') {
-    return { ...noAccess, plans: true };
-  }
-  return noAccess;
+export function dashboardAccessForPermissions(permissions: ReadonlySet<PermissionKey>): DashboardAccess {
+  const has = (permission: PermissionKey) => permissions.has(permission);
+  const reportFollowerView = has('plans.record_visit_report')
+    && !has('plans.create_delete')
+    && !has('plans.edit_rows');
+  return {
+    plans: has('plans.view'),
+    staffing: has('workforce.assign_cleaners'),
+    syncTime: has('settings.view'),
+    actions: has('plans.create_delete'),
+    workforce: has('workforce.assign_cleaners'),
+    rewardsShortcut: has('rewards.distribute') && !has('audit.view'),
+    kpi: has('kpi.edit'),
+    deliverables: has('deliverables.edit'),
+    activity: has('settings.view'),
+    reportFollowerView,
+  };
 }

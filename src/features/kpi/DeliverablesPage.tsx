@@ -5,10 +5,10 @@ import { Download, ExternalLink, Paperclip, SlidersHorizontal, Upload, X } from 
 import { loadXlsx } from '../../lib/xlsx';
 import { z } from 'zod';
 import { isDeliverableDueWithinDays, isDeliverableLate, resolveDeliverableDueDate, summarizeDeliverables, type DeliverableDueDates, type DeliverableStatus } from '../../domain/deliverables';
-import type { UserProfile } from '../../lib/auth';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { supabase } from '../../lib/supabase';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
+import { usePermission } from '../../app/permissionContext';
 
 const deliverableSchema = z.object({
   id: z.string().uuid(),
@@ -149,7 +149,7 @@ function toDueRecord(item: Deliverable): {
   };
 }
 
-export function DeliverablesPage({ profile }: { profile: UserProfile | null }) {
+export function DeliverablesPage() {
   const queryClient = useQueryClient();
   const { formatNumber, formatDate } = useDisplayFormat();
   const [searchParams] = useSearchParams();
@@ -165,7 +165,7 @@ export function DeliverablesPage({ profile }: { profile: UserProfile | null }) {
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [message, setMessage] = useState('');
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
-  const canEdit = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
+  const canEdit = usePermission('deliverables.edit');
   const query = useQuery({ queryKey: ['contractual-deliverables'], queryFn: loadDeliverables });
   const items = query.data?.items ?? EMPTY_DELIVERABLES;
   const dates = query.data?.dates ?? EMPTY_DUE_DATES;

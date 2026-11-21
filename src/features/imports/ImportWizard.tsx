@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { usePermission } from '../../app/permissionContext';
 import { Download, FileSpreadsheet, Upload, X } from 'lucide-react';
 import type * as XLSX from 'xlsx';
 import { loadXlsx } from '../../lib/xlsx';
@@ -82,8 +83,6 @@ const employeeSchema = z.object({
   phone: z.string().nullable(),
 });
 const aliasesSchema = z.array(z.object({ alias_normalised: z.string(), employee_id: z.string().uuid() }));
-const roleCanImport = (profile: UserProfile | null) =>
-  Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
 const monthlyNames: Record<PlanType, { date: string; assignment: string }> = {
   maintenance: { date: 'تاريخ الصيانة', assignment: 'مشرف الصيانة' },
   cleaning: { date: 'تاريخ النظافة', assignment: 'مشرف النظافة' },
@@ -205,7 +204,8 @@ async function loadAllPages<T>(fetchPage: (start: number, end: number) => Promis
 
 export function ImportWizardLauncher({ target, profile }: { target: ImportTarget; profile: UserProfile | null }) {
   const [open, setOpen] = useState(false);
-  if (!roleCanImport(profile)) return null;
+  const canImport = usePermission('plans.import');
+  if (!canImport) return null;
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} className="rounded-lg border border-brand-300 px-4 py-2 text-sm font-bold text-brand-800 hover:bg-brand-50">
@@ -217,6 +217,7 @@ export function ImportWizardLauncher({ target, profile }: { target: ImportTarget
 }
 
 function ImportWizard({ target, profile, onClose }: { target: ImportTarget; profile: UserProfile | null; onClose: () => void }) {
+  const canImport = usePermission('plans.import');
   const fields = useMemo(() => fieldsFor(target), [target]);
   const [step, setStep] = useState<'upload' | 'map' | 'preview' | 'report'>('upload');
   const [fileName, setFileName] = useState('');
@@ -631,7 +632,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
   }
 
   async function writeImport() {
-    if (!supabase || !profile || !roleCanImport(profile) || !references) throw new Error('لا تملك صلاحية الاستيراد.');
+    if (!supabase || !profile || !canImport || !references) throw new Error('لا تملك صلاحية الاستيراد.');
     await checkImportSchema();
     const evaluated = rows.map((row, index) => ({ row, state: rowState(row, index) }));
     const reports: ReportRow[] = [];

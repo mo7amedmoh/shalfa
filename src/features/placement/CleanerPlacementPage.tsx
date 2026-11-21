@@ -18,6 +18,7 @@ import { SchoolSizeCorrectionBadge } from '../schools/SchoolSizeCorrectionBadge'
 import { Link } from 'react-router-dom';
 import { paginateRows, TABLE_PAGE_SIZE } from '../../lib/pagination';
 import { TablePagination } from '../../components/TablePagination';
+import { usePermission } from '../../app/permissionContext';
 
 const configSchema = z.object({
   buildingTypeHeader: z.string(),
@@ -149,8 +150,11 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [message, setMessage] = useState('');
   const data = useQuery({ queryKey: ['cleaner-placement-data'], queryFn: loadPlacementData, enabled: Boolean(profile) });
-  const canManage = Boolean(profile && ['admin', 'project_manager', 'area_engineer'].includes(profile.role));
-  const canManageStaffingRules = Boolean(profile && ['admin', 'project_manager'].includes(profile.role));
+  const canManage = usePermission('workforce.assign_cleaners');
+  const canManageStaffingRules = usePermission('staffing.exceptions.manage');
+  const canCorrectSchoolSize = usePermission('schools.correct_size');
+  const canRevealResidence = usePermission('residence.reveal');
+  const canShowResidenceToggle = canRevealResidence && canManageStaffingRules;
   useEffect(() => setViewMode(preferences.cleaner_placement_view), [preferences.cleaner_placement_view]);
   const eligibleIds = useMemo(() => {
     if (!data.data?.config) return [];
@@ -249,7 +253,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
 
   const saveCorrection = useMutation({
     mutationFn: async ({ schoolId, correctedSize }: { schoolId: string; correctedSize: SchoolSize | null }) => {
-      if (!supabase || !profile || !canManageStaffingRules) throw new Error('لا تملك صلاحية تصحيح الحجم.');
+      if (!supabase || !profile || !canCorrectSchoolSize) throw new Error('لا تملك صلاحية تصحيح الحجم.');
       if (correctedSize === null) {
         const { error } = await supabase.rpc('delete_school_size_correction', { p_school_id: schoolId });
         if (error) {
@@ -281,7 +285,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
   });
 
   async function revealResidence(employeeId: string) {
-    if (!supabase || !profile || !['admin', 'project_manager', 'area_engineer'].includes(profile.role)) return;
+    if (!supabase || !profile || !canRevealResidence) return;
     if (revealed[employeeId]) {
       setRevealed((current) => { const next = { ...current }; delete next[employeeId]; return next; });
       return;
@@ -308,8 +312,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
         group.sort((left, right) => (left.employee?.full_name ?? '').localeCompare(right.employee?.full_name ?? '', 'ar'));
       }
       const exportAssignments = filtered.flatMap(({ school }) => (assignmentsBySchool.get(school.id) ?? []).slice(0, 5));
-      const canExportResidence = ['admin', 'project_manager', 'area_engineer'].includes(profile?.role ?? '');
-      const residenceNumbers = canExportResidence
+      const residenceNumbers = canRevealResidence
         ? await revealResidenceNumbers('employees', exportAssignments.map(({ employee_id }) => employee_id))
         : new Map<string, string>();
       const workerColumns = Array.from({ length: 5 }, (_, index) => {
@@ -332,7 +335,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
             const assignment = schoolAssignments[index];
             return [
               assignment?.employee?.full_name ?? '',
-              canExportResidence
+              canRevealResidence
                 ? residenceNumbers.get(assignment?.employee_id ?? '') ?? ''
                 : assignment ? '••••••' : '',
             ];
@@ -364,7 +367,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
           rows: groupedByNeighborhood.map((row) => [row.label, row.required, row.assigned, row.shortage, row.surplus]),
         },
       ]);
-      setMessage(canExportResidence
+      setMessage(canRevealResidence
         ? 'تم تصدير بيانات التسكين مع أسماء العمال وأرقام هوياتهم.'
         : 'تم تصدير بيانات التسكين؛ أرقام الهوية مقنعة لعدم توفر الصلاحية.');
     } catch (error) {
@@ -519,7 +522,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
                   {staffing.sizeDiffersFromClassCount && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-900">الحجم يختلف عن عدد الفصول</span>}
                   {correctedSize && <span className="rounded-full bg-violet-50 px-2.5 py-1 text-violet-900">تصحيح يدوي: {sizeLabel(correctedSize)}</span>}
                   {exception && <span className="rounded-full bg-violet-50 px-2.5 py-1 text-violet-900">استثناء معتمد</span>}
-                  {canManageStaffingRules && correctedSize && <button type="button" onClick={() => requestCorrectionRemoval(school.id)} disabled={saveCorrection.isPending} className="rounded border border-rose-300 px-2.5 py-1 font-semibold text-rose-800 disabled:opacity-50">إلغاء التصحيح</button>}
+                  {canCorrectSchoolSize && correctedSize && <button type="button" onClick={() => requestCorrectionRemoval(school.id)} disabled={saveCorrection.isPending} className="rounded border border-rose-300 px-2.5 py-1 font-semibold text-rose-800 disabled:opacity-50">إلغاء التصحيح</button>}
                 </div>
               </div>
               <div className="mt-3 grid gap-2 text-sm sm:grid-cols-4">
@@ -531,7 +534,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
                   <span className="font-semibold">{assignment.employee?.full_name ?? assignment.employee_id}</span>
                   <span className="text-xs text-slate-500">{assignment.labour_source === 'ajeer' ? 'عقد أجير' : 'مصدر العمالة غير محدد'}</span>
                   <span className="text-xs text-slate-600">{revealed[assignment.employee_id] ?? '••••••'}</span>
-                  {['admin', 'project_manager'].includes(profile?.role ?? '') && <button type="button" onClick={() => void revealResidence(assignment.employee_id)} aria-label={revealed[assignment.employee_id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="rounded p-1 text-brand-700">{revealed[assignment.employee_id] ? <EyeOff size={15} /> : <Eye size={15} />}</button>}
+                  {canShowResidenceToggle && <button type="button" onClick={() => void revealResidence(assignment.employee_id)} aria-label={revealed[assignment.employee_id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="rounded p-1 text-brand-700">{revealed[assignment.employee_id] ? <EyeOff size={15} /> : <Eye size={15} />}</button>}
                   {canManage && <button type="button" onClick={() => deleteAssignment.mutate(assignment.id)} className="me-auto text-xs text-rose-700">إزالة</button>}
                 </div>)}
               </div>

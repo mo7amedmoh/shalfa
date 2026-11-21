@@ -5,6 +5,7 @@ import { MapContainer, TileLayer, useMap } from 'react-leaflet';
 import { Download, List, Map as MapIcon, Pencil, Search, SlidersHorizontal } from 'lucide-react';
 import { z } from 'zod';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
+import { usePermission } from '../../app/permissionContext';
 import { duplicateMinistryRows, schoolsWithMapCoordinates, toSlimMapSchool } from '../../domain/schoolMap';
 import { resolveSchoolBuildingNames } from '../../domain/schoolBuildings';
 import type { UserProfile } from '../../lib/auth';
@@ -270,8 +271,9 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
   const selectedSchool = schools.find((school) => school.id === selectedSchoolId) ?? null;
   const mapSelection = schools.find((school) => school.id === mapSelectionId) ?? null;
   const mapTarget = mappableSchools.find((school) => school.id === mapTargetId) ?? null;
-  const canSync = profile?.role === 'admin';
-  const canManageSchools = profile?.role === 'admin' || profile?.role === 'project_manager';
+  const canSync = usePermission('schools.sync');
+  const canManageSchools = usePermission('schools.edit');
+  const canExportCsv = usePermission('schools.export_csv');
   const visible = new Set(visibleColumns);
   const handleMapMarkerSelect = useCallback((schoolId: string) => {
     setSelectedSchoolId(schoolId);
@@ -448,7 +450,7 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
                 ))}
               </div>
             </details>
-              <button type="button" onClick={exportCsv} disabled={!filtered.length || !visible.size} className="schools-tool-button disabled:opacity-50"><Download size={16} /> تصدير CSV</button>
+              {canExportCsv && <button type="button" onClick={exportCsv} disabled={!filtered.length || !visible.size} className="schools-tool-button disabled:opacity-50"><Download size={16} /> تصدير CSV</button>}
                 </>
               )}
               <span className="schools-results-count">المعروض {formatNumber(filtered.length)} صفاً</span>

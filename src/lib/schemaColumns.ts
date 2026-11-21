@@ -65,6 +65,7 @@ export const APP_SCHEMA_COLUMNS = {
 
 export const APP_SCHEMA_SELECT = {
   profile: 'id,username,role,display_name:full_name,phone,employee_id',
+  profileWithRoleId: 'id,username,role,role_id,display_name:full_name,phone,employee_id',
   profileForEdit: 'id,username',
   profilePrefs: 'prefs',
   profileEngineer: 'id:employee_id,display_name:full_name',

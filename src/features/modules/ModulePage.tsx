@@ -41,7 +41,7 @@ export function ModulePage({ section, profile = null, type: fixedType }: { secti
   }
   if (section === 'kpi' && type in labels.kpi) {
     if (type === 'scorecards') return <ScorecardsPage profile={profile} />;
-    if (type === 'deliverables') return <DeliverablesPage profile={profile} />;
+    if (type === 'deliverables') return <DeliverablesPage />;
     return <section role="alert" className="card p-6 text-center text-slate-600">المسار المطلوب غير متاح.</section>;
   }
   return <section role="alert" className="card p-6 text-center text-slate-600">المسار المطلوب غير متاح.</section>;

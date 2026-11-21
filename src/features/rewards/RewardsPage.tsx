@@ -8,6 +8,7 @@ import { exportBrandedXlsx } from '../../lib/brandedXlsx';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
+import { usePermission } from '../../app/permissionContext';
 
 const poolSchema = z.object({
   id: z.string().uuid(),
@@ -97,7 +98,12 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
   const [poolAmount, setPoolAmount] = useState('');
   const [message, setMessage] = useState('');
   const [linkEmployeeIds, setLinkEmployeeIds] = useState<Record<string, string>>({});
-  const privileged = profile?.role === 'admin' || profile?.role === 'project_manager';
+  const canViewSettings = usePermission('settings.view');
+  const canViewRewards = usePermission('rewards.view');
+  const canViewAudit = usePermission('audit.view');
+  const privileged = canViewSettings && canViewRewards;
+  const canDistributeRewards = usePermission('rewards.distribute');
+  const canDistributeOnly = canDistributeRewards && !canViewAudit;
   const pools = useQuery({ queryKey: ['reward-pools', month], queryFn: () => loadPools(month), enabled: Boolean(profile) });
   const engineers = useQuery({ queryKey: ['area-engineers'], queryFn: loadEngineers, enabled: Boolean(profile && privileged) });
   const engineerEmployees = useQuery({ queryKey: ['engineer-employees'], queryFn: loadEngineerEmployees, enabled: Boolean(profile && privileged) });
@@ -130,7 +136,7 @@ export function RewardsPage({ profile }: { profile: UserProfile | null }) {
     ? balance.remainingAmount - Number(amount) + (distributions.find((item) => item.employee_id === employeeId)?.amount ?? 0)
     : balance?.remainingAmount;
   const canEditPool = Boolean(privileged && profile);
-  const canDistribute = profile?.role === 'area_engineer' && Boolean(pool && pool.status === 'open');
+  const canDistribute = canDistributeOnly && Boolean(pool && pool.status === 'open');
   const rewardEmployeesById = useMemo(() => new Map((employees.data ?? []).map((employee) => [employee.id, employee])), [employees.data]);
 
   async function exportRewardAllocations() {

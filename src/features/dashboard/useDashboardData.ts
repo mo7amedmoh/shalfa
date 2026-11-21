@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
-import { dashboardAccessForRole } from '../../domain/dashboardAccess';
+import { dashboardAccessForPermissions } from '../../domain/dashboardAccess';
+import { usePermissions } from '../../app/permissionContext';
 import { cleanerShortageSchools, countDashboardActions, eligibleSchoolsMissingClassCount, schoolsWithSizeClassDifference, staffingRowsForEligibleSchools, summarizeDashboardServices, summarizeSupervisorCompliance, summarizeWorkforce, type DashboardCleanerShortageSchool, type DashboardStaffingRow, type WorkforceSummary } from '../../domain/dashboard';
 import { DEFAULT_STAFFING_RULES, mergeStaffingRules, SCHOOL_SIZES } from '../../domain/staffing';
 import { formatDashboardActivity } from '../../domain/dashboardActivity';
@@ -63,6 +64,18 @@ const staffingRulesSchema = z.object({
   large_plus_plus: z.number().int().min(0),
 });
 const exceptionSchema = z.object({ requiredCleaners: z.number().int().min(0), reason: z.string().trim().min(1) });
+const dashboardPermissionKeys = [
+  'plans.view',
+  'plans.record_visit_report',
+  'plans.create_delete',
+  'plans.edit_rows',
+  'workforce.assign_cleaners',
+  'schools.sync',
+  'rewards.distribute',
+  'kpi.edit',
+  'deliverables.edit',
+  'settings.view',
+] as const;
 const syncSchema = z.object({ synced_at: z.string().nullable() });
 const deliverableSchema = z.object({
   due_basis: z.string().nullable(),
@@ -353,17 +366,19 @@ async function loadRecentActivity(month: string): Promise<DashboardActivity[]> {
 }
 
 export function useDashboardData(profile: UserProfile | null, filters: DashboardFilter) {
-  const access = dashboardAccessForRole(profile?.role);
+  const permissions = usePermissions(dashboardPermissionKeys);
+  const access = dashboardAccessForPermissions(permissions);
+  const permissionFingerprint = [...permissions].sort().join(',');
   const month = filters.month;
   const asOf = asOfForMonth(month);
   const plans = useQuery({
-    queryKey: ['dashboard-plan-rows', profile?.id, profile?.role, month],
+    queryKey: ['dashboard-plan-rows', profile?.id, permissionFingerprint, month],
     queryFn: () => loadPlanRows(month),
     enabled: access.plans,
     staleTime: 60_000,
   });
   const staffing = useQuery({
-    queryKey: ['dashboard-staffing-data', profile?.id, profile?.role],
+    queryKey: ['dashboard-staffing-data', profile?.id, permissionFingerprint],
     queryFn: loadStaffingData,
     enabled: access.staffing,
     staleTime: 60_000,
@@ -375,25 +390,25 @@ export function useDashboardData(profile: UserProfile | null, filters: Dashboard
     staleTime: 60_000,
   });
   const deliverables = useQuery({
-    queryKey: ['dashboard-deliverables', profile?.id, profile?.role],
+    queryKey: ['dashboard-deliverables', profile?.id, permissionFingerprint],
     queryFn: loadDeliverables,
     enabled: access.deliverables,
     staleTime: 60_000,
   });
   const previousKpi = useQuery({
-    queryKey: ['dashboard-previous-kpi-status', profile?.id, profile?.role, month],
+    queryKey: ['dashboard-previous-kpi-status', profile?.id, permissionFingerprint, month],
     queryFn: () => loadPreviousKpiStatus(month),
     enabled: access.kpi,
     staleTime: 60_000,
   });
   const latestKpi = useQuery({
-    queryKey: ['dashboard-latest-kpi', profile?.id, profile?.role, month],
+    queryKey: ['dashboard-latest-kpi', profile?.id, permissionFingerprint, month],
     queryFn: () => loadLatestKpi(month),
     enabled: access.kpi,
     staleTime: 60_000,
   });
   const activity = useQuery({
-    queryKey: ['dashboard-recent-activity', profile?.id, profile?.role, month],
+    queryKey: ['dashboard-recent-activity', profile?.id, permissionFingerprint, month],
     queryFn: () => loadRecentActivity(month),
     enabled: access.activity,
     staleTime: 60_000,

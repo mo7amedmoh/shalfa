@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { supabase } from './supabase';
 import { APP_SCHEMA_SELECT } from './schemaColumns';
+import { isPermissionKey, type PermissionKey } from '../domain/permissions';
 
 export const userProfileSchema = z.object({
   id: z.string().uuid(),
@@ -36,4 +37,14 @@ export async function getUserProfile(userId: string): Promise<UserProfile> {
     .single();
   if (error) throw error;
   return userProfileSchema.parse(data);
+}
+
+export async function getUserPermissions(): Promise<PermissionKey[]> {
+  if (!supabase) throw new Error('لم يتم إعداد الاتصال بقاعدة البيانات.');
+  const { data, error } = await supabase.rpc('current_user_permissions');
+  if (error) throw error;
+  if (!Array.isArray(data) || data.some((key) => typeof key !== 'string' || !isPermissionKey(key))) {
+    throw new Error('أعاد الخادم قائمة صلاحيات غير صالحة.');
+  }
+  return data;
 }

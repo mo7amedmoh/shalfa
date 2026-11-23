@@ -25,6 +25,10 @@ function localDate(): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+function isMissingPlanHolidaysTable(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'PGRST205';
+}
+
 async function loadPlanHolidays(): Promise<Holiday[]> {
   if (!supabase) return [];
   const { data, error } = await supabase.from('plan_holidays')
@@ -193,7 +197,10 @@ export function MonthlyPlanRedistribution({ planId, planMonth, rows, onClose, on
               <h3 className="font-bold text-slate-800">الإجازات الرسمية المسجلة</h3>
               <p className="text-xs text-slate-500">تُستثنى من أيام العمل. يمكن لمدير النظام أو مدير المشروع إدارة سجل الإجازات.</p>
             </div>
-            {holidays.error && <p role="alert" className="text-sm text-rose-700">تعذر تحميل سجل الإجازات: {holidays.error.message}</p>}
+            {holidays.error && <div role="alert" className="text-sm text-rose-700">
+              <p>تعذر تحميل سجل الإجازات: {holidays.error.message}</p>
+              {isMissingPlanHolidaysTable(holidays.error) && <p>يلزم تطبيق ترحيل قاعدة البيانات `202611170003_redistribute_monthly_plan_rows.sql` ثم إعادة تحميل مخطط Supabase.</p>}
+            </div>}
             {holidays.isLoading && <p role="status" className="text-sm text-slate-500">جارٍ تحميل الإجازات…</p>}
             {!holidays.isLoading && !holidays.error && <ul className="grid gap-2 sm:grid-cols-2">
               {holidayInRange.map((holiday) => <li key={holiday.holiday_date} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">

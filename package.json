@@ -21,6 +21,7 @@
   "dependencies": {
     "@aiden0z/pptx-renderer": "1.4.0",
     "@fontsource/cairo": "5.2.6",
+    "@fontsource/tajawal": "^5.2.6",
     "@supabase/supabase-js": "2.118.0",
     "@tanstack/react-query": "5.66.9",
     "@tanstack/react-query-persist-client": "^5.66.9",

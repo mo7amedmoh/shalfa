@@ -16,6 +16,7 @@ export const permissionGroups = {
   settings: 'الإعدادات',
   users: 'المستخدمون',
   audit: 'التدقيق',
+  inventory: 'المخزون',
 } as const;
 
 export const permissions = {
@@ -65,6 +66,14 @@ export const permissions = {
   'users.create': { group: 'users', label: 'إنشاء المستخدمين' },
   'users.assign_roles': { group: 'users', label: 'إسناد الأدوار' },
   'audit.view': { group: 'audit', label: 'عرض سجل التدقيق' },
+  'inventory.view': { group: 'inventory', label: 'عرض المخزون' },
+  'inventory.manage_items': { group: 'inventory', label: 'إدارة أصناف المخزون' },
+  'inventory.receive_stock': { group: 'inventory', label: 'استلام المخزون' },
+  'inventory.adjust': { group: 'inventory', label: 'جرد وتسوية المخزون' },
+  'inventory.request': { group: 'inventory', label: 'طلب مخزون' },
+  'inventory.approve': { group: 'inventory', label: 'اعتماد طلبات المخزون' },
+  'inventory.issue': { group: 'inventory', label: 'صرف المخزون' },
+  'inventory.export_order': { group: 'inventory', label: 'تصدير أمر الصرف' },
 } as const;
 
 export type PermissionKey = keyof typeof permissions;

@@ -79,5 +79,25 @@ Apply these after the base schema 001, in exactly this order:
 14. `supabase/migrations/202611100002_gatekeeper_employee_links.sql`
 15. `supabase/migrations/202611110001_monthly_late_accounting.sql`
 16. `supabase/migrations/202611140001_school_size_model.sql`
+17. `supabase/migrations/202611150001_general_plan_report_status.sql`
+18. `supabase/migrations/202611150002_general_plan_bulk_updates.sql`
+19. `supabase/migrations/202611170001_fix_custom_plan_rows_upsert_conflict.sql`
+20. `supabase/migrations/202611170002_plan_row_edits.sql`
+21. `supabase/migrations/202611170003_redistribute_monthly_plan_rows.sql`
+22. `supabase/migrations/202611180001_plan_row_edit_undo.sql`
+23. `supabase/migrations/202611190001_ajeer_cleaner_assignments.sql`
+24. `supabase/migrations/202611190002_add_large_plus_plus_size.sql`
+25. `supabase/migrations/202611190003_delete_school_size_correction_audit.sql`
+26. `supabase/migrations/202611210001_attendance_rosters.sql`
+27. `supabase/migrations/202611210002_private_assets.sql`
+28. `supabase/migrations/202611210003_private_assets_upload.sql`
+29. `supabase/migrations/202611210004_attendance_marks_read_rpc.sql`
+30. `supabase/migrations/202611210005_attendance_marks_pagination.sql`
+31. `supabase/migrations/202611220001_rbac.sql`
+32. `supabase/migrations/202611220002_fix_project_manager_reward_permission.sql`
+33. `supabase/migrations/202611220003_current_user_permissions.sql`
+34. `supabase/migrations/202611220004_role_permissions_admin.sql`
+35. `supabase/migrations/202611220005_assign_user_role_rpc.sql`
+36. `supabase/migrations/202611220006_permission_enforcement_batch1.sql`
 
 Then run a full school sync to populate accurate source row/order metadata. `npm run verify:schema` checks the app's required columns using `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `TEST_SCHEMA_EMAIL`, and `TEST_SCHEMA_PASSWORD` from the environment or local env files. Use an admin/project-manager test login so RLS-restricted catalog columns can be probed; no credentials belong in source control.

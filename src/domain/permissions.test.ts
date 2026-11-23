@@ -20,14 +20,15 @@ const rolePermissions: Record<Role, ReadonlySet<PermissionKey>> = {
     'gatekeepers.export_residence', 'residence.reveal', 'staffing.rules.view', 'staffing.exceptions.manage',
     'attendance.view', 'attendance.manage', 'attendance.import', 'attendance.export',
     'kpi.edit', 'kpi.approve', 'deliverables.edit', 'reports.tools', 'tools.ticket_analysis', 'settings.view',
+    'inventory.view', 'inventory.manage_items', 'inventory.receive_stock', 'inventory.adjust', 'inventory.export_order',
   ]),
   area_engineer: new Set([
     ...commonPermissions, 'plans.create_delete', 'plans.record_visit_report', 'plans.bulk_update_general',
     'plans.import', 'plans.write_row_fields', 'workforce.assign_cleaners', 'gatekeepers.manage', 'residence.reveal',
-    'rewards.distribute', 'reports.tools',
+    'rewards.distribute', 'reports.tools', 'inventory.view', 'inventory.approve', 'inventory.export_order',
   ]),
   report_follower: new Set([...commonPermissions, 'plans.record_visit_report', 'reports.tools']),
-  supervisor: new Set(commonPermissions),
+  supervisor: new Set([...commonPermissions, 'inventory.view', 'inventory.request']),
   viewer: new Set(commonPermissions),
 };
 
@@ -52,6 +53,8 @@ const surfaces: Surface[] = [
   { id: 'menu/deliverables', legacyRoles: roles, requires: ['deliverables.view'] },
   { id: 'menu/settings', legacyRoles: ['admin', 'project_manager'], requires: ['settings.view'] },
   { id: 'menu/audit', legacyRoles: ['admin'], requires: ['audit.view'] },
+  { id: 'menu/inventory', legacyRoles: ['admin', 'project_manager', 'area_engineer', 'supervisor'], requires: ['inventory.view'] },
+  { id: 'menu/inventory-requests', legacyRoles: ['admin', 'supervisor'], requires: ['inventory.request'] },
   { id: 'menu/report-tools', legacyRoles: ['admin', 'project_manager', 'area_engineer', 'report_follower'], requires: ['reports.tools'] },
   { id: 'menu/ticket-analysis', legacyRoles: ['admin', 'project_manager'], requires: ['tools.ticket_analysis'] },
   { id: 'menu/custom-plan-types', legacyRoles: ['admin', 'project_manager'], requires: ['plans.manage_types'] },
@@ -72,6 +75,8 @@ const surfaces: Surface[] = [
   { id: 'route/plan-management', legacyRoles: ['admin', 'project_manager'], requires: ['plans.manage_types'] },
   { id: 'route/users', legacyRoles: ['admin'], requires: ['users.manage'] },
   { id: 'route/audit', legacyRoles: ['admin'], requires: ['audit.view'] },
+  { id: 'route/inventory', legacyRoles: ['admin', 'project_manager', 'area_engineer', 'supervisor'], requires: ['inventory.view'] },
+  { id: 'route/inventory-requests', legacyRoles: ['admin', 'supervisor'], requires: ['inventory.request'] },
   { id: 'route/school-cleanup', legacyRoles: ['admin'], requires: ['schools.cleanup'] },
   { id: 'route/staffing-rules', legacyRoles: ['admin', 'project_manager'], requires: ['staffing.rules.view'] },
   { id: 'settings-card/sync', legacyRoles: ['admin', 'project_manager'], requires: ['settings.view'] },
@@ -92,6 +97,7 @@ const surfaces: Surface[] = [
   { id: 'dashboard/kpi', legacyRoles: ['admin', 'project_manager'], requires: ['kpi.edit'] },
   { id: 'dashboard/deliverables', legacyRoles: ['admin', 'project_manager'], requires: ['deliverables.edit'] },
   { id: 'dashboard/activity', legacyRoles: ['admin', 'project_manager'], requires: ['settings.view'] },
+  { id: 'dashboard/inventory-shortages', legacyRoles: ['admin', 'project_manager', 'area_engineer', 'supervisor'], requires: ['inventory.view'] },
   { id: 'dashboard/report-follower', legacyRoles: ['report_follower'], requires: ['plans.record_visit_report'], excludes: ['plans.create_delete', 'plans.edit_rows'] },
   { id: 'action/school-edit', legacyRoles: ['admin', 'project_manager'], requires: ['schools.edit'] },
   { id: 'action/school-sync', legacyRoles: ['admin'], requires: ['schools.sync'] },
@@ -128,6 +134,7 @@ describe('permission catalog and legacy role visibility', () => {
     const migrations = [
       '202611220001_rbac.sql',
       '202611220006_permission_enforcement_batch1.sql',
+      '202611230001_inventory.sql',
     ].map((file) => readFileSync(new URL(`../../supabase/migrations/${file}`, import.meta.url), 'utf8'));
     const migrationKeys = migrations.flatMap((migration) => {
       const catalogInsert = migration.match(/insert into public\.permissions[\s\S]*?values([\s\S]*?);/);

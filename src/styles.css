@@ -3505,6 +3505,287 @@ th {
   .report-summary-card b { font-size: 24px; }
 }
 
+.inventory-order-print-root {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 8px 0 24px;
+}
+
+.inventory-order-actions {
+  display: flex;
+  width: min(210mm, 100%);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.inventory-order-sheet {
+  position: relative;
+  width: 210mm;
+  min-height: 297mm;
+  overflow: hidden;
+  padding: 28mm 18mm 8mm;
+  background: #fff;
+  color: #111;
+  box-shadow: 0 8px 30px rgb(15 23 42 / 12%);
+  font-family: 'Tajawal', 'Cairo', sans-serif;
+  font-size: 11pt;
+  line-height: 1.35;
+}
+
+.inventory-order-header {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+}
+
+.inventory-order-logos {
+  display: flex;
+  height: 14mm;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4mm;
+}
+
+.inventory-order-tbc-logo {
+  width: 18mm;
+  height: 14mm;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.inventory-order-shalfa-logo {
+  width: 20mm;
+  height: 14mm;
+  object-fit: contain;
+  object-position: right center;
+}
+
+.inventory-order-header h1 {
+  margin: 0;
+  padding-bottom: 2mm;
+  border-bottom: 1px solid #111;
+  font-size: 16pt;
+  font-weight: 700;
+}
+
+.inventory-order-identifiers {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4mm;
+  font-size: 11pt;
+}
+
+.inventory-order-identifiers p,
+.inventory-order-parties p {
+  margin: 0;
+}
+
+.inventory-order-parties {
+  display: flex;
+  justify-content: space-between;
+  gap: 8mm;
+  margin-top: 3.5mm;
+}
+
+.inventory-order-parties-right,
+.inventory-order-parties-left {
+  display: grid;
+  align-content: start;
+  gap: 2mm;
+}
+
+.inventory-order-parties-right {
+  text-align: right;
+}
+
+.inventory-order-parties-left {
+  min-width: 62mm;
+  text-align: right;
+}
+
+.inventory-order-warehouse {
+  font-weight: 700;
+}
+
+.inventory-order-section-title {
+  margin: 8.5mm 0 2mm;
+  text-align: center;
+  font-size: 15pt;
+  font-weight: 700;
+}
+
+.inventory-order-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  color: #111;
+  font-size: 10pt;
+  text-align: center;
+}
+
+.inventory-order-table th,
+.inventory-order-table td {
+  border: 1.2px solid #111;
+  padding: 0.5mm 1.1mm;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+  line-height: 1.1;
+}
+
+.inventory-order-table thead {
+  display: table-header-group;
+}
+
+.inventory-order-table th {
+  background: #ffc000;
+  color: #111;
+  font-size: 11pt;
+  font-weight: 700;
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+
+.inventory-order-table tbody tr {
+  height: 6mm;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.inventory-order-table .inventory-order-item-name {
+  font-weight: 700;
+}
+
+.inventory-order-table tbody td:nth-child(2) {
+  font-weight: 700;
+}
+
+.inventory-order-col-number { width: 10%; }
+.inventory-order-col-code { width: 10%; }
+.inventory-order-col-name { width: 39%; }
+.inventory-order-col-unit { width: 10%; }
+.inventory-order-col-quantity { width: 10%; }
+.inventory-order-col-note { width: 21%; }
+
+.inventory-order-footer {
+  margin-top: 0;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.inventory-order-thanks {
+  margin: 0;
+  text-align: center;
+  font-size: 15pt;
+  font-weight: 700;
+}
+
+.inventory-order-signatures {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8mm;
+  margin-top: 1mm;
+}
+
+.inventory-order-signatures p {
+  margin: 0;
+}
+
+.inventory-order-receiver {
+  padding-top: 2mm;
+}
+
+.inventory-order-engineer {
+  display: grid;
+  justify-items: start;
+  gap: 1mm;
+}
+
+.inventory-order-engineer img {
+  width: 46mm;
+  height: 12mm;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.inventory-order-watermark {
+  position: fixed;
+  z-index: 5;
+  inset: 42% 0 auto;
+  color: rgb(127 29 29 / 13%);
+  font-size: 74pt;
+  font-weight: 700;
+  text-align: center;
+  transform: rotate(-28deg);
+  pointer-events: none;
+}
+
+@media print {
+  @page inventory-order {
+    size: A4 portrait;
+    margin: 0;
+  }
+
+  body.inventory-order-print-mode,
+  body.inventory-order-print-mode #root,
+  body.inventory-order-print-mode .app-shell,
+  body.inventory-order-print-mode .main-area,
+  body.inventory-order-print-mode .content-wrap {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  body.inventory-order-print-mode .sidebar,
+  body.inventory-order-print-mode .main-area > header,
+  body.inventory-order-print-mode .main-area > div:not(.content-wrap) {
+    display: none !important;
+  }
+
+  .inventory-order-print-root {
+    position: static !important;
+    display: block !important;
+    width: 210mm !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+
+  .inventory-order-actions {
+    display: none !important;
+  }
+
+  .inventory-order-sheet {
+    page: inventory-order;
+    width: 210mm !important;
+    min-height: 297mm !important;
+    padding: 28mm 18mm 8mm !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    break-after: auto;
+  }
+
+  .inventory-order-watermark {
+    position: fixed;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .inventory-order-table th {
+    color: #111;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
+
 .attendance-page {
   min-width: 0;
 }

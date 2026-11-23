@@ -6,6 +6,7 @@ import { formatArabicCount, type ArabicCountForms } from '../../domain/arabicCou
 import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { usePermission } from '../../app/permissionContext';
+import { InventoryShortageCard } from '../inventory/InventoryShortageCard';
 import { useDashboardData } from './useDashboardData';
 
 const serviceLabels: Record<PlanType, string> = {
@@ -226,6 +227,8 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
           </p>
         </div>
       </section>
+
+      <InventoryShortageCard />
 
       <section className="dashboard-filterbar card">
         <div className="dashboard-filter-disclosure">

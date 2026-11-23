@@ -23,6 +23,27 @@ import { DashboardPage } from '../features/dashboard/DashboardPage';
 const SchoolsPage = lazy(() =>
   import('../features/schools/SchoolsPage').then((module) => ({ default: module.SchoolsPage })),
 );
+const InventoryPage = lazy(() =>
+  import('../features/inventory/InventoryPage').then((module) => ({ default: module.InventoryPage })),
+);
+const InventoryRequestsPage = lazy(() =>
+  import('../features/inventory/InventoryRequestsPage').then((module) => ({ default: module.InventoryRequestsPage })),
+);
+const InventoryReviewPage = lazy(() =>
+  import('../features/inventory/InventoryWorkflowPages').then((module) => ({ default: module.InventoryReviewPage })),
+);
+const InventoryIssuePage = lazy(() =>
+  import('../features/inventory/InventoryWorkflowPages').then((module) => ({ default: module.InventoryIssuePage })),
+);
+const InventoryApprovalStampPage = lazy(() =>
+  import('../features/inventory/InventoryWorkflowPages').then((module) => ({ default: module.InventoryApprovalStampPage })),
+);
+const InventoryOrderPage = lazy(() =>
+  import('../features/inventory/InventoryOrderPage').then((module) => ({ default: module.InventoryOrderPage })),
+);
+const DevInventoryOrderFixture = import.meta.env.DEV ? lazy(() =>
+  import('../features/inventory/InventoryOrderPage').then((module) => ({ default: module.DevInventoryOrderFixture })),
+) : null;
 const ModulePage = lazy(() =>
   import('../features/modules/ModulePage').then((module) => ({ default: module.ModulePage })),
 );
@@ -37,6 +58,15 @@ const DevReportFixture = import.meta.env.DEV ? lazy(() =>
 ) : null;
 const DevMapFixture = import.meta.env.DEV ? lazy(() =>
   import('../features/schools/DevMapFixture').then((module) => ({ default: module.DevMapFixture })),
+) : null;
+const DevInventoryFixture = import.meta.env.DEV ? lazy(() =>
+  import('../features/inventory/DevInventoryFixture').then((module) => ({ default: module.DevInventoryFixture })),
+) : null;
+const DevInventoryRequestsFixture = import.meta.env.DEV ? lazy(() =>
+  import('../features/inventory/DevInventoryRequestsFixture').then((module) => ({ default: module.DevInventoryRequestsFixture })),
+) : null;
+const DevInventoryWorkflowFixture = import.meta.env.DEV ? lazy(() =>
+  import('../features/inventory/DevInventoryWorkflowFixture').then((module) => ({ default: module.DevInventoryWorkflowFixture })),
 ) : null;
 const AccountPage = lazy(() =>
   import('../features/account/AccountPage').then((module) => ({ default: module.AccountPage })),
@@ -149,6 +179,11 @@ const navigation: NavigationEntry[] = [
     label: 'أعمال إدارية',
     icon: BadgeCheck,
     children: [
+      { label: 'المخزون', path: '/inventory', permission: 'inventory.view' },
+      { label: 'طلبات قطع الغيار', path: '/inventory/requests', permission: 'inventory.request' },
+      { label: 'طلبات للمراجعة', path: '/inventory/review', permission: 'inventory.approve' },
+      { label: 'ختمي وتوقيعي', path: '/inventory/stamp', permission: 'inventory.approve' },
+      { label: 'صرف الطلبات', path: '/inventory/issue', permission: 'inventory.issue' },
       { label: 'تسكين العمالة', path: '/placement/cleaners', permission: 'placement.cleaners.view' },
       { label: 'تحضير العمالة', path: '/placement/attendance', permission: 'attendance.view' },
       { label: 'تسكين البوابين', path: '/placement/gatekeepers', permission: 'placement.gatekeepers.view' },
@@ -423,6 +458,12 @@ function AppShell({
               {import.meta.env.DEV && DevReportFixture && <Route path="/__dev/report-fixture" element={<DevReportFixture />} />}
               {import.meta.env.DEV && DevMapFixture && <Route path="/__dev/map-fixture" element={<DevMapFixture />} />}
               <Route path="/" element={<RequirePermission permission="dashboard.view"><DashboardPage profile={profile} /></RequirePermission>} />
+              <Route path="/inventory" element={<RequirePermission permission="inventory.view"><InventoryPage /></RequirePermission>} />
+              <Route path="/inventory/requests" element={<RequirePermission permission="inventory.request"><InventoryRequestsPage /></RequirePermission>} />
+              <Route path="/inventory/review" element={<RequirePermission permission="inventory.approve"><InventoryReviewPage /></RequirePermission>} />
+              <Route path="/inventory/stamp" element={<RequirePermission permission="inventory.approve"><InventoryApprovalStampPage /></RequirePermission>} />
+              <Route path="/inventory/issue" element={<RequirePermission permission="inventory.issue"><InventoryIssuePage /></RequirePermission>} />
+              <Route path="/inventory/order/:requestId" element={<RequirePermission permission="inventory.export_order"><InventoryOrderPage /></RequirePermission>} />
               <Route path="/schools" element={<RequirePermission permission="schools.view"><SchoolsPage profile={profile} /></RequirePermission>} />
               <Route path="/plans/report" element={<RequirePermission permission="plans.view"><MonthlyReportPage /></RequirePermission>} />
               <Route path="/plans/:type" element={<RequirePermission permission="plans.view"><MonthlyPlanRoute profile={profile} /></RequirePermission>} />
@@ -565,6 +606,24 @@ export function App() {
   }
   if (import.meta.env.DEV && window.location.pathname === '/__dev/map-fixture' && DevMapFixture) {
     return <DevMapFixture />;
+  }
+  if (import.meta.env.DEV && window.location.pathname === '/__dev/inventory-fixture' && DevInventoryFixture) {
+    return <DevInventoryFixture />;
+  }
+  if (import.meta.env.DEV && window.location.pathname === '/__dev/inventory-requests-fixture' && DevInventoryRequestsFixture) {
+    return <DevInventoryRequestsFixture />;
+  }
+  if (import.meta.env.DEV && window.location.pathname === '/__dev/inventory-review-fixture' && DevInventoryWorkflowFixture) {
+    return <DevInventoryWorkflowFixture mode="review" />;
+  }
+  if (import.meta.env.DEV && window.location.pathname === '/__dev/inventory-issue-fixture' && DevInventoryWorkflowFixture) {
+    return <DevInventoryWorkflowFixture mode="issue" />;
+  }
+  if (import.meta.env.DEV && window.location.pathname === '/__dev/inventory-stamp-fixture' && DevInventoryWorkflowFixture) {
+    return <DevInventoryWorkflowFixture mode="stamp" />;
+  }
+  if (import.meta.env.DEV && window.location.pathname === '/__dev/inventory-order-fixture' && DevInventoryOrderFixture) {
+    return <DevInventoryOrderFixture />;
   }
   if (!supabase) {
     const missingVariables = [

@@ -17,6 +17,7 @@ import {
   type ExistingInventoryItem,
   type ImportSummary,
   type InventoryImportRow,
+  type InventoryImportValidation,
 } from './inventoryImportModel';
 import { parseInventoryWorkbook } from './inventoryExcelImport';
 
@@ -80,6 +81,28 @@ const statusStyles: Record<InventoryStatus, string> = {
   out: 'bg-rose-50 text-rose-800 ring-rose-200',
   uncounted: 'bg-slate-100 text-slate-700 ring-slate-200',
 };
+
+function getInventoryImportRowMessages(
+  row: InventoryImportRow,
+  issues: InventoryImportValidation,
+  blockingOnly = false,
+): string[] {
+  const entries = [
+    { message: 'اسم الصنف مفقود', active: issues.missingName, blocking: true },
+    { message: 'كود Logix مفقود', active: issues.missingCode, blocking: false },
+    { message: 'كود Logix مكرر', active: issues.duplicateCode, blocking: false },
+    { message: 'الوحدة مفقودة', active: issues.missingUnit, blocking: true },
+    { message: 'القسم مفقود', active: issues.missingCategory, blocking: true },
+    { message: 'هل تقصد «سباكة»؟', active: issues.misspelledCategory, blocking: true },
+    { message: 'الرصيد يحتاج إلى تصحيح', active: issues.invalidBalance, blocking: true },
+    { message: `${row.valueErrors.length} خلية خطأ`, active: issues.unresolvedValueErrors, blocking: true },
+    { message: 'تعذرت قراءة صورة مضمّنة', active: issues.unreadableImages, blocking: true },
+    { message: 'تطابق متعدد؛ سيُضاف كسجل جديد ما لم تختر سجلًا للتحديث', active: issues.ambiguousMatch, blocking: false },
+  ];
+  return entries
+    .filter((entry) => entry.active && (!blockingOnly || entry.blocking))
+    .map((entry) => entry.message);
+}
 
 async function loadInventory(): Promise<{ items: InventoryItem[]; categories: InventoryCategory[] }> {
   if (!supabase) throw new Error('إعداد الاتصال بقاعدة البيانات غير مكتمل.');
@@ -675,11 +698,16 @@ function InventoryImportDialog({
   const [error, setError] = useState('');
   const [loadingFile, setLoadingFile] = useState(false);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
+  const [imagesUnavailable, setImagesUnavailable] = useState(false);
+  const [continueWithoutImages, setContinueWithoutImages] = useState(false);
   const previewUrls = useRef<string[]>([]);
   const loadToken = useRef(0);
   const validation = useMemo(() => validateInventoryImportRows(rows, existingItems), [rows, existingItems]);
   const readyCount = validation.filter((entry) => entry.canImport).length;
   const ignoredCount = rows.filter((row) => row.ignored).length;
+  const blockedRows = rows.flatMap((row, index) => !row.ignored && !validation[index].canImport
+    ? [{ rowNumber: row.rowNumber, reasons: getInventoryImportRowMessages(row, validation[index], true) }]
+    : []);
 
   useEffect(() => () => {
     loadToken.current += 1;
@@ -697,17 +725,20 @@ function InventoryImportDialog({
     releaseCurrentPreviews();
     setRows([]);
     setSummary(null);
+    setImagesUnavailable(false);
+    setContinueWithoutImages(false);
     setError('');
     setLoadingFile(true);
     try {
-      const parsedRows = await parseInventoryWorkbook(file);
+      const parsedWorkbook = await parseInventoryWorkbook(file);
       if (token !== loadToken.current) {
-        parsedRows.flatMap((row) => row.images.map((image) => image.previewUrl).filter((url): url is string => Boolean(url)))
+        parsedWorkbook.rows.flatMap((row) => row.images.map((image) => image.previewUrl).filter((url): url is string => Boolean(url)))
           .forEach((url) => URL.revokeObjectURL(url));
         return;
       }
-      previewUrls.current = parsedRows.flatMap((row) => row.images.map((image) => image.previewUrl).filter((url): url is string => Boolean(url)));
-      setRows(parsedRows);
+      previewUrls.current = parsedWorkbook.rows.flatMap((row) => row.images.map((image) => image.previewUrl).filter((url): url is string => Boolean(url)));
+      setRows(parsedWorkbook.rows);
+      setImagesUnavailable(parsedWorkbook.imagesUnavailable);
     } catch (reason) {
       if (token === loadToken.current) setError(errorMessage(reason));
     } finally {
@@ -721,6 +752,10 @@ function InventoryImportDialog({
 
   async function save() {
     setError('');
+    if (imagesUnavailable && !continueWithoutImages) {
+      setError('أكد المتابعة بدون الصور المضمنة أو أعد حفظ الملف في Excel ثم اختره مجددًا.');
+      return;
+    }
     const invalidRows = validation.some((entry, index) => !entry.canImport && !rows[index].ignored);
     if (invalidRows) {
       setError('أصلح مشكلات الصفوف أو تجاهل الصفوف غير الصالحة قبل الحفظ.');
@@ -740,6 +775,7 @@ function InventoryImportDialog({
   if (summary) {
     return <Dialog title="اكتمل استيراد الأصناف" onClose={onClose}>
       <div className="grid gap-4">
+        {imagesUnavailable && <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">تم الاستيراد بدون الصور المضمنة بناءً على تأكيدك.</p>}
         <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 font-semibold text-emerald-900">
           {summary.inserted} صنف جديد · {summary.updated} محدّث · {summary.ignored} متجاهل
         </p>
@@ -755,32 +791,45 @@ function InventoryImportDialog({
       </p>
       <label className="grid gap-1 text-sm font-semibold text-slate-700">
         ملف Excel
-        <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => void loadFile(event.target.files?.[0])} className="block w-full text-sm file:me-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:font-semibold" disabled={busy || loadingFile} />
+        <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = '';
+          void loadFile(file);
+        }} className="block w-full text-sm file:me-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:font-semibold" disabled={busy || loadingFile} />
       </label>
       {loadingFile && <p role="status" className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">جارٍ قراءة الأصناف واستخراج الصور…</p>}
       {error && <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
+      {imagesUnavailable && <div role="alert" className="grid gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+        <p>تعذر فكّ أحد رسومات الملف. أُزيلت الصور المضمنة من المعاينة؛ أعد حفظ الملف في Excel لإعادة المحاولة، أو أكّد المتابعة بدون صور.</p>
+        <label className="inline-flex items-start gap-2 font-semibold">
+          <input type="checkbox" checked={continueWithoutImages} onChange={(event) => setContinueWithoutImages(event.target.checked)} disabled={busy} className="mt-0.5 h-4 w-4 rounded border-amber-400" />
+          أتابع الاستيراد بدون صور
+        </label>
+      </div>}
       {rows.length > 0 && (
         <>
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 p-3 text-sm">
-            <b>{rows.length} صفًا · {readyCount} جاهز للحفظ · {ignoredCount} متجاهل</b>
+            <b>{rows.length} صفًا · {readyCount} جاهز للحفظ · {blockedRows.length} يحتاج معالجة · {ignoredCount} متجاهل</b>
             <span className="text-slate-600">صحّح الحقول أو تجاهل الصف قبل المتابعة.</span>
           </div>
+          {blockedRows.length > 0 && <div role="alert" className="grid gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
+            <b>الحفظ متوقف بسبب الصفوف التالية (كود Logix المفقود أو المكرر لا يوقف الحفظ):</b>
+            <div className="flex flex-wrap gap-2">
+              {blockedRows.map(({ rowNumber, reasons }) => <button
+                key={rowNumber}
+                type="button"
+                onClick={() => document.getElementById(`inventory-import-row-${rowNumber}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                className="rounded-md border border-rose-300 bg-white px-2 py-1 text-start text-xs font-semibold hover:bg-rose-100"
+              >
+                صف {rowNumber}: {reasons.join('، ')}
+              </button>)}
+            </div>
+          </div>}
           <div className="grid max-h-[52vh] gap-3 overflow-y-auto pe-1">
             {rows.map((row, index) => {
               const issues = validation[index];
-              const messages = [
-                issues.missingName && 'اسم الصنف مفقود',
-                issues.missingCode && 'كود Logix مفقود',
-                issues.duplicateCode && 'كود Logix مكرر',
-                issues.missingUnit && 'الوحدة مفقودة',
-                issues.missingCategory && 'القسم مفقود',
-                issues.misspelledCategory && 'هل تقصد «سباكة»؟',
-                issues.invalidBalance && 'الرصيد يحتاج إلى تصحيح',
-                issues.unresolvedValueErrors && `${row.valueErrors.length} خلية خطأ`,
-                issues.unreadableImages && 'تعذرت قراءة صورة مضمّنة',
-                issues.ambiguousMatch && 'تطابق متعدد يحتاج إلى اختيار',
-              ].filter(Boolean);
-              return <article key={row.rowNumber} className={`grid gap-3 rounded-xl border p-3 ${row.ignored ? 'border-slate-200 bg-slate-50 opacity-70' : messages.length ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200'}`}>
+              const messages = getInventoryImportRowMessages(row, issues);
+              return <article id={`inventory-import-row-${row.rowNumber}`} key={row.rowNumber} className={`grid gap-3 rounded-xl border p-3 ${row.ignored ? 'border-slate-200 bg-slate-50 opacity-70' : messages.length ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200'}`}>
                 <header className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <b>صف Excel {row.rowNumber}</b>
@@ -812,16 +861,13 @@ function InventoryImportDialog({
                       <input value={row.notes} onChange={(event) => updateRow(index, { notes: event.target.value })} disabled={busy} className="min-h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm" />
                     </label>
                   </div>
-                  {issues.missingCode && <label className="inline-flex items-start gap-2 text-xs font-semibold text-amber-900">
-                    <input type="checkbox" checked={row.allowMissingCode} onChange={(event) => updateRow(index, { allowMissingCode: event.target.checked })} disabled={busy} className="mt-0.5 h-4 w-4 rounded border-slate-300" />
-                    أوافق على استيراد هذا الصنف بلا كود (لن يمكن تمييزه عند إعادة الاستيراد).
-                  </label>}
+                  {issues.missingCode && <p className="text-xs font-semibold text-amber-900">كود Logix مفقود؛ سيُستورد الصنف بلا كود.</p>}
                   {(() => {
                     const matches = getInventoryImportMatches(row, existingItems);
                     if (matches.length < 2) return null;
                     return <div className="grid gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
                       <p className="text-xs font-semibold text-amber-950">
-                        عُثر على {matches.length} أصناف مطابقة بالاسم والكود؛ اختر سجلًا للتحديث أو أضفه كصنف جديد.
+                        عُثر على {matches.length} أصناف مطابقة بالاسم والكود؛ اختر سجلًا للتحديث أو اترك الاختيار فارغًا لإضافة صنف جديد.
                       </p>
                       <select
                         value={row.matchAsNew ? '__new__' : row.existingMatchId ?? ''}
@@ -874,7 +920,7 @@ function InventoryImportDialog({
       )}
       <div className="flex flex-wrap justify-end gap-2">
         <button type="button" onClick={onClose} disabled={busy} className="min-h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold disabled:opacity-50">إلغاء</button>
-        {rows.length > 0 && <button type="button" onClick={() => void save()} disabled={busy || loadingFile || validation.some((entry, index) => !entry.canImport && !rows[index].ignored)} className="min-h-10 rounded-lg bg-brand-700 px-4 text-sm font-bold text-white disabled:opacity-50">
+        {rows.length > 0 && <button type="button" onClick={() => void save()} disabled={busy || loadingFile || (imagesUnavailable && !continueWithoutImages) || validation.some((entry, index) => !entry.canImport && !rows[index].ignored)} className="min-h-10 rounded-lg bg-brand-700 px-4 text-sm font-bold text-white disabled:opacity-50">
           {busy ? 'جارٍ الحفظ…' : `حفظ ${readyCount} صنف`}
         </button>}
       </div>

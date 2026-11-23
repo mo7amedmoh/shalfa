@@ -6,6 +6,7 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 
 export const supabase = supabaseUrl && supabaseAnonKey
   ? createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { apikey: supabaseAnonKey } },
       auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: true },
     })
   : null;

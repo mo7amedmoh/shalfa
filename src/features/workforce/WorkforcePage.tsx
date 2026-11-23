@@ -1,12 +1,12 @@
-import { useMemo, useState } from 'react';
-import type { InputHTMLAttributes } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import type { FormEvent, InputHTMLAttributes } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { loadXlsx } from '../../lib/xlsx';
 import { exportBrandedXlsx } from '../../lib/brandedXlsx';
 import { revealResidenceNumbers } from '../../lib/residence';
 import { z } from 'zod';
-import { FileDown, Eye, EyeOff, Search, Upload } from 'lucide-react';
+import { FileDown, Eye, EyeOff, Search, Upload, X } from 'lucide-react';
 import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { supabase } from '../../lib/supabase';
@@ -28,6 +28,8 @@ const employeeSchema = z.object({
   employment_status: z.enum(['active', 'inactive', 'terminated']),
   phone: z.string().nullable(),
   manager_id: z.string().uuid().nullable(),
+  project_name: z.string().nullable(),
+  identity_card_path: z.string().nullable(),
 });
 const ratingSchema = z.object({ employee_id: z.string().uuid(), rating: z.number().nullable() });
 const residenceEmployeeSchema = z.object({
@@ -48,6 +50,7 @@ const employeeInputSchema = z.object({
   department: z.string().trim().min(1).max(120),
   phone: z.string().trim().max(30),
   manager_id: z.string().uuid().nullable(),
+  project_name: z.string().trim().max(120),
 });
 type Employee = z.infer<typeof employeeSchema>;
 type EmployeeInput = z.infer<typeof employeeInputSchema>;
@@ -79,7 +82,14 @@ const employeeCategoryLabels: Record<z.infer<typeof employeeCategorySchema>, str
 };
 
 function categoryFromArabic(value: string) {
-  return employeeCategories.find(([, label]) => label === value)?.[0];
+  const normalized = value.trim().replace(/تكيف/g, 'تكييف');
+  if (/مشرف/.test(normalized)) return 'supervisor';
+  if (/كهرب/.test(normalized)) return 'technician';
+  if (/سباك|مبلط|دهان|نجار|بلاط|مكيف|تكييف|اعمال مدنيه/.test(normalized)) return 'technician';
+  if (/مهندس/.test(normalized)) return 'engineer';
+  if (/إداري|اداري/.test(normalized)) return 'admin_staff';
+  if (/سائق/.test(normalized)) return 'driver';
+  return employeeCategories.find(([, label]) => label === normalized)?.[0];
 }
 
 async function loadEmployees(): Promise<Employee[]> {
@@ -156,12 +166,17 @@ function parseImportRows(fileRows: Record<string, unknown>[]): EmployeeImportRow
     const rawStatus = importHeader(row, ['الحالة', 'حالة الموظف']);
     const status = rawStatus === '' || rawStatus === 'نشط' ? 'active' : rawStatus === 'غير نشط' ? 'inactive' : rawStatus;
     const ratingText = importHeader(row, ['التقييم']);
+    const profession = importHeader(row, ['الوظيفة', 'المسمى الوظيفي', 'المهنه']);
+    const company = importHeader(row, ['الشركة', 'الشركه', 'القسم', 'الإدارة']);
+    const importedEmployeeNumber = importHeader(row, ['الرقم الوظيفي', 'رقم الموظف'])
+      || importHeader(row, ['الهويه', 'رقم الهوية']);
+    const normalizedEmployeeNumber = importedEmployeeNumber && importedEmployeeNumber !== '-' ? importedEmployeeNumber : `TEMP-${index + 1}`;
     const raw = {
       full_name: importHeader(row, ['اسم', 'الاسم', 'اسم الموظف']),
-      employee_number: importHeader(row, ['الرقم الوظيفي']),
-      job_title: importHeader(row, ['الوظيفة', 'المسمى الوظيفي']),
-      employee_category: categoryFromArabic(importHeader(row, ['الفئة الوظيفية'])) ?? '',
-      department: importHeader(row, ['القسم', 'الإدارة']),
+      employee_number: normalizedEmployeeNumber,
+      job_title: profession || 'غير محدد',
+      employee_category: categoryFromArabic(importHeader(row, ['الفئة الوظيفية', 'المهنه'])) ?? 'technician',
+      department: company || 'غير محدد',
       phone: importHeader(row, ['رقم التواصل', 'رقم الجوال']),
       manager_id: null,
       residenceNumber: importHeader(row, ['رقم الإقامة', 'رقم الاقامة']),
@@ -170,6 +185,7 @@ function parseImportRows(fileRows: Record<string, unknown>[]): EmployeeImportRow
       status,
       managerNumber: importHeader(row, ['الرقم الوظيفي للمدير']),
       rating: ratingText === '' ? null : Number(ratingText),
+      project_name: importHeader(row, ['المشروع', 'الشركه']),
     };
     const parsed = z.object({
       full_name: z.string().min(2),
@@ -185,6 +201,7 @@ function parseImportRows(fileRows: Record<string, unknown>[]): EmployeeImportRow
       status: z.enum(['active', 'inactive']),
       managerNumber: z.string(),
       rating: z.number().min(0).max(100).nullable(),
+      project_name: z.string(),
     }).safeParse(raw);
     if (!parsed.success) {
       throw new Error(`تعذر التحقق من الصف ${index + 2} في ملف الاستيراد: ${parsed.error.issues[0]?.message ?? 'بيانات غير صالحة'}`);
@@ -201,6 +218,13 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
   const [issuesPage, setIssuesPage] = useState(1);
   const [sharedPage, setSharedPage] = useState(1);
   const [revealedIds, setRevealedIds] = useState<Record<string, string>>({});
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [projectFilter, setProjectFilter] = useState('');
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
+  const [identityCardUrl, setIdentityCardUrl] = useState('');
+  const [identityCardFile, setIdentityCardFile] = useState<File | null>(null);
   const [message, setMessage] = useState('');
   const isPrivileged = usePermission('settings.view');
   const canManage = Boolean(isPrivileged);
@@ -214,14 +238,30 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
     refetchInterval: 30_000,
   });
   const { register, handleSubmit, reset, formState: { isSubmitting } } = useForm<EmployeeInput>({
-    defaultValues: { full_name: '', employee_number: '', job_title: '', employee_category: 'technician', department: '', phone: '', manager_id: null },
+    defaultValues: { full_name: '', employee_number: '', job_title: '', employee_category: 'technician', department: '', phone: '', manager_id: null, project_name: '' },
   });
   const visibleEmployees = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     return (employees.data ?? []).filter((employee) => employee.employee_category !== 'cleaner'
+      && (!categoryFilter || employee.employee_category === categoryFilter)
+      && (!statusFilter || employee.employment_status === statusFilter)
+      && (!projectFilter || (employee.project_name ?? '').toLocaleLowerCase().includes(projectFilter.toLocaleLowerCase()))
       && `${employee.full_name} ${employee.employee_number ?? ''} ${employee.job_title ?? ''} ${employee.department ?? ''}`.toLocaleLowerCase().includes(query));
-  }, [employees.data, search]);
+  }, [employees.data, search, categoryFilter, statusFilter, projectFilter]);
   const pagedEmployees = paginateRows(visibleEmployees, employeePage);
+  const selectedEmployee = (employees.data ?? []).find((employee) => employee.id === selectedEmployeeId) ?? null;
+  const projectNames = useMemo(() => [...new Set((employees.data ?? [])
+    .map((employee) => employee.project_name?.trim())
+    .filter((project): project is string => Boolean(project)))]
+    .sort((left, right) => left.localeCompare(right, 'ar')), [employees.data]);
+  useEffect(() => {
+    setIdentityCardUrl('');
+    if (!supabase || !selectedEmployee?.identity_card_path) return;
+    let cancelled = false;
+    void supabase.storage.from('employee-identity').createSignedUrl(selectedEmployee.identity_card_path, 600)
+      .then(({ data }) => { if (!cancelled) setIdentityCardUrl(data?.signedUrl ?? ''); });
+    return () => { cancelled = true; };
+  }, [selectedEmployeeId, selectedEmployee?.identity_card_path]);
   const residenceIssues = residenceQuality.data?.issues ?? [];
   const sharedResidenceRecords = residenceQuality.data?.shared ?? [];
   const pagedResidenceIssues = paginateRows(residenceIssues, issuesPage);
@@ -240,6 +280,7 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
       department: parsed.data.department,
       manager_id: parsed.data.manager_id,
       phone: parsed.data.phone || null,
+      project_name: parsed.data.project_name || null,
       nationality: null,
       hire_date: null,
       status: 'active',
@@ -283,6 +324,7 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
           category: row.employee_category,
           department: row.department,
           phone: row.phone || null,
+          project_name: row.project_name || null,
           nationality: row.nationality || null,
           hire_date: row.hireDate,
           status: row.status,
@@ -301,8 +343,9 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
         completed += 1;
       }
       const { error: relinkError } = await supabase.rpc('relink_plan_names');
-      if (relinkError) throw new Error(`تم استيراد الموظفين لكن تعذر إعادة ربط أسماء الخطط: ${relinkError.message}`);
-      setMessage(`اكتمل استيراد ${completed} سجلاً.`);
+      setMessage(relinkError
+        ? `تم استيراد ${completed} سجلاً، لكن تعذر إعادة ربط أسماء الخطط: ${relinkError.message}. يمكنك إعادة المحاولة من شاشة ربط الأسماء.`
+        : `اكتمل استيراد ${completed} سجلاً.`);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['employees'] }),
         queryClient.invalidateQueries({ queryKey: ['employee-ratings'] }),
@@ -325,6 +368,52 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
     const residenceNumber = parsed.data[0].residence_no;
     if (!residenceNumber) return setMessage('لا يوجد رقم إقامة مسجل لهذا الموظف.');
     setRevealedIds((current) => ({ ...current, [employeeId]: residenceNumber }));
+  }
+
+  async function updateEmployeeProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!supabase || !selectedEmployee || !canManage) return;
+    const form = new FormData(event.currentTarget);
+    const getText = (key: string) => String(form.get(key) ?? '').trim();
+    try {
+      let identityCardPath = selectedEmployee.identity_card_path;
+      if (identityCardFile) {
+        if (!['image/jpeg', 'image/png', 'image/webp'].includes(identityCardFile.type)
+          || identityCardFile.size < 1
+          || identityCardFile.size > 5 * 1024 * 1024) {
+          throw new Error('اختر صورة JPG أو PNG أو WebP لا يتجاوز حجمها 5 ميجابايت.');
+        }
+        const extension = identityCardFile.type === 'image/png' ? 'png' : identityCardFile.type === 'image/webp' ? 'webp' : 'jpg';
+        identityCardPath = `employees/${selectedEmployee.id}/${crypto.randomUUID()}.${extension}`;
+        const { error } = await supabase.storage.from('employee-identity').upload(identityCardPath, identityCardFile, {
+          contentType: identityCardFile.type,
+          upsert: false,
+        });
+        if (error) throw error;
+      }
+      const { error } = await supabase.rpc('update_employee_profile', {
+        p_employee_id: selectedEmployee.id,
+        p_full_name: getText('full_name'),
+        p_employee_no: getText('employee_number'),
+        p_job_title: getText('job_title'),
+        p_category: getText('category'),
+        p_department: getText('department'),
+        p_phone: getText('phone'),
+        p_project_name: getText('project_name'),
+        p_manager_id: getText('manager_id') || null,
+        p_nationality: getText('nationality'),
+        p_hire_date: getText('hire_date'),
+        p_status: getText('status'),
+        p_identity_card_path: identityCardPath,
+      });
+      if (error) throw error;
+      setIdentityCardFile(null);
+      setEditMode(false);
+      setMessage('تم تعديل بيانات الموظف.');
+      await queryClient.invalidateQueries({ queryKey: ['employees'] });
+    } catch (error) {
+      setMessage(error instanceof Error ? `تعذر تعديل بيانات الموظف: ${error.message}` : 'تعذر تعديل بيانات الموظف.');
+    }
   }
 
   async function exportEmployees() {
@@ -420,6 +509,7 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
           </label>
           <Input label="القسم" {...register('department', { required: true })} />
           <Input label="رقم التواصل" type="tel" {...register('phone')} />
+          <Input label="المشروع" {...register('project_name')} />
           <label className="grid min-w-0 gap-1 text-sm font-semibold">المسؤول المباشر
             <select {...register('manager_id', { setValueAs: (value) => value || null })} className="w-full min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal"><option value="">بدون مسؤول محدد</option>{(employees.data ?? []).map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name} · {employee.job_title}</option>)}</select>
           </label>
@@ -516,12 +606,29 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
           <label className="relative min-w-0 flex-1"><Search size={17} className="absolute inset-inline-start-3 top-1/2 -translate-y-1/2 text-slate-400" /><input value={search} onChange={(event) => { setSearch(event.target.value); setEmployeePage(1); }} placeholder="ابحث بالاسم أو الرقم الوظيفي أو الوظيفة" className="w-full min-w-0 rounded-lg border border-slate-300 py-2 pe-3 ps-10 text-sm" /></label>
           <span className="shrink-0 text-xs text-slate-500 sm:text-sm">عدد الموظفين: {formatNumber(visibleEmployees.length)}</span>
         </div>
+        <div className="grid gap-3 border-b border-slate-100 bg-slate-50/70 p-4 sm:grid-cols-3">
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">الفئة الوظيفية
+            <select value={categoryFilter} onChange={(event) => { setCategoryFilter(event.target.value); setEmployeePage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+              <option value="">كل الفئات</option>{employeeCategories.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">الحالة
+            <select value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value); setEmployeePage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+              <option value="">كل الحالات</option><option value="active">نشط</option><option value="inactive">غير نشط</option><option value="terminated">منتهي الخدمة</option>
+            </select>
+          </label>
+          <label className="grid gap-1 text-xs font-semibold text-slate-600">المشروع
+            <select value={projectFilter} onChange={(event) => { setProjectFilter(event.target.value); setEmployeePage(1); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+              <option value="">كل المشاريع</option>{projectNames.map((project) => <option key={project} value={project}>{project}</option>)}
+            </select>
+          </label>
+        </div>
         {employees.isLoading ? <p role="status" className="p-8 text-center text-slate-500">جارٍ تحميل السجل…</p> : visibleEmployees.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">لا توجد سجلات مطابقة.</p> : (
           <div className="grid gap-3 p-3 sm:p-4">
             <div className="table-scroll workforce-table-scroll" role="region" aria-label="جدول الموظفين" tabIndex={0}><table className="workforce-table workforce-employee-table">
               <thead><tr><th scope="col">الاسم</th><th scope="col">الرقم الوظيفي</th><th scope="col">الوظيفة</th><th scope="col">الفئة الوظيفية</th><th scope="col">القسم</th><th scope="col">رقم الإقامة</th>{isPrivileged && <th scope="col">التقييم</th>}</tr></thead>
               <tbody>{pagedEmployees.rows.map((employee) => <tr key={employee.id}>
-                <td data-label="الاسم" className="font-semibold">{employee.full_name}</td>
+                <td data-label="الاسم" className="font-semibold"><button type="button" onClick={() => { setSelectedEmployeeId(employee.id); setEditMode(false); setIdentityCardFile(null); }} className="text-brand-800 underline decoration-brand-200 underline-offset-4 hover:text-brand-950">{employee.full_name}</button></td>
                 <td data-label="الرقم الوظيفي">{employee.employee_number ?? '—'}</td>
                 <td data-label="الوظيفة">{employee.job_title ?? '—'}</td>
                 <td data-label="الفئة الوظيفية">{employeeCategoryLabels[employee.employee_category] ?? '—'}</td>
@@ -547,6 +654,77 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
           </div>
         )}
       </section>
+      {selectedEmployee && <div className="fixed inset-0 z-40 grid place-items-center bg-slate-950/40 p-3 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="employee-profile-title">
+        <article className="card max-h-[90vh] w-full max-w-3xl overflow-y-auto p-4 sm:p-6">
+          <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
+            <div>
+              <p className="text-xs text-slate-500">بطاقة موظف</p>
+              <h3 id="employee-profile-title" className="mt-1 text-xl font-bold text-brand-900">{selectedEmployee.full_name}</h3>
+            </div>
+            <button type="button" onClick={() => { setSelectedEmployeeId(null); setEditMode(false); setIdentityCardFile(null); }} className="rounded-lg border border-slate-300 p-2 text-slate-600" aria-label="إغلاق بطاقة الموظف"><X size={18} /></button>
+          </div>
+          {!editMode ? <>
+            <div className="grid gap-5 py-5 sm:grid-cols-[minmax(0,1fr)_220px]">
+              <dl className="grid gap-3 sm:grid-cols-2">
+                {[
+                  ['الاسم', selectedEmployee.full_name],
+                  ['الرقم الوظيفي', selectedEmployee.employee_number ?? '—'],
+                  ['رقم الإقامة', revealedIds[selectedEmployee.id] ?? '••••••'],
+                  ['رقم الجوال', selectedEmployee.phone ?? '—'],
+                  ['المشروع', selectedEmployee.project_name ?? 'غير مسجل'],
+                  ['القسم', selectedEmployee.department ?? '—'],
+                  ['الوظيفة', selectedEmployee.job_title ?? '—'],
+                  ['الفئة الوظيفية', employeeCategoryLabels[selectedEmployee.employee_category]],
+                  ['الحالة', selectedEmployee.employment_status === 'active' ? 'نشط' : selectedEmployee.employment_status === 'inactive' ? 'غير نشط' : 'منتهي الخدمة'],
+                  ['الجنسية', selectedEmployee.nationality ?? '—'],
+                ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-100 p-3"><dt className="text-xs text-slate-500">{label}</dt><dd dir={label === 'رقم الإقامة' ? 'ltr' : undefined} className="mt-1 font-semibold">{value}</dd></div>)}
+              </dl>
+              <div className="grid content-start gap-2">
+                <p className="text-sm font-bold">صورة الهوية</p>
+                {identityCardUrl
+                  ? <img src={identityCardUrl} alt={`هوية ${selectedEmployee.full_name}`} className="max-h-64 w-full rounded-xl border border-slate-200 object-contain" />
+                  : <div className="grid min-h-40 place-items-center rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-center text-xs text-slate-500">لا توجد صورة بطاقة هوية مرفوعة</div>}
+                {profile && canRevealResidence && <button type="button" onClick={() => void toggleResidence(selectedEmployee.id)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold">{revealedIds[selectedEmployee.id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'}</button>}
+              </div>
+            </div>
+            <div className="border-t border-slate-100 pt-4">
+              <p className="mb-3 text-sm font-bold">التدرج الإداري وصولاً إلى مدير المشروع</p>
+              <ol className="grid gap-2">
+                {(() => {
+                  const chain: Employee[] = [];
+                  let current = selectedEmployee.manager_id ? (employees.data ?? []).find((item) => item.id === selectedEmployee.manager_id) : undefined;
+                  const visited = new Set([selectedEmployee.id]);
+                  while (current && !visited.has(current.id)) {
+                    chain.push(current);
+                    visited.add(current.id);
+                    current = current.manager_id ? (employees.data ?? []).find((item) => item.id === current!.manager_id) : undefined;
+                  }
+                  if (!chain.length) return <li className="rounded-lg bg-slate-50 p-3 text-sm text-slate-500">لم يُسند مدير مباشر بعد.</li>;
+                  return chain.map((manager, index) => <li key={manager.id} className="flex items-center gap-3 rounded-lg border border-slate-100 p-3">
+                    <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-brand-50 text-xs font-bold text-brand-800">{formatNumber(index + 1)}</span>
+                    <span className="min-w-0 flex-1"><strong>{manager.full_name}</strong><small className="block text-slate-500">{manager.job_title ?? employeeCategoryLabels[manager.employee_category]}</small></span>
+                  </li>);
+                })()}
+              </ol>
+            </div>
+            {canManage && <div className="mt-5 flex justify-end"><button type="button" onClick={() => setEditMode(true)} className="rounded-lg bg-brand-700 px-5 py-2.5 text-sm font-bold text-white">تعديل بيانات الموظف</button></div>}
+          </> : <form className="grid gap-3 py-5 sm:grid-cols-2" onSubmit={updateEmployeeProfile}>
+            <label className="grid gap-1 text-sm font-semibold">اسم الموظف<input name="full_name" defaultValue={selectedEmployee.full_name} required className="rounded-lg border border-slate-300 px-3 py-2" /></label>
+            <label className="grid gap-1 text-sm font-semibold">الرقم الوظيفي<input name="employee_number" defaultValue={selectedEmployee.employee_number ?? ''} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
+            <label className="grid gap-1 text-sm font-semibold">الوظيفة<input name="job_title" defaultValue={selectedEmployee.job_title ?? ''} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
+            <label className="grid gap-1 text-sm font-semibold">الفئة<select name="category" defaultValue={selectedEmployee.employee_category} className="rounded-lg border border-slate-300 px-3 py-2">{employeeCategories.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label className="grid gap-1 text-sm font-semibold">القسم<input name="department" defaultValue={selectedEmployee.department ?? ''} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
+            <label className="grid gap-1 text-sm font-semibold">رقم الجوال<input name="phone" defaultValue={selectedEmployee.phone ?? ''} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
+            <label className="grid gap-1 text-sm font-semibold">المشروع<input name="project_name" defaultValue={selectedEmployee.project_name ?? ''} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
+            <label className="grid gap-1 text-sm font-semibold">الجنسية<input name="nationality" defaultValue={selectedEmployee.nationality ?? ''} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
+            <label className="grid gap-1 text-sm font-semibold">تاريخ التعيين<input name="hire_date" type="date" defaultValue={selectedEmployee.hire_date ?? ''} className="rounded-lg border border-slate-300 px-3 py-2" /></label>
+            <label className="grid gap-1 text-sm font-semibold">الحالة<select name="status" defaultValue={selectedEmployee.employment_status} className="rounded-lg border border-slate-300 px-3 py-2"><option value="active">نشط</option><option value="inactive">غير نشط</option><option value="terminated">منتهي الخدمة</option></select></label>
+            <label className="grid gap-1 text-sm font-semibold sm:col-span-2">المدير المباشر<select name="manager_id" defaultValue={selectedEmployee.manager_id ?? ''} className="rounded-lg border border-slate-300 px-3 py-2"><option value="">بدون مدير مباشر</option>{(employees.data ?? []).filter((employee) => employee.id !== selectedEmployee.id).map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name} · {employee.job_title ?? employeeCategoryLabels[employee.employee_category]}</option>)}</select></label>
+            <label className="grid gap-1 text-sm font-semibold sm:col-span-2">صورة بطاقة الهوية<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setIdentityCardFile(event.target.files?.[0] ?? null)} className="rounded-lg border border-slate-300 px-3 py-2" /><span className="text-xs font-normal text-slate-500">JPG أو PNG أو WebP بحد أقصى 5 ميجابايت</span></label>
+            <div className="flex justify-end gap-2 sm:col-span-2"><button type="button" onClick={() => setEditMode(false)} className="rounded-lg border border-slate-300 px-4 py-2">إلغاء</button><button type="submit" className="rounded-lg bg-brand-700 px-5 py-2 font-bold text-white">حفظ التعديلات</button></div>
+          </form>}
+        </article>
+      </div>}
       {message && !canManage && <p role="status" className="text-sm text-slate-700">{message}</p>}
     </div>
   );

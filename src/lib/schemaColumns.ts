@@ -9,7 +9,7 @@ export const APP_SCHEMA_COLUMNS = {
   ],
   employees: [
     'id', 'full_name', 'employee_no', 'job_title', 'category', 'department', 'nationality',
-    'hire_date', 'status', 'phone', 'manager_id',
+    'hire_date', 'status', 'phone', 'manager_id', 'project_name', 'identity_card_path',
   ],
   employee_ratings: ['employee_id', 'rating', 'updated_by'],
   cleaner_assignments: ['id', 'school_id', 'employee_id', 'labour_source'],
@@ -90,7 +90,7 @@ export const APP_SCHEMA_SELECT = {
   schoolsDashboard: 'id,school_name:name,ministry_number:ministry_no,source_fields:extra,size_source',
   schoolsGatekeeperPlacement: 'id,school_name:name,ministry_number:ministry_no,neighbourhood,plan_scope',
   employeesBasic: 'id,full_name,employee_number:employee_no,job_title,phone',
-  employeesCleaner: 'id,full_name,employee_number:employee_no,job_title,employee_category:category,department,nationality,hire_date,employment_status:status,phone,manager_id',
+  employeesCleaner: 'id,full_name,employee_number:employee_no,job_title,employee_category:category,department,nationality,hire_date,employment_status:status,phone,manager_id,project_name,identity_card_path',
   employeesForImport: 'id,full_name,employee_no,category,job_title,phone',
   employeesForRewards: 'id,full_name,employee_no,job_title',
   employeesForGatekeepers: 'id,full_name,employee_no,category,job_title,phone',

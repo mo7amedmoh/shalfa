@@ -12,7 +12,7 @@ The app does not directly query a SQL view. Its nested PostgREST relations are j
 | `app_config` | `key`, `value`, `updated_by`, `updated_at` | No | `202611040001`, `202611140001` | Add minimal key/value configuration with member reads; the latest migration adds the `staffing_rules` key and default six-size rule table and restricts edits to that key to admins. |
 | `app_settings` | `id`, `contract_signing_date`, `site_handover_date`, `award_letter_date` | Yes except `award_letter_date` | `202611060002` | Nullable award-letter date supports automatic due dates for `الترسية`; initialized to the reference workbook date (2026-07-01) and may be cleared if unknown. |
 | `schools` | `id`, `ministry_no`, `ministry_key`, `name`, `extra`, `lat`, `lng`, `neighbourhood`, `synced_at`, `source_key`, `source_columns`, `source_row`, `missing_from_sheet_at`, `plan_scope`, `size_source`, `size_calc`, `class_count`, `building_type`, `has_elevator_contractor` | Base fields yes; source-tracking fields no | `202611050001`, `202611070001`, `202611140001` | Ministry numbers may repeat; unique `source_key` is normalized ministry number plus occurrence. `size_source` accepts six normalized indicators and is authoritative; `size_calc` remains a class-count reference. |
-| `employees` | `id`, `full_name`, `employee_no`, `job_title`, `department`, `category`, `manager_id`, `phone`, `nationality`, `hire_date`, `status`; `residence_no` is intentionally probed as forbidden by `verify-rls.ts`, read via the audited reveal RPC, and used by the cleaner-import RPC | Yes | No additions | App reads only the explicitly granted columns. |
+| `employees` | `id`, `full_name`, `employee_no`, `job_title`, `department`, `category`, `manager_id`, `phone`, `nationality`, `hire_date`, `status`, `project_name`, `identity_card_path`; `residence_no` is intentionally probed as forbidden by `verify-rls.ts`, read via the audited reveal RPC, and used by the cleaner-import RPC | Base fields yes; profile fields no | `202611230003` adds employee profile fields; `202611230004` grants SELECT on the new fields; `202611230005` adds the normalized-name index used during plan relinking | App reads only explicitly granted columns; the identity image itself remains in private storage. |
 | `employee_ratings` | `employee_id`, `rating`, `updated_by` | Yes | No additions | Read/upsert is restricted to admin/project-manager; verified against role policy. |
 | `cleaner_assignments` | `id`, `school_id`, `employee_id`, `labour_source` | Yes | `202611190001` | All cleaner assignments are Ajeer contract labor: migration backfills `ajeer`, sets it as the default, and rejects other source values. |
 | `staffing_exceptions` | `school_id`, `required_count`, `reason`, `created_by` | Yes | No additions | Replaced JSON-based `school_overrides.staffing_exception`; edits remain admin/project-manager only. |
@@ -99,5 +99,13 @@ Apply these after the base schema 001, in exactly this order:
 34. `supabase/migrations/202611220004_role_permissions_admin.sql`
 35. `supabase/migrations/202611220005_assign_user_role_rpc.sql`
 36. `supabase/migrations/202611220006_permission_enforcement_batch1.sql`
+37. `supabase/migrations/202611220007_reload_postgrest_schema.sql`
+38. `supabase/migrations/202611220008_fix_assign_user_role_json_keys.sql`
+39. `supabase/migrations/202611230001_inventory.sql`
+40. `supabase/migrations/202611230002_inventory_sync.sql`
+41. `supabase/migrations/202611230003_employee_profile_cards.sql`
+42. `supabase/migrations/202611230004_employee_profile_column_grants.sql`
+43. `supabase/migrations/202611230005_optimize_plan_name_relink.sql`
+44. `supabase/migrations/202611230006_fix_employee_profile_category_cast.sql`
 
 Then run a full school sync to populate accurate source row/order metadata. `npm run verify:schema` checks the app's required columns using `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `TEST_SCHEMA_EMAIL`, and `TEST_SCHEMA_PASSWORD` from the environment or local env files. Use an admin/project-manager test login so RLS-restricted catalog columns can be probed; no credentials belong in source control.

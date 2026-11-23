@@ -26,7 +26,6 @@ function row(overrides: Partial<InventoryImportRow> = {}): InventoryImportRow {
     images: [],
     selectedImageId: null,
     ignored: false,
-    allowMissingCode: false,
     ignoreValueErrors: false,
     skipUnreadableImages: false,
     existingMatchId: null,
@@ -52,9 +51,9 @@ describe('inventory Excel import model', () => {
     expect(getSpreadsheetRowFromImageAnchor(2.6)).toBe(3);
   });
 
-  it('requires explicit resolution for missing codes, missing fields, misspellings, and invalid balances', () => {
+  it('treats missing and duplicate codes as warnings while requiring other row fixes', () => {
     const rows = [
-      row({ logixCode: '', allowMissingCode: false }),
+      row({ logixCode: '' }),
       row({ rowNumber: 4, logixCode: '1001' }),
       row({ rowNumber: 5, unit: '' }),
       row({ rowNumber: 6, category: 'سبكة' }),
@@ -65,12 +64,13 @@ describe('inventory Excel import model', () => {
 
     expect(validation[0].missingCode).toBe(true);
     expect(validation[0].duplicateCode).toBe(false);
+    expect(validation[0].canImport).toBe(true);
     expect(validation[1].duplicateCode).toBe(true);
+    expect(validation[1].canImport).toBe(true);
     expect(validation[2].missingUnit).toBe(true);
     expect(validation[3].misspelledCategory).toBe(true);
     expect(validation[4].invalidBalance).toBe(true);
-    expect(validation[1].canImport).toBe(true);
-    expect(validation.every((entry, index) => index === 1 || !entry.canImport)).toBe(true);
+    expect(validation.every((entry, index) => index < 2 || !entry.canImport)).toBe(true);
   });
 
   it('matches coded rows by normalized code and name and flags multiple matches for review', () => {
@@ -84,6 +84,7 @@ describe('inventory Excel import model', () => {
     expect(normalizeInventoryImportText(' إِضَاءَة ')).toBe('اضاءة');
     expect(getInventoryImportMatches(imported, matches).map((item) => item.id)).toEqual(['one', 'two']);
     expect(validateInventoryImportRows([imported], matches)[0].ambiguousMatch).toBe(true);
+    expect(validateInventoryImportRows([imported], matches)[0].canImport).toBe(true);
     expect(validateInventoryImportRows([row({ ...imported, existingMatchId: 'two' })], matches)[0].canImport).toBe(true);
     expect(resolveInventoryImportMatch({ existingMatchId: null, matchAsNew: true }, matches)).toBeNull();
   });
@@ -95,16 +96,16 @@ describe('inventory Excel import model', () => {
       { id: 'coded', logixCode: '123', name: 'مفتاح', categoryName: 'كهرباء', photoPath: null },
       { id: 'other-category', logixCode: null, name: 'مفتاح', categoryName: 'سباكة', photoPath: null },
     ];
-    const imported = row({ logixCode: '', allowMissingCode: true, name: 'مفتاح', category: 'كهرباء' });
+    const imported = row({ logixCode: '', name: 'مفتاح', category: 'كهرباء' });
 
     expect(getInventoryImportMatches(imported, matches).map((item) => item.id)).toEqual(['one', 'two']);
     expect(validateInventoryImportRows([row({ ...imported, matchAsNew: true })], matches)[0].canImport).toBe(true);
     expect(resolveInventoryImportMatch({ existingMatchId: 'one', matchAsNew: false }, matches)?.id).toBe('one');
   });
 
-  it('permits a code-less item only after acknowledgement and excludes ignored rows from duplicate checks', () => {
+  it('permits code-less items without acknowledgement and excludes ignored rows from duplicate checks', () => {
     const rows = [
-      row({ logixCode: '', allowMissingCode: true }),
+      row({ logixCode: '' }),
       row({ rowNumber: 4, ignored: true, logixCode: '1001' }),
     ];
 

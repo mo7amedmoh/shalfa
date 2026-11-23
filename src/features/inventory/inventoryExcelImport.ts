@@ -7,6 +7,10 @@ import {
 } from './inventoryImportModel';
 
 type WorkbookImageData = Pick<ImportedImage, 'blob' | 'previewUrl' | 'width' | 'height' | 'error'>;
+export type ParsedInventoryWorkbook = {
+  rows: InventoryImportRow[];
+  imagesUnavailable: boolean;
+};
 type InventoryColumns = {
   headerRow: number;
   firstDataRow: number;
@@ -21,6 +25,31 @@ type InventoryColumns = {
 
 const maximumWorkbookBytes = 25 * 1024 * 1024;
 const maximumImageDimension = 800;
+
+async function loadInventoryWorkbook(data: ArrayBuffer): Promise<{ workbook: import('exceljs').Workbook; imagesUnavailable: boolean }> {
+  const ExcelJS = await import('exceljs');
+  const workbook = new ExcelJS.Workbook();
+  try {
+    await workbook.xlsx.load(data);
+    return { workbook, imagesUnavailable: false };
+  } catch (reason) {
+    if (!(reason instanceof Error) || !reason.message.includes("reading 'anchors'")) throw reason;
+
+    const JSZip = (await import('jszip')).default;
+    const zip = await JSZip.loadAsync(data);
+    const drawingFiles = Object.keys(zip.files).filter((path) =>
+      /^xl\/drawings\/(?:drawing\d+\.xml|_rels\/drawing\d+\.xml\.rels)$/.test(path),
+    );
+    if (!drawingFiles.some((path) => /^xl\/drawings\/drawing\d+\.xml$/.test(path))) throw reason;
+    drawingFiles.forEach((path) => zip.remove(path));
+
+    const fallbackWorkbook = new ExcelJS.Workbook();
+    await fallbackWorkbook.xlsx.load(await zip.generateAsync({ type: 'arraybuffer' }), {
+      ignoreNodes: ['drawing'],
+    });
+    return { workbook: fallbackWorkbook, imagesUnavailable: true };
+  }
+}
 
 function normalizedHeader(value: unknown): string {
   return String(value ?? '').trim().toLocaleLowerCase().replace(/[\s_-]+/g, '');
@@ -203,7 +232,7 @@ async function compressWorkbookImage(image: Image): Promise<WorkbookImageData> {
   }
 }
 
-export async function parseInventoryWorkbook(file: File): Promise<InventoryImportRow[]> {
+export async function parseInventoryWorkbook(file: File): Promise<ParsedInventoryWorkbook> {
   if (!file.name.toLocaleLowerCase().endsWith('.xlsx')) {
     throw new Error('اختر ملف Excel بصيغة .xlsx.');
   }
@@ -211,9 +240,7 @@ export async function parseInventoryWorkbook(file: File): Promise<InventoryImpor
     throw new Error('يجب ألا يتجاوز حجم ملف Excel ‏25 ميجابايت.');
   }
 
-  const ExcelJS = await import('exceljs');
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(await file.arrayBuffer());
+  const { workbook, imagesUnavailable } = await loadInventoryWorkbook(await file.arrayBuffer());
   const worksheet = workbook.worksheets.find((candidate) => {
     try {
       findInventoryColumns(candidate);
@@ -293,7 +320,6 @@ export async function parseInventoryWorkbook(file: File): Promise<InventoryImpor
       images,
       selectedImageId: images.find((image) => !image.error)?.id ?? null,
       ignored: false,
-      allowMissingCode: false,
       ignoreValueErrors: false,
       skipUnreadableImages: false,
       existingMatchId: null,
@@ -301,5 +327,5 @@ export async function parseInventoryWorkbook(file: File): Promise<InventoryImpor
     });
   }
   if (!rows.length) throw new Error('لم يُعثر على صفوف أصناف للاستيراد.');
-  return rows;
+  return { rows, imagesUnavailable };
 }

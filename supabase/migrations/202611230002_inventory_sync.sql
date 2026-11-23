@@ -384,16 +384,16 @@ security definer
 set search_path = ''
 as $$
 declare
-  request_year integer := extract(year from (now() at time zone 'Asia/Riyadh'))::integer;
+  v_request_year integer := extract(year from (now() at time zone 'Asia/Riyadh'))::integer;
   next_number integer;
 begin
   insert into public.stock_request_counters (request_year, last_number)
-  values (request_year, 1)
+  values (v_request_year, 1)
   on conflict (request_year) do update
     set last_number = public.stock_request_counters.last_number + 1
   returning last_number into next_number;
 
-  new.number := 'SR-' || request_year::text || '-' || lpad(next_number::text, 4, '0');
+  new.number := 'SR-' || v_request_year::text || '-' || lpad(next_number::text, 4, '0');
   return new;
 end;
 $$;
@@ -1110,14 +1110,12 @@ begin
     );
 
   approval_timestamp := now();
-  select s.name
-  into school_name
+  select
+    s.name,
+    coalesce(nullif(btrim(s.extra ->> 'اسم المشرف (صيانة)'), ''), '—')
+  into school_name, supervisor_name
   from public.schools s
   where s.id = request_row.school_id;
-  select coalesce(nullif(btrim(p.full_name), ''), nullif(btrim(p.username), ''), '—')
-  into supervisor_name
-  from public.profiles p
-  where p.id = request_row.requester_id;
   select coalesce(nullif(btrim(p.full_name), ''), nullif(btrim(p.username), ''), '—')
   into engineer_name
   from public.profiles p
@@ -1201,14 +1199,12 @@ begin
     raise exception 'لا يحق لك معاينة هذا الطلب قبل اعتماده';
   end if;
 
-  select s.name
-  into school_name
+  select
+    s.name,
+    coalesce(nullif(btrim(s.extra ->> 'اسم المشرف (صيانة)'), ''), '—')
+  into school_name, supervisor_name
   from public.schools s
   where s.id = request_row.school_id;
-  select coalesce(nullif(btrim(p.full_name), ''), nullif(btrim(p.username), ''), '—')
-  into supervisor_name
-  from public.profiles p
-  where p.id = request_row.requester_id;
   select coalesce(nullif(btrim(p.full_name), ''), nullif(btrim(p.username), ''), '—')
   into engineer_name
   from public.profiles p
@@ -1248,6 +1244,24 @@ begin
   );
 end;
 $$;
+
+update public.stock_requests sr
+set export_order_snapshot = jsonb_set(
+  sr.export_order_snapshot,
+  '{supervisorName}',
+  to_jsonb(btrim(s.extra ->> 'اسم المشرف (صيانة)')),
+  false
+)
+from public.schools s, public.profiles requester
+where sr.school_id = s.id
+  and sr.requester_id = requester.id
+  and sr.status in ('approved', 'partially_issued', 'issued')
+  and sr.export_order_snapshot is not null
+  and nullif(btrim(s.extra ->> 'اسم المشرف (صيانة)'), '') is not null
+  and sr.export_order_snapshot ->> 'supervisorName'
+    = coalesce(nullif(btrim(requester.full_name), ''), nullif(btrim(requester.username), ''), '—')
+  and sr.export_order_snapshot ->> 'supervisorName'
+    is distinct from btrim(s.extra ->> 'اسم المشرف (صيانة)');
 
 create or replace function public.reject_request(p_request_id uuid, p_reason text)
 returns void

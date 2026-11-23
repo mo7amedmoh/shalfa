@@ -117,7 +117,19 @@ async function loadSuggestedItems(): Promise<RecentInventoryItem[]> {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'حدث خطأ غير متوقع.';
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const databaseError = error as { code?: unknown; message: unknown; details?: unknown; hint?: unknown };
+    const code = typeof databaseError.code === 'string' ? ` (${databaseError.code})` : '';
+    const details = typeof databaseError.details === 'string' && databaseError.details
+      ? ` — ${databaseError.details}`
+      : '';
+    const hint = typeof databaseError.hint === 'string' && databaseError.hint
+      ? ` (${databaseError.hint})`
+      : '';
+    return `${String(databaseError.message)}${code}${details}${hint}`;
+  }
+  return typeof error === 'string' ? error : 'حدث خطأ غير متوقع.';
 }
 
 function availableLabel(value: number | null, formatNumber: (value: number) => string): string {
@@ -402,7 +414,7 @@ export function InventoryRequestsPage() {
                   const quantity = Number(selected.quantity);
                   const quantityWarning = hasQuantityWarning(quantity, item.available);
                   return (
-                    <li key={item.item_id} className="grid gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-[minmax(0,1fr)_112px_auto] sm:items-center">
+                    <li key={item.item_id} className="grid gap-3 rounded-lg border border-slate-200 p-3 sm:grid-cols-[minmax(0,1fr)_220px] sm:items-center">
                       <div className="min-w-0">
                         <p className="font-semibold text-slate-800">{item.name}</p>
                         <p className="text-xs text-slate-500">{availableLabel(item.available, formatNumber)}</p>
@@ -410,27 +422,29 @@ export function InventoryRequestsPage() {
                           <p className="mt-1 text-xs font-semibold text-amber-800">الكمية المطلوبة أكبر من المتاح؛ سيُرسل الطلب مع هذا التنبيه.</p>
                         )}
                       </div>
-                      <label className="grid gap-1 text-xs font-semibold text-slate-600">
-                        الكمية
-                        <input
-                          type="number"
-                          min="0.001"
-                          step="any"
-                          inputMode="decimal"
-                          value={selected.quantity}
-                          onChange={(event) => updateQuantity(item.item_id, event.target.value)}
-                          aria-label={`كمية ${item.name}`}
-                          className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm"
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedItems((current) => current.filter((entry) => entry.itemId !== item.item_id))}
-                        aria-label={`حذف ${item.name} من الطلب`}
-                        className="inline-flex min-h-10 items-center justify-center gap-1 rounded-lg border border-rose-200 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-50"
-                      >
-                        <Trash2 size={15} aria-hidden="true" />حذف
-                      </button>
+                      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                        <label className="grid min-w-0 gap-1 text-xs font-semibold text-slate-600">
+                          الكمية
+                          <input
+                            type="number"
+                            min="0.001"
+                            step="any"
+                            inputMode="decimal"
+                            value={selected.quantity}
+                            onChange={(event) => updateQuantity(item.item_id, event.target.value)}
+                            aria-label={`كمية ${item.name}`}
+                            className="min-h-10 w-full min-w-0 rounded-lg border border-slate-300 px-2 text-sm"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedItems((current) => current.filter((entry) => entry.itemId !== item.item_id))}
+                          aria-label={`حذف ${item.name} من الطلب`}
+                          className="inline-flex min-h-10 items-center justify-center gap-1 rounded-lg border border-rose-200 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                        >
+                          <Trash2 size={15} aria-hidden="true" />حذف
+                        </button>
+                      </div>
                     </li>
                   );
                 })}

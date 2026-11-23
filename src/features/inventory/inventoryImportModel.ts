@@ -20,7 +20,6 @@ export type InventoryImportRow = {
   images: ImportedImage[];
   selectedImageId: string | null;
   ignored: boolean;
-  allowMissingCode: boolean;
   ignoreValueErrors: boolean;
   skipUnreadableImages: boolean;
   existingMatchId: string | null;
@@ -139,7 +138,7 @@ export function validateInventoryImportRows(
   return rows.map((row) => {
     const code = normalizeInventoryImportText(row.logixCode);
     const missingName = !row.name.trim();
-    const missingCode = !code && !row.allowMissingCode;
+    const missingCode = !code;
     const duplicateCode = Boolean(code && (codeCounts.get(code) ?? 0) > 1);
     const missingUnit = !row.unit.trim();
     const category = row.category.trim();
@@ -151,9 +150,9 @@ export function validateInventoryImportRows(
     const matches = getInventoryImportMatches(row, existingItems);
     const resolvedMatch = resolveInventoryImportMatch(row, matches);
     const ambiguousMatch = matches.length > 1 && !row.matchAsNew && !resolvedMatch;
-    const canImport = !row.ignored && !missingName && !missingCode
+    const canImport = !row.ignored && !missingName
       && !missingUnit && !missingCategory && !misspelledCategory && !invalidBalance
-      && !unresolvedValueErrors && !unreadableImages && !ambiguousMatch;
+      && !unresolvedValueErrors && !unreadableImages;
     return {
       missingName,
       missingCode,

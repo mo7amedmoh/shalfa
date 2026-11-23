@@ -115,6 +115,9 @@ const SettingsHubPage = lazy(() =>
 const StaffingRulesSettingsPage = lazy(() =>
   import('../features/admin/StaffingRulesSettingsPage').then((module) => ({ default: module.StaffingRulesSettingsPage })),
 );
+const DashboardCardsSettingsPage = lazy(() =>
+  import('../features/admin/DashboardCardsSettingsPage').then((module) => ({ default: module.DashboardCardsSettingsPage })),
+);
 const TicketAnalysisPage = lazy(() =>
   import('../features/tickets/TicketAnalysisPage').then((module) => ({ default: module.TicketAnalysisPage })),
 );
@@ -404,6 +407,7 @@ function AppShell({
               <Route path="/admin/school-cleanup" element={<RequirePermission permission="schools.cleanup"><SchoolCleanupPage /></RequirePermission>} />
               <Route path="/admin/plan-name-linking" element={<RequirePermission permission="settings.view"><Navigate to="/admin/settings/name-linking" replace /></RequirePermission>} />
               <Route path="/admin/settings" element={<RequirePermission permission="settings.view"><SettingsHubPage /></RequirePermission>} />
+              <Route path="/admin/settings/dashboard" element={<RequirePermission permission="settings.view"><DashboardCardsSettingsPage /></RequirePermission>} />
               <Route path="/admin/settings/sync" element={<RequirePermission permission="settings.view"><ModulePage section="admin" type="sync" /></RequirePermission>} />
               <Route path="/admin/settings/eligibility" element={<RequirePermission permission="plans.manage_types"><ModulePage section="admin" type="eligibility" /></RequirePermission>} />
               <Route path="/admin/settings/staffing-rules" element={<RequirePermission permission="staffing.rules.view"><StaffingRulesSettingsPage /></RequirePermission>} />

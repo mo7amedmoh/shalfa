@@ -1,11 +1,19 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { CalendarClock, ClipboardList, FileCheck2, UsersRound } from 'lucide-react';
 import type { PlanType } from '../../domain/types';
+import {
+  defaultDashboardCardSettings,
+  isDashboardCardVisible,
+  type DashboardCardId,
+} from '../../domain/dashboardCards';
 import { formatArabicCount, type ArabicCountForms } from '../../domain/arabicCount';
 import type { UserProfile } from '../../lib/auth';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
-import { usePermission } from '../../app/permissionContext';
+import { usePermission, usePermissions } from '../../app/permissionContext';
+import { permissionKeys } from '../../domain/permissions';
+import { loadDashboardCardSettings } from '../../lib/dashboardCards';
 import { InventoryShortageCard } from '../inventory/InventoryShortageCard';
 import { useDashboardData } from './useDashboardData';
 
@@ -87,12 +95,30 @@ function formatSyncDateTime(value: string): string {
 export function DashboardPage({ profile = null }: { profile?: UserProfile | null }) {
   const { formatDate, formatDateTime, formatNumber } = useDisplayFormat();
   const canViewAudit = usePermission('audit.view');
+  const permissions = usePermissions(permissionKeys);
   const [searchParams, setSearchParams] = useSearchParams();
   const [filtersOpen, setFiltersOpen] = useState(() => window.matchMedia('(min-width: 640px)').matches);
   const month = validMonth(searchParams.get('month'));
   const supervisorId = searchParams.get('supervisor') ?? '';
   const serviceType = validService(searchParams.get('service'));
   const dashboard = useDashboardData(profile, { month, supervisorId, serviceType });
+  const cardSettings = useQuery({
+    queryKey: ['dashboard-card-settings'],
+    queryFn: loadDashboardCardSettings,
+  });
+  const showCard = (id: DashboardCardId) => !cardSettings.isLoading && isDashboardCardVisible(
+    id,
+    cardSettings.data ?? defaultDashboardCardSettings,
+    dashboard.access,
+    permissions,
+  );
+  const showLateVisits = showCard('action-late-visits');
+  const showVisitsWithoutReport = showCard('action-visit-no-report');
+  const showCleanerShortage = showCard('action-cleaner-shortage');
+  const showDeliverablesDue = showCard('action-deliverables-due');
+  const showKpiPending = showCard('action-kpi-pending');
+  const showAnyAction = showLateVisits || showVisitsWithoutReport || showCleanerShortage
+    || showDeliverablesDue || showKpiPending;
   useEffect(() => {
     const mediaQuery = window.matchMedia('(min-width: 640px)');
     const syncFiltersToViewport = (event: MediaQueryListEvent) => setFiltersOpen(event.matches);
@@ -159,11 +185,11 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
   const reportUrl = `/plans/report?${reportFilters.toString()}`;
   const counts = dashboard.actionCounts;
   const mobileActionValues = [
-    counts?.lateVisits,
-    counts?.visitedWithoutReport,
-    dashboard.staffingConfigured ? counts?.cleanerShortage : undefined,
-    dashboard.access.deliverables ? counts?.deliverablesDueSoon : undefined,
-    dashboard.access.kpi ? counts?.previousKpiNotApproved : undefined,
+    showLateVisits ? counts?.lateVisits : undefined,
+    showVisitsWithoutReport ? counts?.visitedWithoutReport : undefined,
+    showCleanerShortage && dashboard.staffingConfigured ? counts?.cleanerShortage : undefined,
+    showDeliverablesDue ? counts?.deliverablesDueSoon : undefined,
+    showKpiPending ? counts?.previousKpiNotApproved : undefined,
   ].filter((value): value is number => value !== undefined);
   const allMobileActionsClear = mobileActionValues.length > 0
     && mobileActionValues.every((value) => value === 0);
@@ -228,7 +254,16 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
         </div>
       </section>
 
-      <InventoryShortageCard />
+      {cardSettings.isLoading && (
+        <p role="status" className="text-sm text-slate-500">جارٍ تحميل تخصيص بطاقات لوحة التحكم…</p>
+      )}
+      {cardSettings.error && (
+        <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">
+          تعذر تحميل تخصيص لوحة التحكم؛ تُعرض البطاقات الافتراضية مؤقتاً. {cardSettings.error.message}
+        </p>
+      )}
+
+      {showCard('inventory-shortage') && <InventoryShortageCard />}
 
       <section className="dashboard-filterbar card">
         <div className="dashboard-filter-disclosure">
@@ -291,7 +326,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
         </div>
       </section>
 
-      {dashboard.access.reportFollowerView && (
+      {showCard('report-follower') && (
         <ReportFollowerDashboard
           month={dashboard.month}
           serviceType={serviceType}
@@ -305,7 +340,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
         />
       )}
 
-      {dashboard.access.plans && !dashboard.access.reportFollowerView && (
+      {showCard('plan-summary') && (
       <section className={`dashboard-hero card dashboard-card-enter ${verdictTone}`} aria-label="ملخص أداء الخطة">
         {dashboard.plansLoading ? <CardSkeleton /> : dashboard.plansError
           ? <CardError title="تعذر تحميل ملخص الخطة" message={dashboard.plansError.message} />
@@ -386,7 +421,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
       </section>
       )}
 
-      {dashboard.access.actions && (
+      {showAnyAction && (
       <section className="dashboard-section" aria-labelledby="dashboard-actions-title">
         <div className="dashboard-section-head">
           <h2 id="dashboard-actions-title">متابعة اليوم</h2>
@@ -399,7 +434,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
           {allMobileActionsClear && (
             <p className="dashboard-mobile-clear" aria-live="polite">لا شيء يحتاج انتباهًا ✓</p>
           )}
-          <ActionTile
+          {showLateVisits && <ActionTile
             to={`${reportUrl}&action=late-visits`}
             title="زيارات فاتها موعدها"
             titleForms={overdueVisitCountForms}
@@ -410,8 +445,8 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
             icon={<CalendarClock size={18} />}
             tone="text-rose-700"
             tooltip="لم تُنجز الزيارة حتى تاريخها المخطط."
-          />
-          <ActionTile
+          />}
+          {showVisitsWithoutReport && <ActionTile
             to={`${reportUrl}&action=visit-no-report`}
             title="تمت بدون تقرير"
             titleForms={visitWithoutReportCountForms}
@@ -421,8 +456,8 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
             action="تحديث التقارير"
             icon={<FileCheck2 size={18} />}
             tone="text-amber-700"
-          />
-          <ActionTile
+          />}
+          {showCleanerShortage && <ActionTile
             to="/placement/cleaners?shortage=true"
             title="عجز عمالة نظافة"
             titleForms={cleanerShortageCountForms}
@@ -437,8 +472,8 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
             ?? (!dashboard.staffingConfigured
               ? 'إعدادات الاحتياج غير متاحة'
               : 'إجمالي التغطية الحالية لجميع الخدمات')}
-          />
-          {dashboard.access.deliverables && (
+          />}
+          {showDeliverablesDue && (
             <ActionTile
               to="/kpi/deliverables?filter=due-soon"
               title="مخرجات تستحق خلال 14 يومًا"
@@ -452,7 +487,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
               detail={dashboard.deliverablesError?.message}
             />
           )}
-          {dashboard.access.kpi && (
+          {showKpiPending && (
             <ActionTile
               to={`/kpi/scorecards?month=${previousMonth(dashboard.month)}`}
               title={`بطاقة ${new Intl.DateTimeFormat('ar-SA', { month: 'long' }).format(new Date(`${previousMonth(dashboard.month)}-01T00:00:00Z`))} غير معتمدة`}
@@ -470,7 +505,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
       </section>
       )}
 
-      {dashboard.access.plans && !dashboard.access.reportFollowerView && (
+      {showCard('service-progress') && (
       <section className="dashboard-section" aria-labelledby="dashboard-services-title">
         <div className="dashboard-section-head">
           <h2 id="dashboard-services-title">أداء الخدمات</h2>
@@ -569,8 +604,9 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
       </section>
       )}
 
-      {dashboard.access.workforce && !dashboard.access.reportFollowerView && (
+      {(showCard('supervisor-performance') || showCard('workforce-coverage')) && (
       <section className="dashboard-operations dashboard-stagger items-stretch" aria-label="الأداء التشغيلي">
+        {showCard('supervisor-performance') && (
         <article className="card dashboard-card-enter dashboard-panel dashboard-supervisor-panel">
           <div className="dashboard-panel-head">
             <div>
@@ -596,7 +632,9 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
             عرض الجميع ←
           </Link>
         </article>
+        )}
 
+        {showCard('workforce-coverage') && (
         <article className="card dashboard-card-enter dashboard-panel dashboard-workforce-panel">
           <div className="dashboard-panel-head">
             <div>
@@ -657,10 +695,11 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
             تفصيل الاحتياج حسب حجم المدرسة ←
           </Link>
         </article>
+        )}
       </section>
       )}
 
-      {dashboard.access.rewardsShortcut && (
+      {showCard('rewards-shortcut') && (
         <Link to={`/rewards?month=${encodeURIComponent(dashboard.month)}`} className="card dashboard-rewards-link">
           <span>
             <b>مكافآت الفنيين</b>
@@ -670,9 +709,9 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
         </Link>
       )}
 
-      {(dashboard.access.workforce || dashboard.access.deliverables || dashboard.access.kpi) && (
+      {(showCard('schools-support') || showCard('contracts-summary')) && (
         <section className="dashboard-lower items-stretch">
-          {dashboard.access.workforce && !dashboard.access.reportFollowerView && (
+          {showCard('schools-support') && (
             <article className="card dashboard-panel dashboard-schools-panel">
               <div className="dashboard-panel-head">
                 <div>
@@ -706,7 +745,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
             </article>
           )}
 
-          {(dashboard.access.deliverables || dashboard.access.kpi) && (
+          {showCard('contracts-summary') && (
             <article className="card dashboard-panel dashboard-contract-panel">
               <div className="dashboard-panel-head">
                 <div>
@@ -801,7 +840,7 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
         </section>
       )}
 
-      {dashboard.access.activity && (
+      {showCard('recent-activity') && (
         <section className="card dashboard-activity">
           <div className="dashboard-panel-head">
             <div>

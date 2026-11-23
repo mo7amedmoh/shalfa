@@ -151,11 +151,13 @@ export function SettingsHubPage() {
     { title: 'افتراضات التقرير', description: `الأقسام الافتراضية: ${defaultReportLayout.length} · يمكن تخصيصها وحفظها لكل مستخدم`, href: '/plans/report', action: 'فتح التقرير', permission: 'plans.view' },
     { title: 'المستخدمون والصلاحيات', description: `الحسابات المسجلة: ${status.data?.users ?? '—'}`, href: '/admin/users', action: 'إدارة المستخدمين', permission: 'users.manage' },
     { title: 'الأدوار والصلاحيات', description: 'إدارة مصفوفة الصلاحيات والأدوار المخصصة', href: '/admin/settings/roles', action: 'إدارة الأدوار', permission: 'users.manage' },
+    { title: 'تخصيص لوحة التحكم', description: 'اختيار البطاقات التي تظهر للمستخدمين حسب صلاحياتهم', href: '/admin/settings/dashboard', action: 'تخصيص البطاقات', permission: 'settings.view' },
   ];
   const sections = [
     { title: 'الربط ومصادر البيانات', cards: [cards[0], cards[4], cards[5]] },
     { title: 'الخطط والعمالة', cards: [cards[1], cards[3], cards[2], cards[7]] },
     { title: 'المستخدمون والصلاحيات', cards: [cards[8], cards[9]] },
+    { title: 'تخصيص العرض', cards: [cards[10]] },
     { title: 'منطقة الإجراءات الخطرة', cards: [cards[6]], warning: true },
   ];
   return <div className="grid gap-5">

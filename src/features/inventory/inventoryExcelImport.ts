@@ -296,6 +296,8 @@ export async function parseInventoryWorkbook(file: File): Promise<InventoryImpor
       allowMissingCode: false,
       ignoreValueErrors: false,
       skipUnreadableImages: false,
+      existingMatchId: null,
+      matchAsNew: false,
     });
   }
   if (!rows.length) throw new Error('لم يُعثر على صفوف أصناف للاستيراد.');

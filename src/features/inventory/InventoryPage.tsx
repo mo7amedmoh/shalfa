@@ -9,8 +9,12 @@ import { supabase } from '../../lib/supabase';
 import { filterInventoryItems, getInventoryShortageCounts, type InventoryStatus } from './inventoryModel';
 import {
   parseOpeningBalance,
+  getInventoryImportMatches,
+  normalizeInventoryImportText,
+  resolveInventoryImportMatch,
   summarizeInventoryImport,
   validateInventoryImportRows,
+  type ExistingInventoryItem,
   type ImportSummary,
   type InventoryImportRow,
 } from './inventoryImportModel';
@@ -177,6 +181,21 @@ export function InventoryPage() {
   });
   const categories = inventory.data?.categories ?? [];
   const items = inventory.data?.items ?? EMPTY_INVENTORY_ITEMS;
+  const importMatchItems = useMemo<ExistingInventoryItem[]>(() => items.map((item) => ({
+    id: item.item_id,
+    logixCode: item.logix_code,
+    name: item.name,
+    categoryName: item.category_name,
+    photoPath: item.photo_path,
+  })), [items]);
+  const duplicateLogixCodes = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of items) {
+      const code = item.logix_code ? normalizeInventoryImportText(item.logix_code) : '';
+      if (code) counts.set(code, (counts.get(code) ?? 0) + 1);
+    }
+    return new Set([...counts].filter(([, count]) => count > 1).map(([code]) => code));
+  }, [items]);
   const shortages = useMemo(() => getInventoryShortageCounts(items), [items]);
   const visibleItems = useMemo(() => filterInventoryItems(items, {
     search,
@@ -299,32 +318,23 @@ export function InventoryPage() {
 
   async function saveInventoryImport(rows: InventoryImportRow[]): Promise<ImportSummary> {
     if (!supabase || !canManageItems) throw new Error('لا تملك صلاحية استيراد أصناف المخزون.');
-    const validation = validateInventoryImportRows(rows);
+    const validation = validateInventoryImportRows(rows, importMatchItems);
     if (validation.some((entry, index) => !entry.canImport && !rows[index].ignored)) {
       throw new Error('أصلح مشكلات الصفوف أو تجاهلها قبل الحفظ.');
     }
 
     const importRows = rows.filter((row) => !row.ignored);
-    const codes = [...new Set(importRows.map((row) => row.logixCode.trim()).filter(Boolean))];
-    const existingItems = new Map<string, { id: string; photo_path: string | null }>();
-    for (let start = 0; start < codes.length; start += 500) {
-      const { data, error } = await supabase.from('inventory_items')
-        .select('id,logix_code,photo_path')
-        .in('logix_code', codes.slice(start, start + 500));
-      if (error) throw error;
-      for (const item of data) {
-        if (item.logix_code) existingItems.set(item.logix_code, { id: item.id, photo_path: item.photo_path });
-      }
-    }
-
+    const inventoryItemById = new Map(items.map((item) => [item.item_id, item]));
     const uploadedPaths: string[] = [];
     const rowsForRpc: Array<Record<string, string | number | null>> = [];
     const replacedPhotos: string[] = [];
     try {
       for (const row of importRows) {
         const code = row.logixCode.trim();
-        const existing = code ? existingItems.get(code) : undefined;
+        const matches = getInventoryImportMatches(row, importMatchItems);
+        const existing = resolveInventoryImportMatch(row, matches);
         const itemId = existing?.id ?? crypto.randomUUID();
+        const existingItem = existing ? inventoryItemById.get(existing.id) : undefined;
         const selectedImage = row.images.find((image) => image.id === row.selectedImageId);
         let photoPath: string | null = null;
         if (selectedImage?.blob) {
@@ -335,10 +345,11 @@ export function InventoryPage() {
           });
           if (error) throw error;
           uploadedPaths.push(photoPath);
-          if (existing?.photo_path?.startsWith('items/') && existing.photo_path !== photoPath) replacedPhotos.push(existing.photo_path);
+          if (existingItem?.photo_path?.startsWith('items/') && existingItem.photo_path !== photoPath) replacedPhotos.push(existingItem.photo_path);
         }
         rowsForRpc.push({
           item_id: itemId,
+          existing_item_id: existing?.id ?? null,
           logix_code: code || null,
           name: row.name.trim(),
           unit: row.unit.trim(),
@@ -477,7 +488,10 @@ export function InventoryPage() {
                       {!item.is_active && <span className="ms-2 text-xs font-normal text-slate-500">غير نشط</span>}
                     </th>
                     <td className="px-3 py-2">{item.logix_code
-                      ? <bdi dir="ltr" className="font-mono text-slate-700">{item.logix_code}</bdi>
+                      ? <span className="inline-flex flex-wrap items-center gap-1">
+                        <bdi dir="ltr" className="font-mono text-slate-700">{item.logix_code}</bdi>
+                        {duplicateLogixCodes.has(normalizeInventoryImportText(item.logix_code)) && <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-900">كود مكرر</span>}
+                      </span>
                       : <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">بلا كود</span>}</td>
                     <td className="px-3 py-2">{item.unit}</td>
                     <td className="px-3 py-2">{item.category_name}</td>
@@ -512,7 +526,10 @@ export function InventoryPage() {
                       <StatusBadge status={item.status} />
                     </div>
                     <p className="mt-1 text-xs text-slate-500">{item.category_name} · {item.unit}</p>
-                    <p className="mt-1 text-xs text-slate-600">{item.logix_code ? <bdi dir="ltr" className="font-mono">{item.logix_code}</bdi> : <span className="font-semibold">بلا كود</span>}</p>
+                    <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                      {item.logix_code ? <bdi dir="ltr" className="font-mono">{item.logix_code}</bdi> : <span className="rounded-full bg-slate-100 px-2 py-1 font-semibold">بلا كود</span>}
+                      {item.logix_code && duplicateLogixCodes.has(normalizeInventoryImportText(item.logix_code)) && <span className="rounded-full bg-amber-100 px-2 py-1 font-bold text-amber-900">كود مكرر</span>}
+                    </p>
                   </div>
                 </div>
                 <dl className="grid grid-cols-2 gap-x-3 gap-y-2 rounded-lg bg-slate-50 p-3 text-sm">
@@ -571,6 +588,7 @@ export function InventoryPage() {
       {inventoryImportOpen && (
         <InventoryImportDialog
           busy={savingImport}
+          existingItems={importMatchItems}
           onClose={() => setInventoryImportOpen(false)}
           onImport={async (rows) => {
             setSavingImport(true);
@@ -646,9 +664,10 @@ function Dialog({ title, children, onClose, wide = false }: { title: string; chi
 }
 
 function InventoryImportDialog({
-  busy, onClose, onImport,
+  busy, existingItems, onClose, onImport,
 }: {
   busy: boolean;
+  existingItems: ExistingInventoryItem[];
   onClose: () => void;
   onImport: (rows: InventoryImportRow[]) => Promise<ImportSummary>;
 }) {
@@ -658,7 +677,7 @@ function InventoryImportDialog({
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const previewUrls = useRef<string[]>([]);
   const loadToken = useRef(0);
-  const validation = useMemo(() => validateInventoryImportRows(rows), [rows]);
+  const validation = useMemo(() => validateInventoryImportRows(rows, existingItems), [rows, existingItems]);
   const readyCount = validation.filter((entry) => entry.canImport).length;
   const ignoredCount = rows.filter((row) => row.ignored).length;
 
@@ -759,6 +778,7 @@ function InventoryImportDialog({
                 issues.invalidBalance && 'الرصيد يحتاج إلى تصحيح',
                 issues.unresolvedValueErrors && `${row.valueErrors.length} خلية خطأ`,
                 issues.unreadableImages && 'تعذرت قراءة صورة مضمّنة',
+                issues.ambiguousMatch && 'تطابق متعدد يحتاج إلى اختيار',
               ].filter(Boolean);
               return <article key={row.rowNumber} className={`grid gap-3 rounded-xl border p-3 ${row.ignored ? 'border-slate-200 bg-slate-50 opacity-70' : messages.length ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200'}`}>
                 <header className="flex flex-wrap items-start justify-between gap-2">
@@ -796,6 +816,31 @@ function InventoryImportDialog({
                     <input type="checkbox" checked={row.allowMissingCode} onChange={(event) => updateRow(index, { allowMissingCode: event.target.checked })} disabled={busy} className="mt-0.5 h-4 w-4 rounded border-slate-300" />
                     أوافق على استيراد هذا الصنف بلا كود (لن يمكن تمييزه عند إعادة الاستيراد).
                   </label>}
+                  {(() => {
+                    const matches = getInventoryImportMatches(row, existingItems);
+                    if (matches.length < 2) return null;
+                    return <div className="grid gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                      <p className="text-xs font-semibold text-amber-950">
+                        عُثر على {matches.length} أصناف مطابقة بالاسم والكود؛ اختر سجلًا للتحديث أو أضفه كصنف جديد.
+                      </p>
+                      <select
+                        value={row.matchAsNew ? '__new__' : row.existingMatchId ?? ''}
+                        onChange={(event) => updateRow(index, {
+                          existingMatchId: event.target.value && event.target.value !== '__new__' ? event.target.value : null,
+                          matchAsNew: event.target.value === '__new__',
+                        })}
+                        disabled={busy}
+                        className="min-h-10 rounded-lg border border-amber-300 bg-white px-3 text-sm"
+                        aria-label={`اختيار الصنف المطابق لصف Excel ${row.rowNumber}`}
+                      >
+                        <option value="">اختر الصنف المطابق</option>
+                        {matches.map((item) => <option key={item.id} value={item.id}>
+                          {item.name} · {item.categoryName} · {item.logixCode || 'بلا كود'} · {item.id.slice(0, 8)}
+                        </option>)}
+                        <option value="__new__">إضافة كصنف جديد</option>
+                      </select>
+                    </div>;
+                  })()}
                   {issues.misspelledCategory && <button type="button" onClick={() => updateRow(index, { category: 'سباكة' })} disabled={busy} className="w-fit rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-bold text-amber-900">تصحيح «سبكة» إلى «سباكة»</button>}
                   {row.valueErrors.length > 0 && <div className="grid gap-1 text-xs text-rose-800">
                     <b>خلايا Excel التي تحتوي أخطاء:</b>

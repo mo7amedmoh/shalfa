@@ -4,7 +4,11 @@ import {
   parseOpeningBalance,
   readImportedBalance,
   summarizeInventoryImport,
+  getInventoryImportMatches,
+  normalizeInventoryImportText,
+  resolveInventoryImportMatch,
   validateInventoryImportRows,
+  type ExistingInventoryItem,
   type InventoryImportRow,
 } from './inventoryImportModel';
 
@@ -25,6 +29,8 @@ function row(overrides: Partial<InventoryImportRow> = {}): InventoryImportRow {
     allowMissingCode: false,
     ignoreValueErrors: false,
     skipUnreadableImages: false,
+    existingMatchId: null,
+    matchAsNew: false,
     ...overrides,
   };
 }
@@ -46,7 +52,7 @@ describe('inventory Excel import model', () => {
     expect(getSpreadsheetRowFromImageAnchor(2.6)).toBe(3);
   });
 
-  it('requires explicit resolution for missing codes, duplicate codes, missing fields, misspellings, and invalid balances', () => {
+  it('requires explicit resolution for missing codes, missing fields, misspellings, and invalid balances', () => {
     const rows = [
       row({ logixCode: '', allowMissingCode: false }),
       row({ rowNumber: 4, logixCode: '1001' }),
@@ -63,7 +69,37 @@ describe('inventory Excel import model', () => {
     expect(validation[2].missingUnit).toBe(true);
     expect(validation[3].misspelledCategory).toBe(true);
     expect(validation[4].invalidBalance).toBe(true);
-    expect(validation.every((entry) => !entry.canImport)).toBe(true);
+    expect(validation[1].canImport).toBe(true);
+    expect(validation.every((entry, index) => index === 1 || !entry.canImport)).toBe(true);
+  });
+
+  it('matches coded rows by normalized code and name and flags multiple matches for review', () => {
+    const matches: ExistingInventoryItem[] = [
+      { id: 'one', logixCode: ' A-1 ', name: 'إضاءة', categoryName: 'كهرباء', photoPath: null },
+      { id: 'two', logixCode: 'a-1', name: 'اضاءة', categoryName: 'إنارة', photoPath: null },
+      { id: 'other', logixCode: 'A-1', name: 'مصباح', categoryName: 'كهرباء', photoPath: null },
+    ];
+    const imported = row({ logixCode: 'a-1', name: 'اضاءة' });
+
+    expect(normalizeInventoryImportText(' إِضَاءَة ')).toBe('اضاءة');
+    expect(getInventoryImportMatches(imported, matches).map((item) => item.id)).toEqual(['one', 'two']);
+    expect(validateInventoryImportRows([imported], matches)[0].ambiguousMatch).toBe(true);
+    expect(validateInventoryImportRows([row({ ...imported, existingMatchId: 'two' })], matches)[0].canImport).toBe(true);
+    expect(resolveInventoryImportMatch({ existingMatchId: null, matchAsNew: true }, matches)).toBeNull();
+  });
+
+  it('matches code-less rows by normalized name and category, and allows explicit creation for ambiguous matches', () => {
+    const matches: ExistingInventoryItem[] = [
+      { id: 'one', logixCode: null, name: 'مِفتاح', categoryName: 'كهرباء', photoPath: null },
+      { id: 'two', logixCode: '', name: 'مفتاح', categoryName: 'كهرباء', photoPath: null },
+      { id: 'coded', logixCode: '123', name: 'مفتاح', categoryName: 'كهرباء', photoPath: null },
+      { id: 'other-category', logixCode: null, name: 'مفتاح', categoryName: 'سباكة', photoPath: null },
+    ];
+    const imported = row({ logixCode: '', allowMissingCode: true, name: 'مفتاح', category: 'كهرباء' });
+
+    expect(getInventoryImportMatches(imported, matches).map((item) => item.id)).toEqual(['one', 'two']);
+    expect(validateInventoryImportRows([row({ ...imported, matchAsNew: true })], matches)[0].canImport).toBe(true);
+    expect(resolveInventoryImportMatch({ existingMatchId: 'one', matchAsNew: false }, matches)?.id).toBe('one');
   });
 
   it('permits a code-less item only after acknowledgement and excludes ignored rows from duplicate checks', () => {

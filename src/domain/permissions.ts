@@ -83,3 +83,21 @@ export const permissionKeys = Object.keys(permissions) as PermissionKey[];
 export function isPermissionKey(value: string): value is PermissionKey {
   return Object.hasOwn(permissions, value);
 }
+
+export function parsePermissionKeys(value: unknown): PermissionKey[] {
+  if (!Array.isArray(value)) {
+    const received = value === null ? 'null' : typeof value;
+    throw new Error(`استجابة الصلاحيات غير صالحة: المتوقع مصفوفة نصوص، والمستلم ${received}.`);
+  }
+
+  const nonStringIndex = value.findIndex((key) => typeof key !== 'string');
+  if (nonStringIndex !== -1) {
+    throw new Error(`استجابة الصلاحيات غير صالحة: العنصر عند الفهرس ${nonStringIndex} ليس نصًا.`);
+  }
+
+  return value.filter((key): key is PermissionKey => {
+    if (isPermissionKey(key)) return true;
+    console.warn(`تم تجاهل مفتاح صلاحية غير موجود في الكتالوج المحلي: ${key}`);
+    return false;
+  });
+}

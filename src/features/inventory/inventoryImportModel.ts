@@ -23,6 +23,16 @@ export type InventoryImportRow = {
   allowMissingCode: boolean;
   ignoreValueErrors: boolean;
   skipUnreadableImages: boolean;
+  existingMatchId: string | null;
+  matchAsNew: boolean;
+};
+
+export type ExistingInventoryItem = {
+  id: string;
+  logixCode: string | null;
+  name: string;
+  categoryName: string;
+  photoPath: string | null;
 };
 
 export type InventoryImportValidation = {
@@ -35,6 +45,7 @@ export type InventoryImportValidation = {
   invalidBalance: boolean;
   unresolvedValueErrors: boolean;
   unreadableImages: boolean;
+  ambiguousMatch: boolean;
   canImport: boolean;
 };
 
@@ -77,16 +88,56 @@ export function parseOpeningBalance(row: Pick<InventoryImportRow, 'balanceText' 
   return Number.isFinite(quantity) && quantity >= 0 ? quantity : undefined;
 }
 
-export function validateInventoryImportRows(rows: readonly InventoryImportRow[]): InventoryImportValidation[] {
+export function normalizeInventoryImportText(value: string): string {
+  return value
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+    .replace(/[أإآٱ]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function getInventoryImportMatches(
+  row: Pick<InventoryImportRow, 'logixCode' | 'name' | 'category'>,
+  existingItems: readonly ExistingInventoryItem[],
+): ExistingInventoryItem[] {
+  const name = normalizeInventoryImportText(row.name);
+  const code = normalizeInventoryImportText(row.logixCode);
+  const category = normalizeInventoryImportText(row.category);
+  if (!name) return [];
+
+  return existingItems.filter((item) => {
+    if (normalizeInventoryImportText(item.name) !== name) return false;
+    if (code) return normalizeInventoryImportText(item.logixCode ?? '') === code;
+    return !item.logixCode?.trim()
+      && normalizeInventoryImportText(item.categoryName) === category;
+  });
+}
+
+export function resolveInventoryImportMatch(
+  row: Pick<InventoryImportRow, 'existingMatchId' | 'matchAsNew'>,
+  matches: readonly ExistingInventoryItem[],
+): ExistingInventoryItem | null | undefined {
+  if (matches.length === 0 || row.matchAsNew) return null;
+  if (matches.length === 1) return matches[0];
+  return matches.find((item) => item.id === row.existingMatchId);
+}
+
+export function validateInventoryImportRows(
+  rows: readonly InventoryImportRow[],
+  existingItems: readonly ExistingInventoryItem[] = [],
+): InventoryImportValidation[] {
   const codeCounts = new Map<string, number>();
   for (const row of rows) {
     if (row.ignored) continue;
-    const code = row.logixCode.trim();
+    const code = normalizeInventoryImportText(row.logixCode);
     if (code) codeCounts.set(code, (codeCounts.get(code) ?? 0) + 1);
   }
 
   return rows.map((row) => {
-    const code = row.logixCode.trim();
+    const code = normalizeInventoryImportText(row.logixCode);
     const missingName = !row.name.trim();
     const missingCode = !code && !row.allowMissingCode;
     const duplicateCode = Boolean(code && (codeCounts.get(code) ?? 0) > 1);
@@ -97,9 +148,12 @@ export function validateInventoryImportRows(rows: readonly InventoryImportRow[])
     const invalidBalance = parseOpeningBalance(row) === undefined;
     const unresolvedValueErrors = row.valueErrors.length > 0 && !row.ignoreValueErrors;
     const unreadableImages = row.images.some((image) => image.error) && !row.skipUnreadableImages;
-    const canImport = !row.ignored && !missingName && !missingCode && !duplicateCode
+    const matches = getInventoryImportMatches(row, existingItems);
+    const resolvedMatch = resolveInventoryImportMatch(row, matches);
+    const ambiguousMatch = matches.length > 1 && !row.matchAsNew && !resolvedMatch;
+    const canImport = !row.ignored && !missingName && !missingCode
       && !missingUnit && !missingCategory && !misspelledCategory && !invalidBalance
-      && !unresolvedValueErrors && !unreadableImages;
+      && !unresolvedValueErrors && !unreadableImages && !ambiguousMatch;
     return {
       missingName,
       missingCode,
@@ -110,6 +164,7 @@ export function validateInventoryImportRows(rows: readonly InventoryImportRow[])
       invalidBalance,
       unresolvedValueErrors,
       unreadableImages,
+      ambiguousMatch,
       canImport,
     };
   });

@@ -1,16 +1,16 @@
 import { useMemo, type ReactNode } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
-import type { PermissionKey } from '../domain/permissions';
+import { parsePermissionKeys, type PermissionKey } from '../domain/permissions';
 import { PermissionContext, usePermission } from './permissionContext';
 
 export function PermissionProvider({
   permissions,
   children,
 }: {
-  permissions: readonly PermissionKey[];
+  permissions: readonly string[];
   children: ReactNode;
 }) {
-  const granted = useMemo(() => new Set(permissions), [permissions]);
+  const granted = useMemo(() => new Set(parsePermissionKeys(permissions)), [permissions]);
   return <PermissionContext.Provider value={granted}>{children}</PermissionContext.Provider>;
 }
 

@@ -1,6 +1,15 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
-import { permissionKeys, type PermissionKey } from './permissions';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it, vi } from 'vitest';
+import { PermissionProvider } from '../app/PermissionProvider';
+import { usePermission } from '../app/permissionContext';
+import { filterNavigation, navigation } from '../app/navigation';
+import { parsePermissionKeys, permissionKeys, type PermissionKey } from './permissions';
+
+function KnownPermissionProbe() {
+  return createElement('output', null, String(usePermission('schools.view')));
+}
 
 type Role = 'admin' | 'project_manager' | 'area_engineer' | 'report_follower' | 'supervisor' | 'viewer';
 
@@ -35,7 +44,8 @@ const rolePermissions: Record<Role, ReadonlySet<PermissionKey>> = {
 type Surface = {
   id: string;
   legacyRoles: Role[];
-  requires: PermissionKey[];
+  requires?: PermissionKey[];
+  anyOf?: PermissionKey[];
   excludes?: PermissionKey[];
 };
 
@@ -53,8 +63,16 @@ const surfaces: Surface[] = [
   { id: 'menu/deliverables', legacyRoles: roles, requires: ['deliverables.view'] },
   { id: 'menu/settings', legacyRoles: ['admin', 'project_manager'], requires: ['settings.view'] },
   { id: 'menu/audit', legacyRoles: ['admin'], requires: ['audit.view'] },
-  { id: 'menu/inventory', legacyRoles: ['admin', 'project_manager', 'area_engineer', 'supervisor'], requires: ['inventory.view'] },
+  { id: 'menu/inventory-items', legacyRoles: ['admin', 'project_manager', 'area_engineer', 'supervisor'], requires: ['inventory.view'] },
   { id: 'menu/inventory-requests', legacyRoles: ['admin', 'supervisor'], requires: ['inventory.request'] },
+  { id: 'menu/inventory-review', legacyRoles: ['admin', 'area_engineer'], requires: ['inventory.approve'] },
+  { id: 'menu/inventory-stamp', legacyRoles: ['admin', 'area_engineer'], requires: ['inventory.approve'] },
+  { id: 'menu/inventory-issue', legacyRoles: ['admin'], requires: ['inventory.issue'] },
+  {
+    id: 'menu/inventory-group',
+    legacyRoles: ['admin', 'project_manager', 'area_engineer', 'supervisor'],
+    anyOf: ['inventory.view', 'inventory.request', 'inventory.approve', 'inventory.issue'],
+  },
   { id: 'menu/report-tools', legacyRoles: ['admin', 'project_manager', 'area_engineer', 'report_follower'], requires: ['reports.tools'] },
   { id: 'menu/ticket-analysis', legacyRoles: ['admin', 'project_manager'], requires: ['tools.ticket_analysis'] },
   { id: 'menu/custom-plan-types', legacyRoles: ['admin', 'project_manager'], requires: ['plans.manage_types'] },
@@ -130,6 +148,50 @@ const surfaces: Surface[] = [
 ];
 
 describe('permission catalog and legacy role visibility', () => {
+  it('ignores unknown database keys while retaining known permissions', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(parsePermissionKeys(['inventory.view', 'future.permission', 'schools.view'])).toEqual([
+        'inventory.view',
+        'schools.view',
+      ]);
+      expect(warn).toHaveBeenCalledWith(
+        'تم تجاهل مفتاح صلاحية غير موجود في الكتالوج المحلي: future.permission',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('keeps known permissions available through the provider with unknown runtime keys', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const markup = renderToStaticMarkup(createElement(
+        PermissionProvider,
+        {
+          permissions: ['schools.view', 'future.permission'],
+          children: createElement(KnownPermissionProbe),
+        },
+      ));
+
+      expect(markup).toContain('true');
+      expect(warn).toHaveBeenCalledWith(
+        'تم تجاهل مفتاح صلاحية غير موجود في الكتالوج المحلي: future.permission',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('explains invalid permission response shapes', () => {
+    expect(() => parsePermissionKeys({ permission: 'schools.view' })).toThrow(
+      'استجابة الصلاحيات غير صالحة: المتوقع مصفوفة نصوص، والمستلم object.',
+    );
+    expect(() => parsePermissionKeys(['schools.view', 42])).toThrow(
+      'استجابة الصلاحيات غير صالحة: العنصر عند الفهرس 1 ليس نصًا.',
+    );
+  });
+
   it('uses exactly the permission keys defined by the RBAC migrations', () => {
     const migrations = [
       '202611220001_rbac.sql',
@@ -145,11 +207,37 @@ describe('permission catalog and legacy role visibility', () => {
     expect([...permissionKeys].sort()).toEqual(migrationKeys);
   });
 
+  it('filters the inventory sidebar group and each link by permission for every role', () => {
+    const inventoryLinks: Array<{ label: string; path: string; permission: PermissionKey }> = [
+      { label: 'الأصناف والأرصدة', path: '/inventory', permission: 'inventory.view' },
+      { label: 'طلبات قطع الغيار', path: '/inventory/requests', permission: 'inventory.request' },
+      { label: 'طلبات للمراجعة', path: '/inventory/review', permission: 'inventory.approve' },
+      { label: 'صرف الطلبات', path: '/inventory/issue', permission: 'inventory.issue' },
+      { label: 'ختمي وتوقيعي', path: '/inventory/stamp', permission: 'inventory.approve' },
+    ];
+    expect(navigation.find((item) => item.label === 'المخزون')?.children).toEqual(inventoryLinks);
+
+    for (const role of roles) {
+      const grants = rolePermissions[role];
+      const filtered = filterNavigation(navigation, grants);
+      const inventoryGroup = filtered.find((item) => item.label === 'المخزون');
+      const expectedLinks = inventoryLinks.filter((link) => grants.has(link.permission));
+      expect(inventoryGroup?.children ?? [], `${role} inventory links`).toEqual(expectedLinks);
+      expect(Boolean(inventoryGroup), `${role} inventory group`).toBe(expectedLinks.length > 0);
+
+      const administrativeGroup = filtered.find((item) => item.label === 'أعمال إدارية');
+      expect(administrativeGroup?.children?.some((link) => link.path.startsWith('/inventory/'))).toBe(false);
+    }
+  });
+
   it('keeps the same menus, routes, settings cards, dashboard cards and action buttons for every role', () => {
     for (const surface of surfaces) {
       const actualRoles = roles.filter((role) => {
         const grants = rolePermissions[role];
-        return surface.requires.every((permission) => grants.has(permission))
+        const required = surface.anyOf
+          ? surface.anyOf.some((permission) => grants.has(permission))
+          : (surface.requires ?? []).every((permission) => grants.has(permission));
+        return required
           && (surface.excludes ?? []).every((permission) => !grants.has(permission));
       });
       expect(actualRoles, surface.id).toEqual(surface.legacyRoles);

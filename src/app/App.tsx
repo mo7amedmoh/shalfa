@@ -1,8 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
-  BadgeCheck, Building2, CalendarDays, ChevronDown, ClipboardCheck, FileText, Gauge,
-  LayoutDashboard, LogOut, Menu, Settings2,
-  UserRound, Users, X,
+  ChevronDown, FileText, LogOut, Menu, UserRound, X,
 } from 'lucide-react';
 import { NavLink, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
@@ -15,9 +13,10 @@ import { PreferencesProvider } from './PreferencesProvider';
 import { Can, PermissionProvider, RequirePermission } from './PermissionProvider';
 import { usePermission, usePermissions } from './permissionContext';
 import type { PlanType } from '../domain/types';
-import { buildCustomMenu, customPlanTypeSchema, type CustomPlanType } from '../domain/customPlans';
+import { customPlanTypeSchema, type CustomPlanType } from '../domain/customPlans';
 import { canUseReportTools, reportTools } from '../domain/reportTools';
 import { permissionKeys, type PermissionKey } from '../domain/permissions';
+import { adminNavigation, filterNavigation, navigation } from './navigation';
 import { DashboardPage } from '../features/dashboard/DashboardPage';
 
 const SchoolsPage = lazy(() =>
@@ -133,78 +132,6 @@ function MonthlyPlanRoute({ profile }: { profile: UserProfile | null }) {
   return planType ? <MonthlyPlanPage planType={planType} profile={profile} /> : <Navigate to="/" replace />;
 }
 
-type NavigationLink = { label: string; path: string; permission: PermissionKey };
-type NavigationEntry = {
-  label: string;
-  icon: typeof LayoutDashboard;
-  permission?: PermissionKey;
-  path?: string;
-  children?: NavigationLink[];
-};
-
-const navigation: NavigationEntry[] = [
-  {
-    label: 'لوحة التحكم',
-    path: '/',
-    icon: LayoutDashboard,
-    permission: 'dashboard.view',
-  },
-  {
-    label: 'الخطط الشهرية',
-    icon: CalendarDays,
-    children: [
-      { label: 'خطة الصيانة', path: '/plans/maintenance', permission: 'plans.view' },
-      { label: 'خطة النظافة', path: '/plans/cleaning', permission: 'plans.view' },
-      { label: 'خطة الأمن والسلامة', path: '/plans/security_safety', permission: 'plans.view' },
-      { label: 'خطة المصاعد', path: '/plans/elevators', permission: 'plans.view' },
-      { label: 'التقرير العام', path: '/plans/report', permission: 'plans.view' },
-    ],
-  },
-  {
-    label: 'الخطط العامة',
-    icon: ClipboardCheck,
-    children: [
-      { label: 'البستنة', path: '/general-plans/gardening', permission: 'plans.view' },
-      { label: 'التنسيق', path: '/general-plans/landscaping', permission: 'plans.view' },
-      { label: 'نزح مخلفات الصرف الصحي', path: '/general-plans/sewage_waste', permission: 'plans.view' },
-      { label: 'توريد المياه', path: '/general-plans/water_supply', permission: 'plans.view' },
-      { label: 'غسيل الخزانات', path: '/general-plans/tank_washing', permission: 'plans.view' },
-      { label: 'مكافحة الآفات ورش المبيدات', path: '/general-plans/pest_control', permission: 'plans.view' },
-      { label: 'خطط الاستعداد السنوية', path: '/general-plans/annual_readiness', permission: 'plans.view' },
-    ],
-  },
-  { label: 'المباني المدرسية', path: '/schools', icon: Building2, permission: 'schools.view' },
-  { label: 'القوى العاملة', path: '/workforce', icon: Users, permission: 'workforce.view' },
-  {
-    label: 'أعمال إدارية',
-    icon: BadgeCheck,
-    children: [
-      { label: 'المخزون', path: '/inventory', permission: 'inventory.view' },
-      { label: 'طلبات قطع الغيار', path: '/inventory/requests', permission: 'inventory.request' },
-      { label: 'طلبات للمراجعة', path: '/inventory/review', permission: 'inventory.approve' },
-      { label: 'ختمي وتوقيعي', path: '/inventory/stamp', permission: 'inventory.approve' },
-      { label: 'صرف الطلبات', path: '/inventory/issue', permission: 'inventory.issue' },
-      { label: 'تسكين العمالة', path: '/placement/cleaners', permission: 'placement.cleaners.view' },
-      { label: 'تحضير العمالة', path: '/placement/attendance', permission: 'attendance.view' },
-      { label: 'تسكين البوابين', path: '/placement/gatekeepers', permission: 'placement.gatekeepers.view' },
-      { label: 'مكافأة الفنيين', path: '/rewards', permission: 'rewards.view' },
-    ],
-  },
-  {
-    label: 'مؤشرات الأداء',
-    icon: Gauge,
-    children: [
-      { label: 'بطاقات الأداء الشهرية', path: '/kpi/scorecards', permission: 'kpi.view' },
-      { label: 'المخرجات التعاقدية', path: '/kpi/deliverables', permission: 'deliverables.view' },
-    ],
-  },
-];
-
-const adminNavigation: NavigationEntry[] = [
-  { label: 'الإعدادات', path: '/admin/settings', icon: Settings2, permission: 'settings.view' },
-  { label: 'سجل التدقيق', path: '/admin/audit', icon: FileText, permission: 'audit.view' },
-];
-
 function LoginPage({ onSignedIn }: { onSignedIn: () => void }) {
   const [error, setError] = useState('');
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<{ email: string; password: string }>();
@@ -279,17 +206,10 @@ function AppShell({
     },
     enabled: Boolean(profile),
   });
-  const visibleNavigation = useMemo(() => navigation.flatMap((item) => {
-    if (item.path) return grantedPermissions.has(item.permission!) ? [item] : [];
-    const children = (item.children ?? []).filter((child) => grantedPermissions.has(child.permission));
-    const group = item.label === 'الخطط الشهرية' ? 'monthly' : item.label === 'الخطط العامة' ? 'general' : null;
-    if (group) {
-      children.push(...buildCustomMenu(customTypes.data ?? [], group)
-        .map(({ label, path }) => ({ label, path, permission: 'plans.view' as const }))
-        .filter((child) => grantedPermissions.has(child.permission)));
-    }
-    return children.length ? [{ ...item, children }] : [];
-  }), [customTypes.data, grantedPermissions]);
+  const visibleNavigation = useMemo(
+    () => filterNavigation(navigation, grantedPermissions, customTypes.data ?? []),
+    [customTypes.data, grantedPermissions],
+  );
   const visibleAdminNavigation = adminNavigation.filter((item) => grantedPermissions.has(item.permission!));
   const preferences = useQuery({
     queryKey: ['user-preferences', profile?.id],

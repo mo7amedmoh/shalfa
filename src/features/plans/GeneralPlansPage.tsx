@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { z } from 'zod';
+import { Download } from 'lucide-react';
 import { loadXlsx } from '../../lib/xlsx';
+import { exportBrandedXlsx } from '../../lib/brandedXlsx';
 import { summarizeGeneralPlanProgress } from '../../domain/generalPlans';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import type { GeneralPlanType } from '../../domain/types';
@@ -93,6 +95,7 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   const [plannedDate, setPlannedDate] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
+  const [exportingPlan, setExportingPlan] = useState(false);
   const [search, setSearch] = useState('');
   const [message, setMessage] = useState('');
   const schools = useQuery({ queryKey: ['schools-for-general-plans'], queryFn: loadCandidates, enabled: Boolean(planType) });
@@ -231,6 +234,36 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
   const selectedBulkRows = bulkRows.filter((row) => selectedRowIds.includes(row.id));
   const allRowIds = (rows.data ?? []).map((row) => row.id);
   const allRowsSelected = allRowIds.length > 0 && allRowIds.every((id) => selectedRowIds.includes(id));
+  const exportPlan = async () => {
+    if (!planType || !rows.data?.length || exportingPlan) return;
+    setExportingPlan(true);
+    setMessage('');
+    try {
+      await exportBrandedXlsx(`خطة-${planLabels[planType]}.xlsx`, [{
+        name: 'الخطة',
+        title: `خطة ${planLabels[planType]}`,
+        columns: [
+          'الرقم الوزاري', 'اسم المدرسة', 'التاريخ المخطط', 'المقاول',
+          'حالة التنفيذ', 'تاريخ الإنجاز', 'حالة التقرير', 'تاريخ إنجاز التقرير', 'الملاحظات',
+        ],
+        rows: rows.data.map((row) => [
+          row.school?.ministry_number ?? '',
+          row.school?.school_name ?? row.school_id,
+          row.planned_date ?? '',
+          row.contractor_name ?? '',
+          row.status === 'complete' ? 'مكتمل' : row.status === 'in_progress' ? 'جارٍ' : row.status === 'cancelled' ? 'ملغى' : 'لم يبدأ',
+          row.completed_at ?? '',
+          row.report_done ? 'تم إنجاز التقرير' : 'لم ينجز',
+          row.report_done_date ?? '',
+          row.notes ?? '',
+        ]),
+      }]);
+    } catch (error) {
+      setMessage(`تعذر تصدير الخطة: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setExportingPlan(false);
+    }
+  };
 
   return (
     <div className="grid gap-5">
@@ -279,6 +312,17 @@ export function GeneralPlansPage({ profile }: { profile: UserProfile | null }) {
               onUpdated={() => queryClient.invalidateQueries({ queryKey: ['general-plan-rows', planType] }).then(() => undefined)}
               onClearSelected={() => setSelectedRowIds([])}
             />
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => void exportPlan()}
+                disabled={!rows.data?.length || exportingPlan}
+                className="inline-flex items-center gap-2 rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50"
+              >
+                <Download size={16} aria-hidden="true" />
+                {exportingPlan ? 'جارٍ التصدير…' : 'تصدير Excel'}
+              </button>
+            </div>
             <div className="table-scroll general-plan-table-scroll"><table className="general-plan-table">
               <thead><tr>
                 <th><input type="checkbox" aria-label="تحديد جميع صفوف الخطة" checked={allRowsSelected} onChange={(event) => setSelectedRowIds(event.target.checked ? allRowIds : [])} disabled={!canBulkUpdate} /></th>

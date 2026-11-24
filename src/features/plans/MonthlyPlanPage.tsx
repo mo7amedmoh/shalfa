@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { z } from 'zod';
-import { Pencil } from 'lucide-react';
+import { Download, Pencil } from 'lucide-react';
 import { loadXlsx } from '../../lib/xlsx';
+import { exportBrandedXlsx } from '../../lib/brandedXlsx';
 import {
   cleaningSupervisorName,
   cleaningSupervisorUpdates,
@@ -157,6 +158,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const [visitFilter, setVisitFilter] = useState<PlanCompletionFilter>('all');
   const [reportFilter, setReportFilter] = useState<PlanCompletionFilter>('all');
   const [schoolSearch, setSchoolSearch] = useState('');
+  const [exportingPlan, setExportingPlan] = useState(false);
   const [message, setMessage] = useState('');
   const [editingRowId, setEditingRowId] = useState('');
   const [redistributionOpen, setRedistributionOpen] = useState(false);
@@ -523,6 +525,53 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
     latitude: school.latitude,
     longitude: school.longitude,
   }));
+  const exportPlan = async () => {
+    if (!activePlan || !filteredPlanRows.length || exportingPlan) return;
+    setExportingPlan(true);
+    setMessage('');
+    try {
+      const includesContractor = planType === 'security_safety' || planType === 'elevators';
+      await exportBrandedXlsx(`خطة-${planTitles[planType]}-${activePlan.plan_month.slice(0, 7)}.xlsx`, [{
+        name: 'الخطة',
+        title: `خطة ${planTitles[planType]} - ${activePlan.plan_month.slice(0, 7)}`,
+        columns: [
+          'الرقم الوزاري', 'اسم المدرسة', 'الموعد المخطط',
+          ...(includesContractor ? ['الشركة'] : []),
+          'اسم المشرف', 'تاريخ الزيارة', 'تاريخ إنجاز التقرير', 'الحالة',
+        ],
+        rows: filteredPlanRows.map((row) => {
+          const overdue = activePlan.late_by_planned_date
+            ? isPlanRowOverdue({
+              plannedDate: row.planned_date,
+              visitedAt: row.visited_at,
+              reportCompletedAt: row.report_completed_at,
+            }, today)
+            : today > monthEnd && !row.report_completed_at;
+          const supervisorName = planType === 'cleaning'
+            ? cleaningSupervisorName({
+              id: row.id,
+              supervisorName: row.supervisor_name,
+              schoolSourceFields: row.school?.source_fields ?? null,
+            })
+            : row.supervisor_name;
+          return [
+            row.school?.ministry_number ?? '',
+            row.school?.school_name ?? row.school_id,
+            plannedDates[row.id] ?? row.planned_date,
+            ...(includesContractor ? [row.contractor_name ?? ''] : []),
+            supervisorName ?? '',
+            actualDates[row.id]?.visited ?? row.visited_at ?? '',
+            actualDates[row.id]?.report ?? row.report_completed_at ?? '',
+            overdue ? 'متأخر' : row.visited_at && row.report_completed_at ? 'مكتمل' : 'قيد المتابعة',
+          ];
+        }),
+      }]);
+    } catch (error) {
+      setMessage(`تعذر تصدير الخطة: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setExportingPlan(false);
+    }
+  };
 
   return (
     <div className="monthly-plan-page grid gap-5">
@@ -697,6 +746,17 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                 queryClient.invalidateQueries({ queryKey: ['dashboard-plan-rows'] }),
               ]).then(() => undefined)}
             />
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => void exportPlan()}
+                disabled={!filteredPlanRows.length || exportingPlan}
+                className="inline-flex items-center gap-2 rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50"
+              >
+                <Download size={16} aria-hidden="true" />
+                {exportingPlan ? 'جارٍ التصدير…' : 'تصدير Excel'}
+              </button>
+            </div>
             <div className="table-scroll monthly-plan-table-scroll">
               <table className="monthly-plan-table">
                 <thead><tr><th>المدرسة</th><th>الموعد المخطط</th>{planType === 'security_safety' || planType === 'elevators' ? <th>الشركة</th> : null}<th>تاريخ الزيارة</th><th>تاريخ إنجاز التقرير</th><th>الحالة والإجراءات</th></tr></thead>

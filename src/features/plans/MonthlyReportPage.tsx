@@ -83,7 +83,7 @@ async function fetchMonthRows(month: string): Promise<ReportPlanRow[]> {
     const supervisor = reportSupervisorForPlanRow({
       planType: plan.plan_type,
       supervisorId: row.supervisor_id,
-      supervisorName: row.supervisor_id ? names.get(row.supervisor_id) ?? row.supervisor_name : row.supervisor_name,
+      supervisorName: row.supervisor_name,
       schoolSourceFields: row.school?.source_fields,
     });
     return {

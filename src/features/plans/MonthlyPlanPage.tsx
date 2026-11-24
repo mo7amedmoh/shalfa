@@ -6,8 +6,8 @@ import { Download, Pencil } from 'lucide-react';
 import { loadXlsx } from '../../lib/xlsx';
 import { exportBrandedXlsx } from '../../lib/brandedXlsx';
 import {
-  cleaningSupervisorName,
   cleaningSupervisorUpdates,
+  monthlySupervisorName,
   isPlanRowOverdue,
   matchesPlanCompletionFilters,
   matchesPlanSchoolSearch,
@@ -493,13 +493,11 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   );
   const missingSupervisorCount = (rows.data ?? []).filter((row) => {
     if (planType === 'elevators' || planType === 'security_safety') return false;
-    const supervisorName = planType === 'cleaning'
-      ? cleaningSupervisorName({
-        id: row.id,
-        supervisorName: row.supervisor_name,
-        schoolSourceFields: row.school?.source_fields ?? null,
-      })
-      : row.supervisor_name;
+    const supervisorName = monthlySupervisorName({
+      id: row.id,
+      supervisorName: row.supervisor_name,
+      schoolSourceFields: row.school?.source_fields ?? null,
+    }, planType);
     return !row.supervisor_id && !supervisorName;
   }).length;
   const filteredPlanRows = useMemo(
@@ -547,13 +545,11 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
               reportCompletedAt: row.report_completed_at,
             }, today)
             : today > monthEnd && !row.report_completed_at;
-          const supervisorName = planType === 'cleaning'
-            ? cleaningSupervisorName({
-              id: row.id,
-              supervisorName: row.supervisor_name,
-              schoolSourceFields: row.school?.source_fields ?? null,
-            })
-            : row.supervisor_name;
+          const supervisorName = monthlySupervisorName({
+            id: row.id,
+            supervisorName: row.supervisor_name,
+            schoolSourceFields: row.school?.source_fields ?? null,
+          }, planType);
           return [
             row.school?.ministry_number ?? '',
             row.school?.school_name ?? row.school_id,
@@ -725,13 +721,11 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                 schoolName: row.school?.school_name ?? row.school_id,
                 ministryNumber: row.school?.ministry_number ?? '',
                 ministryKey: row.school?.ministry_key ?? '',
-                supervisorName: planType === 'cleaning'
-                  ? cleaningSupervisorName({
-                    id: row.id,
-                    supervisorName: row.supervisor_name,
-                    schoolSourceFields: row.school?.source_fields ?? null,
-                  })
-                  : row.supervisor_name,
+                supervisorName: monthlySupervisorName({
+                  id: row.id,
+                  supervisorName: row.supervisor_name,
+                  schoolSourceFields: row.school?.source_fields ?? null,
+                }, planType),
                 visited: row.visited,
                 visitedAt: row.visited_at,
                 reportAt: row.report_completed_at,
@@ -769,13 +763,11 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                       reportCompletedAt: row.report_completed_at,
                     }, today)
                     : today > monthEnd && !row.report_completed_at;
-                  const supervisorName = planType === 'cleaning'
-                    ? cleaningSupervisorName({
-                      id: row.id,
-                      supervisorName: row.supervisor_name,
-                      schoolSourceFields: row.school?.source_fields ?? null,
-                    })
-                    : row.supervisor_name;
+                  const supervisorName = monthlySupervisorName({
+                    id: row.id,
+                    supervisorName: row.supervisor_name,
+                    schoolSourceFields: row.school?.source_fields ?? null,
+                  }, planType);
                   return <tr key={row.id}>
                     <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small>{supervisorName && <small className="block text-xs text-slate-500">المشرف: {supervisorName}</small>}</td>
                     <td>
@@ -849,8 +841,12 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
           id: row.id,
           schoolId: row.school_id,
           schoolName: row.school?.school_name ?? row.school_id,
-          supervisorId: row.supervisor_id,
-          supervisorName: row.supervisor_name,
+          supervisorId: planType === 'maintenance' || planType === 'cleaning' ? null : row.supervisor_id,
+          supervisorName: monthlySupervisorName({
+            id: row.id,
+            supervisorName: row.supervisor_name,
+            schoolSourceFields: row.school?.source_fields ?? null,
+          }, planType),
           plannedDate: row.planned_date,
           visited: row.visited,
         }))}

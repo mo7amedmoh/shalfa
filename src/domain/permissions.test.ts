@@ -11,6 +11,14 @@ function KnownPermissionProbe() {
   return createElement('output', null, String(usePermission('schools.view')));
 }
 
+function AdminPermissionProbe() {
+  return createElement('output', null, [
+    usePermission('workforce.view_contacts'),
+    usePermission('workforce.view_id_image'),
+    usePermission('inventory.issue'),
+  ].join(','));
+}
+
 type Role = 'admin' | 'project_manager' | 'area_engineer' | 'report_follower' | 'supervisor' | 'viewer';
 
 const roles: Role[] = ['admin', 'project_manager', 'area_engineer', 'report_follower', 'supervisor', 'viewer'];
@@ -183,6 +191,19 @@ describe('permission catalog and legacy role visibility', () => {
     }
   });
 
+  it('grants the catalog permissions to system administrators in the UI when the database omits them', () => {
+    const markup = renderToStaticMarkup(createElement(
+      PermissionProvider,
+      {
+        permissions: [],
+        isSystemAdmin: true,
+        children: createElement(AdminPermissionProbe),
+      },
+    ));
+
+    expect(markup).toContain('true,true,true');
+  });
+
   it('explains invalid permission response shapes', () => {
     expect(() => parsePermissionKeys({ permission: 'schools.view' })).toThrow(
       'استجابة الصلاحيات غير صالحة: المتوقع مصفوفة نصوص، والمستلم object.',
@@ -197,6 +218,7 @@ describe('permission catalog and legacy role visibility', () => {
       '202611220001_rbac.sql',
       '202611220006_permission_enforcement_batch1.sql',
       '202611230001_inventory.sql',
+      '202611240001_school_supervisor_assignments.sql',
     ].map((file) => readFileSync(new URL(`../../supabase/migrations/${file}`, import.meta.url), 'utf8'));
     const migrationKeys = migrations.flatMap((migration) => {
       const catalogInsert = migration.match(/insert into public\.permissions[\s\S]*?values([\s\S]*?);/);

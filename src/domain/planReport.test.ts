@@ -45,9 +45,9 @@ describe('monthly plan report metrics', () => {
     expect(reportSupervisorForPlanRow({
       planType: 'maintenance',
       supervisorId: 'maintenance-supervisor',
-      supervisorName: 'مشرف الصيانة',
-      schoolSourceFields: { 'اسم المشرف (نظافة)': 'مشرف النظافة المعتمد' },
-    })).toEqual({ supervisorId: 'maintenance-supervisor', supervisorName: 'مشرف الصيانة' });
+      supervisorName: 'مشرف قديم',
+      schoolSourceFields: { 'اسم المشرف (صيانة)': 'مشرف الصيانة المعتمد' },
+    })).toEqual({ supervisorId: null, supervisorName: 'مشرف الصيانة المعتمد' });
   });
 
   it('returns zero-safe metrics for a month with no plan rows', () => {

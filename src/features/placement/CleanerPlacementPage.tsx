@@ -29,6 +29,10 @@ const configSchema = z.object({
   classCountHeader: z.string().default('عدد الفصول'),
   schoolSizeHeader: z.string().default(''),
 });
+const cleaningSupervisorSchema = z.object({
+  school_id: z.string().uuid(),
+  supervisor_name: z.string().nullable(),
+});
 const schoolSchema = z.object({
   id: z.string().uuid(),
   school_name: z.string(),
@@ -57,6 +61,7 @@ type SchoolData = {
   schools: School[];
   employees: z.infer<typeof employeeSchema>[];
   assignments: Assignment[];
+  cleaningSupervisors: Map<string, string | null>;
   overrides: Map<string, {
     correctedSize: SchoolSize | null;
     correctedBy: string | null;
@@ -69,6 +74,7 @@ type SchoolSummary = {
   school: School;
   staffing: StaffingResult;
   neighborhood: string;
+  cleaningSupervisorName: string | null;
   exception: z.infer<typeof exceptionSchema> | null;
   correctedSize: SchoolSize | null;
   correctedBy: string | null;
@@ -78,17 +84,18 @@ type SchoolSummary = {
 };
 
 async function loadPlacementData(): Promise<SchoolData> {
-  if (!supabase) return { schools: [], employees: [], assignments: [], overrides: new Map(), config: null };
-  const [schoolsResult, employeeResult, assignmentResult, correctionRows, exceptionResult, configResult, rulesResult] = await Promise.all([
+  if (!supabase) return { schools: [], employees: [], assignments: [], cleaningSupervisors: new Map(), overrides: new Map(), config: null };
+  const [schoolsResult, employeeResult, assignmentResult, supervisorResult, correctionRows, exceptionResult, configResult, rulesResult] = await Promise.all([
     supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsWithSize).order('name'),
     supabase.from('employees').select(APP_SCHEMA_SELECT.employeesBasic).eq('category', 'cleaner').order('full_name'),
     supabase.from('cleaner_assignments').select(APP_SCHEMA_SELECT.cleanerAssignments),
+    supabase.rpc('list_cleaner_assignment_supervisors'),
     loadSchoolSizeCorrections(),
     supabase.from('staffing_exceptions').select(APP_SCHEMA_SELECT.staffingException),
     supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
     supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'staffing_rules').maybeSingle(),
   ]);
-  for (const result of [schoolsResult, employeeResult, assignmentResult, exceptionResult, configResult, rulesResult]) {
+  for (const result of [schoolsResult, employeeResult, assignmentResult, supervisorResult, exceptionResult, configResult, rulesResult]) {
     if (result.error) throw result.error;
   }
   const overrides = new Map<string, {
@@ -127,6 +134,8 @@ async function loadPlacementData(): Promise<SchoolData> {
     schools: z.array(schoolSchema).parse(schoolsResult.data),
     employees: z.array(employeeSchema).parse(employeeResult.data),
     assignments: z.array(assignmentSchema).parse(assignmentResult.data),
+    cleaningSupervisors: new Map(z.array(cleaningSupervisorSchema).parse(supervisorResult.data)
+      .map(({ school_id, supervisor_name }) => [school_id, supervisor_name] as const)),
     overrides,
     config: configResult.data
       ? { ...configSchema.parse(configResult.data.value), staffingRules }
@@ -183,6 +192,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
         school,
         staffing,
         neighborhood: String(school.source_fields['الحي'] ?? 'غير محدد'),
+        cleaningSupervisorName: data.data!.cleaningSupervisors.get(school.id) ?? null,
         exception: override?.exception ?? null,
         correctedSize,
         correctedBy: override?.correctedBy ?? null,
@@ -507,7 +517,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
               />
             </div>
           ) : <div className="grid gap-3">
-            {pagedSchools.rows.map(({ school, staffing, neighborhood, exception, correctedSize, correctedBy, correctedAt, sheetDeclaredSize }) => <article key={school.id} className="rounded-xl border border-slate-200 p-4">
+            {pagedSchools.rows.map(({ school, staffing, neighborhood, cleaningSupervisorName, exception, correctedSize, correctedBy, correctedAt, sheetDeclaredSize }) => <article key={school.id} className="rounded-xl border border-slate-200 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div><h3 className="font-bold">{school.school_name}</h3><p className="mt-1 text-xs text-slate-500">الرقم الوزاري: {school.ministry_number} · الحي: {neighborhood}</p></div>
                 <div className="flex flex-wrap gap-2 text-xs">
@@ -532,6 +542,7 @@ export function CleanerPlacementPage({ profile }: { profile: UserProfile | null 
               <div className="mt-3 grid gap-2">
                 {(data.data?.assignments.filter((item) => item.school_id === school.id) ?? []).map((assignment) => <div key={assignment.id} className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
                   <span className="font-semibold">{assignment.employee?.full_name ?? assignment.employee_id}</span>
+                  <span className="text-xs text-slate-600">مشرف النظافة: {cleaningSupervisorName ?? 'غير مسند'}</span>
                   <span className="text-xs text-slate-500">{assignment.labour_source === 'ajeer' ? 'عقد أجير' : 'مصدر العمالة غير محدد'}</span>
                   <span className="text-xs text-slate-600">{revealed[assignment.employee_id] ?? '••••••'}</span>
                   {canShowResidenceToggle && <button type="button" onClick={() => void revealResidence(assignment.employee_id)} aria-label={revealed[assignment.employee_id] ? 'إخفاء رقم الإقامة' : 'إظهار رقم الإقامة'} className="rounded p-1 text-brand-700">{revealed[assignment.employee_id] ? <EyeOff size={15} /> : <Eye size={15} />}</button>}

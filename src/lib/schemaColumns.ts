@@ -90,6 +90,7 @@ export const APP_SCHEMA_SELECT = {
   schoolsDashboard: 'id,school_name:name,ministry_number:ministry_no,source_fields:extra,size_source',
   schoolsGatekeeperPlacement: 'id,school_name:name,ministry_number:ministry_no,neighbourhood,plan_scope',
   employeesBasic: 'id,full_name,employee_number:employee_no,job_title,phone',
+  employeesWorkforce: 'id,full_name,employee_number:employee_no,job_title,employee_category:category,department,nationality,hire_date,employment_status:status,manager_id,project_name',
   employeesCleaner: 'id,full_name,employee_number:employee_no,job_title,employee_category:category,department,nationality,hire_date,employment_status:status,phone,manager_id,project_name,identity_card_path',
   employeesForImport: 'id,full_name,employee_no,category,job_title,phone',
   employeesForRewards: 'id,full_name,employee_no,job_title',

@@ -580,7 +580,7 @@ export function App() {
   if (sessionUserId && (!profile || !effectivePermissions)) {
     return <div role="status" className="grid min-h-screen place-items-center text-slate-600">جارٍ تحميل ملف المستخدم والصلاحيات…</div>;
   }
-  return <PermissionProvider permissions={effectivePermissions ?? []}>
+  return <PermissionProvider permissions={effectivePermissions ?? []} isSystemAdmin={profile?.role === 'admin'}>
     <AppShell profile={profile} onSignOut={() => void signOut()} syncNotice={syncNotice} />
   </PermissionProvider>;
 }

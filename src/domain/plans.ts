@@ -23,6 +23,18 @@ export interface CleaningSupervisorPlanRow {
   schoolSourceFields: Record<string, unknown> | null;
 }
 
+export function monthlySupervisorName(
+  row: CleaningSupervisorPlanRow,
+  planType: string,
+): string | null {
+  if (planType !== 'maintenance' && planType !== 'cleaning') return row.supervisorName;
+  return schoolPersonDefault(
+    { source_fields: row.schoolSourceFields ?? {} },
+    'supervisor',
+    planType,
+  ) || row.supervisorName;
+}
+
 export function cleaningSupervisorName(row: CleaningSupervisorPlanRow): string | null {
   return schoolPersonDefault(
     { source_fields: row.schoolSourceFields ?? {} },

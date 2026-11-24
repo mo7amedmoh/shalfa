@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cleaningSupervisorName,
   cleaningSupervisorUpdates,
+  monthlySupervisorName,
   distributePlanDates,
   isPlanRowOverdue,
   matchPlanSchoolsByMinistryNumbers,
@@ -20,6 +21,16 @@ describe('monthly plan date distribution', () => {
     expect(cleaningSupervisorName(rows[0])).toBe('مشرف حقيقي');
     expect(cleaningSupervisorName(rows[2])).toBe('اسم محفوظ');
     expect(cleaningSupervisorUpdates(rows)).toEqual([{ id: 'one', supervisorName: 'مشرف حقيقي' }]);
+  });
+
+  it('uses the current maintenance supervisor stored with the school', () => {
+    const row = {
+      id: 'maintenance-row',
+      supervisorName: 'مشرف قديم',
+      schoolSourceFields: { 'اسم المشرف (صيانة)': 'مشرف الصيانة المعتمد' },
+    };
+
+    expect(monthlySupervisorName(row, 'maintenance')).toBe('مشرف الصيانة المعتمد');
   });
 
   it('searches plan rows by normalized school name or ministry number', () => {

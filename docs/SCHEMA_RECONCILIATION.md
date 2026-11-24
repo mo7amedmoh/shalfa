@@ -24,6 +24,8 @@ The app does not directly query a SQL view. Its nested PostgREST relations are j
 | `general_plans` | `id`, `plan_type`, `year` | Yes | No additions | Create/find the parent plan before adding rows; maps `sewage_waste` UI routing to `sewage_removal`. |
 | `general_plan_rows` | `id`, `plan_id`, `school_id`, `planned_date`, `execution_date`, `status`, `report_done`, `report_done_date`, `notes`, `contractor_name` | Base fields except `responses_count` and `contractor_name` | `202611050003`, `202611150001` | Adds a separate report-completion state for general plans. `responses_count` remains a historical database column but is unused; `contractor_name` remains available. |
 | `supervisor_aliases` | `alias_normalised`, `employee_id` | No | `202611050003` | Stores optional normalized engineer/supervisor aliases created by monthly-plan imports. |
+| `school_supervisor_assignments` | `id`, `school_id`, `employee_id`, `service`, `valid_from`, `valid_to`, `assigned_by`, `created_at` | No | `202611240001` | Historical maintenance/cleaning assignments; a partial unique index allows only one active supervisor per school and service. |
+| `school_current_supervisors` view | `school_id`, maintenance/cleaning supervisor IDs and names | No | `202611240001` | Current school-level supervisor assignments only. |
 | `reward_pools` | `id`, `engineer_id`, `month`, `amount`, `status`, `approved_by` | Yes | No additions | Replaced `reward_month` / `locked_at`; engineers are resolved through `profiles.employee_id`. |
 | `reward_allocations` | `id`, `pool_id`, `employee_id`, `amount`, `note`, `updated_at` | Yes | No additions | Replaced nonexistent `reward_distributions`; retains schema allocation guards. |
 | `kpi_card_weights` | `card`, `weight` | Yes | No additions | Read from the protected database table; no public KPI catalog bundle. |
@@ -107,5 +109,7 @@ Apply these after the base schema 001, in exactly this order:
 42. `supabase/migrations/202611230004_employee_profile_column_grants.sql`
 43. `supabase/migrations/202611230005_optimize_plan_name_relink.sql`
 44. `supabase/migrations/202611230006_fix_employee_profile_category_cast.sql`
+45. `supabase/migrations/202611230007_dashboard_card_settings.sql`
+46. `supabase/migrations/202611240001_school_supervisor_assignments.sql`
 
 Then run a full school sync to populate accurate source row/order metadata. `npm run verify:schema` checks the app's required columns using `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `TEST_SCHEMA_EMAIL`, and `TEST_SCHEMA_PASSWORD` from the environment or local env files. Use an admin/project-manager test login so RLS-restricted catalog columns can be probed; no credentials belong in source control.

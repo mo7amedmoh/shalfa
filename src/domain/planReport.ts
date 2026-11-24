@@ -34,11 +34,11 @@ export function reportSupervisorForPlanRow(input: {
   supervisorName: string | null;
   schoolSourceFields?: Record<string, unknown> | null;
 }): { supervisorId: string | null; supervisorName: string | null } {
-  if (input.planType === 'cleaning') {
+  if (input.planType === 'cleaning' || input.planType === 'maintenance') {
     const sourceName = schoolPersonDefault(
       { source_fields: input.schoolSourceFields ?? {} },
       'supervisor',
-      'cleaning',
+      input.planType,
     );
     if (sourceName) return { supervisorId: null, supervisorName: sourceName };
   }

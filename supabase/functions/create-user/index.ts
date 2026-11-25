@@ -87,7 +87,10 @@ Deno.serve(async (request) => {
   });
   if (createError || !created.user) {
     console.error('Unable to create Auth user.', createError);
-    return response(400, { error: 'تعذر إنشاء الحساب؛ تحقق من عدم تكرار اسم المستخدم.' });
+    if (createError?.code === 'email_exists') {
+      return response(409, { error: 'هذا البريد الإلكتروني مسجل مسبقاً في Auth.' });
+    }
+    return response(500, { error: 'تعذر إنشاء حساب المستخدم في قاعدة البيانات؛ راجع سجلات Supabase.' });
   }
 
   const { error: profileError } = await admin.from('profiles').update({

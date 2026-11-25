@@ -13,7 +13,7 @@
 2. نفّذ `npm install`.
 3. تأكد من تطبيق المخطط المرجعي `docs/reference/001_shalfa_schema_rls.sql` مرة واحدة، ثم طبّق ترحيلات الميزات التي تستخدمها من `supabase/migrations/`.
 4. أنشئ المستخدم الأول من Supabase Auth ببريده الكامل؛ ينشئ trigger الملف في `profiles`. بعد التحقق من هويته، غيّر دوره من SQL Editor مثلاً عبر `update public.profiles set role = 'admin' where username = 'your_username';`.
-5. لنشر وظيفة إنشاء الحسابات الآمنة: ثبّت Supabase CLI، ثم نفّذ `supabase functions deploy create-user`. تحقّق من توفر `SUPABASE_URL` و`SUPABASE_ANON_KEY` و`SUPABASE_SERVICE_ROLE_KEY` كأسرار بيئة الوظيفة؛ لا تضع مفتاح الخدمة في `.env.local` أو إعدادات واجهة الويب. الوظيفة تتحقق من دور مدير النظام، ويُسجل إنشاء الملف بواسطة trigger قاعدة البيانات.
+5. قبل نشر وظيفة إنشاء الحسابات الآمنة، طبّق `supabase/migrations/202611250002_fix_profile_role_insert_trigger.sql` إذا لم يكن مطبقاً، لضمان أن trigger إنشاء الملف الشخصي يعيّن `role_id` عند الإدراج. ثم ثبّت Supabase CLI ونفّذ `supabase functions deploy create-user`. تحقّق من توفر `SUPABASE_URL` و`SUPABASE_ANON_KEY` و`SUPABASE_SERVICE_ROLE_KEY` كأسرار بيئة الوظيفة؛ لا تضع مفتاح الخدمة في `.env.local` أو إعدادات واجهة الويب. الوظيفة تتحقق من صلاحية الإنشاء، ويُسجل إنشاء الملف بواسطة trigger قاعدة البيانات.
 6. شغّل `npm run dev`.
 
 الأوامر المتاحة: `npm run lint`، `npm run typecheck`، `npm test`، `npm run build`.

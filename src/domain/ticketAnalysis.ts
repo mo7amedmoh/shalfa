@@ -1,4 +1,5 @@
 import { normalizeImportName, normalizeMinistryNumber, schoolPersonDefault } from './imports';
+import type { CurrentSchoolSupervisors } from './schoolSupervisors';
 
 export interface TicketRecord {
   id: string;
@@ -135,9 +136,11 @@ export interface TicketSlaTrendPoint {
 }
 
 export interface TicketSchoolSupervisorSource {
+  id?: string;
   ministryNumber: string;
   ministryKey: string | null;
   sourceFields: Record<string, unknown> | null;
+  currentSupervisor?: CurrentSchoolSupervisors | null;
 }
 
 type TicketField =
@@ -240,6 +243,7 @@ export function normalizeTicketSchoolNumber(value: unknown): string {
 export function attachSchoolSupervisors(
   tickets: readonly TicketRecord[],
   schools: readonly TicketSchoolSupervisorSource[],
+  useSheetFallback = true,
 ): TicketRecord[] {
   const supervisorsByNumber = new Map<string, Set<string>>();
   for (const school of schools) {
@@ -247,6 +251,8 @@ export function attachSchoolSupervisors(
       { source_fields: school.sourceFields ?? {} },
       'supervisor',
       'maintenance',
+      school.currentSupervisor,
+      useSheetFallback,
     );
     if (!supervisor) continue;
 

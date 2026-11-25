@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { supabase } from '../../lib/supabase';
+import { loadCurrentSchoolSupervisors, loadSheetSupervisorFallback } from '../../lib/schoolSupervisors';
+import { resolvePlanSupervisor } from '../../domain/schoolSupervisors';
 import {
   buildPlanSummary,
   matchCustomPlanCategory,
@@ -17,12 +19,13 @@ const monthlyPlanRowSchema = z.object({
   plan_id: z.string().uuid(),
   school_id: z.string().uuid(),
   planned_date: z.string(),
+  supervisor_id: z.string().uuid().nullable(),
   engineer_name: z.string().nullable(),
   supervisor_name: z.string().nullable(),
   contractor_name: z.string().nullable(),
   visited: z.boolean(),
   report_done: z.boolean(),
-  school: z.object({ name: z.string().nullable(), ministry_no: z.string().nullable() }).nullable(),
+  school: z.object({ name: z.string().nullable(), ministry_no: z.string().nullable(), source_fields: z.record(z.string(), z.unknown()) }).nullable(),
 });
 const generalPlanSchema = z.object({
   id: z.string().uuid(),
@@ -36,11 +39,12 @@ const generalPlanRowSchema = z.object({
   planned_date: z.string().nullable(),
   execution_date: z.string().nullable(),
   status: z.string(),
+  supervisor_id: z.string().uuid().nullable(),
   report_done: z.boolean(),
   supervisor_name: z.string().nullable(),
   engineer_name: z.string().nullable(),
   contractor_name: z.string().nullable(),
-  school: z.object({ name: z.string().nullable(), ministry_no: z.string().nullable() }).nullable(),
+  school: z.object({ name: z.string().nullable(), ministry_no: z.string().nullable(), source_fields: z.record(z.string(), z.unknown()) }).nullable(),
 });
 const customPlanTypeSchema = z.object({
   id: z.string().uuid(),
@@ -59,12 +63,13 @@ const customPlanRowSchema = z.object({
   planned_date: z.string().nullable(),
   execution_date: z.string().nullable(),
   status: z.string(),
+  supervisor_id: z.string().uuid().nullable(),
   supervisor_name: z.string().nullable(),
   engineer_name: z.string().nullable(),
   visited: z.boolean().nullable(),
   report_done: z.boolean().nullable(),
   contractor_name: z.string().nullable(),
-  school: z.object({ name: z.string().nullable(), ministry_no: z.string().nullable() }).nullable(),
+  school: z.object({ name: z.string().nullable(), ministry_no: z.string().nullable(), source_fields: z.record(z.string(), z.unknown()) }).nullable(),
 });
 
 type ExportCounts = { summaryRows: number; records: number };
@@ -191,7 +196,7 @@ export async function exportAllPlans(): Promise<ExportCounts> {
   const [monthlyRows, generalRows, customRows] = await Promise.all([
     fetchAllPages(async (from, to) => {
       const { data, error } = await client.from('monthly_plan_rows')
-        .select('id,plan_id,school_id,planned_date,engineer_name,supervisor_name,contractor_name,visited,report_done,school:schools(name,ministry_no)')
+        .select('id,plan_id,school_id,planned_date,supervisor_id,engineer_name,supervisor_name,contractor_name,visited,report_done,school:schools(name,ministry_no,source_fields:extra)')
         .order('id')
         .range(from, to);
       if (error) throw error;
@@ -199,7 +204,7 @@ export async function exportAllPlans(): Promise<ExportCounts> {
     }),
     fetchAllPages(async (from, to) => {
       const { data, error } = await client.from('general_plan_rows')
-        .select('id,plan_id,school_id,planned_date,execution_date,status,report_done,supervisor_name,engineer_name,contractor_name,school:schools(name,ministry_no)')
+        .select('id,plan_id,school_id,planned_date,execution_date,status,report_done,supervisor_id,supervisor_name,engineer_name,contractor_name,school:schools(name,ministry_no,source_fields:extra)')
         .order('id')
         .range(from, to);
       if (error) throw error;
@@ -207,7 +212,7 @@ export async function exportAllPlans(): Promise<ExportCounts> {
     }),
     fetchAllPages(async (from, to) => {
       const { data, error } = await client.from('custom_plan_rows')
-        .select('id,plan_id,school_id,planned_date,execution_date,status,supervisor_name,engineer_name,visited,report_done,contractor_name,school:schools(name,ministry_no)')
+        .select('id,plan_id,school_id,planned_date,execution_date,status,supervisor_id,supervisor_name,engineer_name,visited,report_done,contractor_name,school:schools(name,ministry_no,source_fields:extra)')
         .order('id')
         .range(from, to);
       if (error) throw error;
@@ -219,6 +224,37 @@ export async function exportAllPlans(): Promise<ExportCounts> {
   const generalPlanById = new Map(generalPlans.map((plan) => [plan.id, plan]));
   const customPlanById = new Map(customPlans.map((plan) => [plan.id, plan]));
   const customTypeById = new Map(customTypes.map((type) => [type.id, type]));
+  const allRows = [...monthlyRows, ...generalRows, ...customRows];
+  const schoolIds = [...new Set(allRows.flatMap((row) => row.school_id ? [row.school_id] : []))];
+  const supervisorIds = [...new Set(allRows.flatMap((row) => row.supervisor_id ? [row.supervisor_id] : []))];
+  const [currentSupervisors, useSheetFallback, supervisorEmployees] = await Promise.all([
+    loadCurrentSchoolSupervisors(schoolIds),
+    loadSheetSupervisorFallback(),
+    supervisorIds.length
+      ? fetchAllPages(async (from, to) => {
+        const { data, error } = await client.from('employees')
+          .select('id,full_name')
+          .in('id', supervisorIds)
+          .order('id')
+          .range(from, to);
+        if (error) throw error;
+        return z.array(z.object({ id: z.string().uuid(), full_name: z.string() })).parse(data);
+      })
+      : Promise.resolve([]),
+  ]);
+  const supervisorsBySchool = new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment]));
+  const supervisorNamesById = new Map(supervisorEmployees.map((employee) => [employee.id, employee.full_name]));
+  const resolvedSupervisorName = (
+    row: { supervisor_id: string | null; supervisor_name: string | null; school_id: string | null; school: { source_fields: Record<string, unknown> } | null },
+    planType: string,
+  ) => resolvePlanSupervisor({
+    planType,
+    supervisorId: row.supervisor_id,
+    supervisorName: row.supervisor_id ? supervisorNamesById.get(row.supervisor_id) ?? row.supervisor_name : row.supervisor_name,
+    current: row.school_id ? supervisorsBySchool.get(row.school_id) : null,
+    schoolSourceFields: row.school?.source_fields,
+    useSheetFallback,
+  }).supervisorName;
   const records: PlanSummaryRecord[] = [];
 
   for (const row of monthlyRows) {
@@ -233,7 +269,7 @@ export async function exportAllPlans(): Promise<ExportCounts> {
       extraType: category ? undefined : (plan ? monthlyTypeNames[plan.plan_type] ?? plan.plan_type : 'خطة شهرية غير معروفة'),
       plannedDate: row.planned_date,
       engineerName: row.engineer_name,
-      responsibleName: row.supervisor_name,
+      responsibleName: resolvedSupervisorName(row, plan?.plan_type ?? ''),
       contractorName: row.contractor_name,
       visited: row.visited,
       reportDone: row.report_done,
@@ -252,7 +288,7 @@ export async function exportAllPlans(): Promise<ExportCounts> {
       extraType: category ? undefined : (plan ? generalTypeNames[plan.plan_type] ?? plan.plan_type : 'خطة عامة غير معروفة'),
       plannedDate: row.planned_date,
       engineerName: row.engineer_name,
-      responsibleName: row.supervisor_name,
+      responsibleName: resolvedSupervisorName(row, plan?.plan_type ?? ''),
       contractorName: row.contractor_name,
       visited: row.status === 'done' || Boolean(row.execution_date),
       reportDone: row.report_done,
@@ -272,7 +308,7 @@ export async function exportAllPlans(): Promise<ExportCounts> {
       extraType: category ? undefined : (type?.name ?? 'خطة مخصصة غير معروفة'),
       plannedDate: row.planned_date,
       engineerName: row.engineer_name,
-      responsibleName: row.supervisor_name,
+      responsibleName: resolvedSupervisorName(row, type?.name.includes('نظافة') ? 'cleaning' : type?.name.includes('صيانة') ? 'maintenance' : ''),
       contractorName: row.contractor_name,
       visited: row.visited ?? (row.status === 'done' || Boolean(row.execution_date)),
       reportDone: row.report_done,

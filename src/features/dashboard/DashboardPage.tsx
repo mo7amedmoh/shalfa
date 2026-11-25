@@ -265,6 +265,29 @@ export function DashboardPage({ profile = null }: { profile?: UserProfile | null
 
       {showCard('inventory-shortage') && <InventoryShortageCard />}
 
+      {showCard('schools-missing-supervisors') && (
+        <section className="card grid gap-3 p-4" aria-label="مدارس بلا مشرف صيانة أو نظافة">
+          <div>
+            <h2 className="font-bold text-brand-900">مدارس بلا مشرف صيانة/نظافة</h2>
+            <p className="mt-1 text-xs text-slate-500">عدد المدارس التي لا تملك إسنادًا حاليًا لكل خدمة.</p>
+          </div>
+          {dashboard.supervisorCoverageLoading ? <CardSkeleton />
+            : dashboard.supervisorCoverageError ? <CardError title="تعذر تحميل تغطية المشرفين" message={dashboard.supervisorCoverageError.message} />
+              : dashboard.supervisorCoverage && <div className="grid gap-2 sm:grid-cols-2">
+                <Link to="/workforce/unassigned-schools?service=maintenance" className="rounded-lg border border-slate-200 p-3 hover:border-brand-500 hover:bg-slate-50">
+                  <span className="block text-sm font-semibold">بلا مشرف صيانة</span>
+                  <strong className="mt-1 block text-2xl text-brand-900">{formatNumber(dashboard.supervisorCoverage.maintenanceMissing.length)}</strong>
+                  <span className="text-xs text-brand-700 underline">فتح قائمة المدارس</span>
+                </Link>
+                <Link to="/workforce/unassigned-schools?service=cleaning" className="rounded-lg border border-slate-200 p-3 hover:border-brand-500 hover:bg-slate-50">
+                  <span className="block text-sm font-semibold">بلا مشرف نظافة</span>
+                  <strong className="mt-1 block text-2xl text-brand-900">{formatNumber(dashboard.supervisorCoverage.cleaningMissing.length)}</strong>
+                  <span className="text-xs text-brand-700 underline">فتح قائمة المدارس</span>
+                </Link>
+              </div>}
+        </section>
+      )}
+
       <section className="dashboard-filterbar card">
         <div className="dashboard-filter-disclosure">
           <div className="dashboard-filter-heading">

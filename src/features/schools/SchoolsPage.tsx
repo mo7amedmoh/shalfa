@@ -16,8 +16,10 @@ import { DuplicateSchoolWarning } from './SchoolSyncWarnings';
 import { SchoolDetails } from './SchoolDetails';
 import { SchoolMapMarkers } from './SchoolMapMarkers';
 import { SchoolSizeCorrectionBadge } from './SchoolSizeCorrectionBadge';
+import { SchoolSupervisorDisplay } from './SchoolSupervisorDisplay';
 import { selectSchoolOnMap } from './schoolMapView';
 import type { SchoolRecord } from './schoolTypes';
+import { loadCurrentSchoolSupervisors, loadSheetSupervisorFallback } from '../../lib/schoolSupervisors';
 import { hasSizeClassDifference, normalizeSchoolSize, SCHOOL_SIZE_CODES, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize } from '../../domain/staffing';
 import 'leaflet/dist/leaflet.css';
 
@@ -44,16 +46,24 @@ const categoricalHeaders = ['الحي', 'نوع المبنى', 'حجم المد�
 
 async function loadSchools(): Promise<SchoolRecord[]> {
   if (!supabase) return [];
-  const [schoolsResult, corrections] = await Promise.all([
+  const [schoolsResult, corrections, currentSupervisors, useSheetSupervisorFallback] = await Promise.all([
     supabase.from('schools')
       .select(APP_SCHEMA_SELECT.schoolsMap)
       .order('source_row'),
     loadSchoolSizeCorrections(),
+    loadCurrentSchoolSupervisors(),
+    loadSheetSupervisorFallback(),
   ]);
   if (schoolsResult.error) throw schoolsResult.error;
   const correctionBySchool = new Map(corrections.map((correction) => [correction.schoolId, correction]));
+  const supervisorsBySchool = new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment]));
   return z.array(schoolSchema).parse(schoolsResult.data)
-    .map((school) => ({ ...school, sizeCorrection: correctionBySchool.get(school.id) ?? null }));
+    .map((school) => ({
+      ...school,
+      sizeCorrection: correctionBySchool.get(school.id) ?? null,
+      currentSupervisors: supervisorsBySchool.get(school.id) ?? null,
+      useSheetSupervisorFallback,
+    }));
 }
 
 function cellValue(school: SchoolRecord, header: string): string {
@@ -226,14 +236,20 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
 
   const filterHeaders = categoricalHeaders.filter((header) => columns.some((column) => column.header === header));
   const sizeDiffOnly = searchParams.get('sizeDiff') === 'true';
+  const missingSupervisorFilter = searchParams.get('missingSupervisor');
   const filtered = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
     return schools.filter((school) => {
       if (sizeDiffOnly && !hasSizeClassDifference(school.size_source, school.class_count)) return false;
+      if (missingSupervisorFilter === 'maintenance' && school.currentSupervisors?.maintenance_supervisor_id) return false;
+      if (missingSupervisorFilter === 'cleaning' && school.currentSupervisors?.cleaning_supervisor_id) return false;
+      if (missingSupervisorFilter === 'either'
+        && school.currentSupervisors?.maintenance_supervisor_id
+        && school.currentSupervisors?.cleaning_supervisor_id) return false;
       if (needle && !school.source_columns.some(({ value }) => displayValue(value).toLocaleLowerCase().includes(needle))) return false;
       return filterHeaders.every((header) => !filters[header] || cellValue(school, header) === filters[header]);
     });
-  }, [schools, search, filters, filterHeaders, sizeDiffOnly]);
+  }, [schools, search, filters, filterHeaders, sizeDiffOnly, missingSupervisorFilter]);
   const mappableSchools = useMemo(() => schoolsWithMapCoordinates(filtered), [filtered]);
   const slimMapSchools = useMemo(() => mappableSchools.map(toSlimMapSchool), [mappableSchools]);
   const coordinateIssues = useMemo(() => filtered.filter((school) =>
@@ -409,6 +425,10 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
         تعرض القائمة المدارس التي يختلف فيها مؤشر الحجم الصريح عن الحجم المرجعي المحسوب من عدد الفصول.
         {' '}<Link to="/schools" className="font-semibold underline">إلغاء التصفية</Link>
       </p>}
+      {['maintenance', 'cleaning', 'either'].includes(missingSupervisorFilter ?? '') && <p role="status" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+        تعرض القائمة المدارس التي لا تملك إسنادًا حاليًا للمشرف المحدد.
+        {' '}<Link to="/schools" className="font-semibold underline">إلغاء التصفية</Link>
+      </p>}
 
       <section className="schools-toolbar card p-3">
         <div className="schools-search-row">
@@ -533,12 +553,14 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
       ) : (
         <section className="schools-table-scroll">
           <table dir="rtl" className="schools-source-table">
-            <thead><tr>{columns.filter(({ index }) => visible.has(index)).map(({ index, header }) => (
+            <thead><tr>{columns.filter(({ index, header }) => visible.has(index)
+              && header !== 'اسم المشرف (صيانة)' && header !== 'اسم المشرف (نظافة)').map(({ index, header }) => (
               <th key={index} style={styleForColumn(index, header, true)}>{header}</th>
-            ))}{canManageSchools && <th className="school-actions-cell">إجراءات</th>}</tr></thead>
+            ))}<th>مشرف الصيانة</th><th>مشرف النظافة</th>{canManageSchools && <th className="school-actions-cell">إجراءات</th>}</tr></thead>
             <tbody>{filtered.map((school, rowIndex) => (
               <tr key={school.id} className={school.missing_from_sheet_at ? 'school-row-missing' : ''}>
-                {columns.filter(({ index }) => visible.has(index)).map(({ index, header }) => (
+                {columns.filter(({ index, header }) => visible.has(index)
+                  && header !== 'اسم المشرف (صيانة)' && header !== 'اسم المشرف (نظافة)').map(({ index, header }) => (
                   header === 'المبني' ? (() => {
                     const buildingNumber = cellValue(school, 'م');
                     const buildingName = resolvedBuildingNames.get(school.id) ?? '';
@@ -580,6 +602,16 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
                     </td>
                   )
                 ))}
+                <td><SchoolSupervisorDisplay
+                  employeeId={school.currentSupervisors?.maintenance_supervisor_id ?? null}
+                  employeeName={school.currentSupervisors?.maintenance_supervisor_name ?? null}
+                  sheetName={school.useSheetSupervisorFallback === false ? '' : cellValue(school, 'اسم المشرف (صيانة)')}
+                /></td>
+                <td><SchoolSupervisorDisplay
+                  employeeId={school.currentSupervisors?.cleaning_supervisor_id ?? null}
+                  employeeName={school.currentSupervisors?.cleaning_supervisor_name ?? null}
+                  sheetName={school.useSheetSupervisorFallback === false ? '' : cellValue(school, 'اسم المشرف (نظافة)')}
+                /></td>
                 {canManageSchools && (
                   <td className="school-actions-cell">
                     <button type="button" onClick={() => openEdit(school)} aria-label={`تعديل ${school.school_name}`} title="تعديل" className="school-action-button school-action-edit"><Pencil size={15} /></button>

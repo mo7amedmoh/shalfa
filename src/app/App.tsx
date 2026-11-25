@@ -79,6 +79,12 @@ const CustomPlanPage = lazy(() =>
 const WorkforcePage = lazy(() =>
   import('../features/workforce/WorkforcePage').then((module) => ({ default: module.WorkforcePage })),
 );
+const UnassignedSupervisorSchoolsPage = lazy(() =>
+  import('../features/workforce/UnassignedSupervisorSchoolsPage').then((module) => ({ default: module.UnassignedSupervisorSchoolsPage })),
+);
+const SupervisorMigrationPage = lazy(() =>
+  import('../features/workforce/SupervisorMigrationPage').then((module) => ({ default: module.SupervisorMigrationPage })),
+);
 const RewardsPage = lazy(() =>
   import('../features/rewards/RewardsPage').then((module) => ({ default: module.RewardsPage })),
 );
@@ -227,6 +233,7 @@ function AppShell({
       if (found) return found.label;
     }
     if (location.pathname.startsWith('/general-plans/')) return 'الخطة العامة';
+    if (location.pathname === '/workforce/supervisor-migration') return 'ترحيل المشرفين من الشيت';
     if (location.pathname.startsWith('/plans/')) return 'الخطط الشهرية';
     if (location.pathname.startsWith('/kpi/')) return 'مؤشرات الأداء';
     if (location.pathname.startsWith('/placement/')) return 'أعمال إدارية';
@@ -393,6 +400,8 @@ function AppShell({
               <Route path="/general-plans/:type" element={<RequirePermission permission="plans.view"><GeneralPlansPage profile={profile} /></RequirePermission>} />
               <Route path="/plans/custom/:typeId" element={<RequirePermission permission="plans.view"><CustomPlanPage /></RequirePermission>} />
               <Route path="/workforce" element={<RequirePermission permission="workforce.view"><WorkforcePage profile={profile} /></RequirePermission>} />
+              <Route path="/workforce/unassigned-schools" element={<RequirePermission permission="workforce.view"><UnassignedSupervisorSchoolsPage /></RequirePermission>} />
+              <Route path="/workforce/supervisor-migration" element={<RequirePermission permission="workforce.assign_schools"><SupervisorMigrationPage /></RequirePermission>} />
               <Route path="/placement/cleaners" element={<RequirePermission permission="placement.cleaners.view"><CleanerPlacementPage profile={profile} /></RequirePermission>} />
               <Route path="/placement/attendance" element={<RequirePermission permission="attendance.view"><AttendancePage /></RequirePermission>} />
               <Route path="/placement/gatekeepers" element={<RequirePermission permission="placement.gatekeepers.view"><GatekeeperPlacementPage profile={profile} /></RequirePermission>} />

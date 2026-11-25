@@ -18,6 +18,7 @@ import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { loadXlsx } from '../../lib/xlsx';
 import { exportReportPdf } from '../../lib/reportPdf';
+import { loadCurrentSchoolSupervisors, loadSheetSupervisorFallback } from '../../lib/schoolSupervisors';
 import { useReportData } from './reportData';
 import { defaultReportLayout, getReportLayout, normalizeReportLayout, reportSections, type ReportLayoutItem } from './reportSections';
 
@@ -70,21 +71,26 @@ async function fetchMonthRows(month: string): Promise<ReportPlanRow[]> {
   const rows = z.array(reportRowSchema).parse(data);
   const ids = [...new Set(rows.flatMap((row) => [row.engineer_id, row.supervisor_id].filter((id): id is string => Boolean(id))))];
   const schoolIds = [...new Set(rows.map((row) => row.school_id))];
-  const [employees, cleaners] = await Promise.all([
+  const [employees, cleaners, currentSupervisors, useSheetFallback] = await Promise.all([
     ids.length ? supabase.from('employees').select(APP_SCHEMA_SELECT.reportEmployees).in('id', ids) : Promise.resolve({ data: [], error: null }),
     schoolIds.length ? supabase.from('cleaner_assignments').select(APP_SCHEMA_SELECT.cleanerAssignmentSchool).in('school_id', schoolIds) : Promise.resolve({ data: [], error: null }),
+    loadCurrentSchoolSupervisors(schoolIds),
+    loadSheetSupervisorFallback(),
   ]);
   if (employees.error) throw employees.error;
   if (cleaners.error) throw cleaners.error;
   const names = new Map(z.array(employeeSchema).parse(employees.data).map((employee) => [employee.id, employee.full_name]));
+  const supervisorsBySchool = new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment]));
   const cleanerIds = new Set(z.array(cleanerSchema).parse(cleaners.data).map((row) => row.school_id));
   return rows.map((row) => {
     const plan = plans.find((item) => item.id === row.plan_id)!;
     const supervisor = reportSupervisorForPlanRow({
       planType: plan.plan_type,
       supervisorId: row.supervisor_id,
-      supervisorName: row.supervisor_name,
+      supervisorName: row.supervisor_id ? names.get(row.supervisor_id) ?? row.supervisor_name : row.supervisor_name,
+      currentSupervisor: supervisorsBySchool.get(row.school_id),
       schoolSourceFields: row.school?.source_fields,
+      useSheetFallback,
     });
     return {
       id: row.id, planId: row.plan_id, lateByPlannedDate: plan.late_by_planned_date, month, planType: plan.plan_type, plannedDate: row.planned_date, visited: row.visited, visitedDate: row.visited_date, reportDone: row.report_done, reportCompletedDate: row.report_done_date, updatedAt: row.updated_at ?? null,

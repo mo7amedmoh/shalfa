@@ -25,7 +25,7 @@ export function normalizeImportName(value: unknown): string {
 export type PlanPersonResolution<T> = {
   employee: T | null;
   name: string;
-  source: 'alias' | 'employee' | 'school' | 'free_text' | 'empty';
+  source: 'alias' | 'employee' | 'assignment' | 'school' | 'free_text' | 'empty';
 };
 
 export function resolvePlanPerson<T extends { id: string; full_name: string }>(
@@ -60,7 +60,21 @@ export function schoolPersonDefault(
   school: { source_fields: Record<string, unknown> },
   kind: 'engineer' | 'supervisor',
   planType: string,
+  currentSupervisors?: {
+    maintenance_supervisor_id?: string | null;
+    maintenance_supervisor_name?: string | null;
+    cleaning_supervisor_id?: string | null;
+    cleaning_supervisor_name?: string | null;
+  } | null,
+  useSheetFallback = true,
 ): string {
+  if (kind === 'supervisor') {
+    const assignedName = planType === 'cleaning'
+      ? currentSupervisors?.cleaning_supervisor_name
+      : currentSupervisors?.maintenance_supervisor_name;
+    if (assignedName?.trim()) return assignedName.trim();
+    if (!useSheetFallback) return '';
+  }
   const names = kind === 'engineer'
     ? ['اسم مهندس المرافق', 'اسم مهندس المقاول']
     : planType === 'cleaning' ? ['اسم المشرف (نظافة)'] : ['اسم المشرف (صيانة)'];
@@ -69,6 +83,46 @@ export function schoolPersonDefault(
     if (String(value ?? '').trim()) return String(value).trim();
   }
   return '';
+}
+
+export function resolveSchoolPlanPerson<T extends { id: string; full_name: string }>(
+  value: unknown,
+  employees: readonly T[],
+  aliases: readonly { alias_normalised: string; employee_id: string }[],
+  school: { source_fields: Record<string, unknown> },
+  planType: string,
+  currentSupervisors?: {
+    maintenance_supervisor_id?: string | null;
+    maintenance_supervisor_name?: string | null;
+    cleaning_supervisor_id?: string | null;
+    cleaning_supervisor_name?: string | null;
+  } | null,
+  useSheetFallback = true,
+): PlanPersonResolution<T> {
+  if (String(value ?? '').trim()) return resolvePlanPerson(value, employees, aliases);
+
+  const service = planType === 'cleaning' ? 'cleaning' : 'maintenance';
+  const employeeId = service === 'cleaning'
+    ? currentSupervisors?.cleaning_supervisor_id
+    : currentSupervisors?.maintenance_supervisor_id;
+  const employeeName = service === 'cleaning'
+    ? currentSupervisors?.cleaning_supervisor_name
+    : currentSupervisors?.maintenance_supervisor_name;
+  if (employeeId) {
+    const employee = employees.find((item) => item.id === employeeId);
+    return {
+      employee: employee ?? null,
+      name: employee?.full_name ?? employeeName?.trim() ?? '',
+      source: 'assignment',
+    };
+  }
+
+  return resolvePlanPerson(
+    '',
+    employees,
+    aliases,
+    schoolPersonDefault(school, 'supervisor', planType, currentSupervisors, useSheetFallback),
+  );
 }
 
 export function matchImportEmployees<T extends { id: string; full_name: string }>(

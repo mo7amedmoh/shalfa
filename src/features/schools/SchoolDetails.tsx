@@ -1,9 +1,16 @@
 import type { SchoolRecord } from './schoolTypes';
 import { SCHOOL_SIZE_LABELS } from '../../domain/staffing';
+import { SchoolSupervisorDisplay } from './SchoolSupervisorDisplay';
 
 function display(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—';
   return typeof value === 'string' || typeof value === 'number' ? String(value) : '—';
+}
+
+function supervisorSheetName(school: SchoolRecord, header: string): string {
+  if (school.useSheetSupervisorFallback === false) return '';
+  const value = school.source_columns.find((column) => column.header === header)?.value;
+  return value === null || value === undefined ? '' : display(value) === '—' ? '' : display(value).trim();
 }
 
 export function SchoolDetails({ school }: { school: SchoolRecord }) {
@@ -16,6 +23,18 @@ export function SchoolDetails({ school }: { school: SchoolRecord }) {
             <dd className="inline">{display(value)}</dd>
           </div>
         ))}
+      </dl>
+      <dl className="grid gap-2 border-t border-slate-200 pt-2">
+        <div><dt className="font-bold">مشرف الصيانة: </dt><dd><SchoolSupervisorDisplay
+          employeeId={school.currentSupervisors?.maintenance_supervisor_id ?? null}
+          employeeName={school.currentSupervisors?.maintenance_supervisor_name ?? null}
+          sheetName={supervisorSheetName(school, 'اسم المشرف (صيانة)')}
+        /></dd></div>
+        <div><dt className="font-bold">مشرف النظافة: </dt><dd><SchoolSupervisorDisplay
+          employeeId={school.currentSupervisors?.cleaning_supervisor_id ?? null}
+          employeeName={school.currentSupervisors?.cleaning_supervisor_name ?? null}
+          sheetName={supervisorSheetName(school, 'اسم المشرف (نظافة)')}
+        /></dd></div>
       </dl>
       <dl className="grid gap-1 border-t border-slate-200 pt-2">
         <div><dt className="inline font-bold">ضمن نطاق الخطط: </dt><dd className="inline">{school.plan_scope ? 'نعم' : 'لا'}</dd></div>

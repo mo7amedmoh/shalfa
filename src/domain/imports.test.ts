@@ -9,6 +9,7 @@ import {
   parseImportInteger,
   parseMonthlyPlanRows,
   resolvePlanPerson,
+  resolveSchoolPlanPerson,
   schoolPersonDefault,
 } from './imports';
 
@@ -53,6 +54,37 @@ describe('import value normalization', () => {
     const school = { source_fields: { 'اسم مهندس المرافق': 'مهندس المدرسة', 'رقم الاتصال': '0500000000', 'اسم المشرف (صيانة)': 'مشرف المدرسة' } };
     expect(schoolPersonDefault(school, 'engineer', 'maintenance')).toBe('مهندس المدرسة');
     expect(schoolPersonDefault(school, 'supervisor', 'maintenance')).toBe('مشرف المدرسة');
+    expect(schoolPersonDefault(school, 'supervisor', 'maintenance', {
+      maintenance_supervisor_id: 'assigned-id',
+      maintenance_supervisor_name: 'مشرف مسند',
+    })).toBe('مشرف مسند');
+    expect(schoolPersonDefault(school, 'supervisor', 'maintenance', {
+      maintenance_supervisor_id: 'assigned-id',
+      maintenance_supervisor_name: 'مشرف مسند',
+    }, false)).toBe('مشرف مسند');
+    expect(schoolPersonDefault(school, 'supervisor', 'maintenance', null, false)).toBe('');
+  });
+
+  it('resolves an assigned school supervisor by employee ID before aliases', () => {
+    const employees = [
+      { id: 'assigned', full_name: 'مشرف الإسناد' },
+      { id: 'alias-target', full_name: 'موظف آخر' },
+    ];
+    expect(resolveSchoolPlanPerson('', employees, [{
+      alias_normalised: normalizeImportName('مشرف الإسناد'),
+      employee_id: 'alias-target',
+    }], {
+      source_fields: { 'اسم المشرف (صيانة)': 'مشرف الإسناد' },
+    }, 'maintenance', {
+      maintenance_supervisor_id: 'assigned',
+      maintenance_supervisor_name: 'مشرف الإسناد',
+      cleaning_supervisor_id: null,
+      cleaning_supervisor_name: null,
+    })).toMatchObject({
+      employee: employees[0],
+      name: 'مشرف الإسناد',
+      source: 'assignment',
+    });
   });
 
   it.each([

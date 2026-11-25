@@ -11,26 +11,46 @@ import {
 } from './plans';
 
 describe('monthly plan date distribution', () => {
-  it('prefers the cleaning supervisor stored with the school and only updates rows with a source name', () => {
+  it('prefers saved cleaning supervisor text over the sheet, and syncs rows to current assignments', () => {
     const rows = [
       { id: 'one', supervisorName: 'اسم قديم', schoolSourceFields: { 'اسم المشرف (نظافة)': 'مشرف حقيقي' } },
       { id: 'two', supervisorName: 'مشرف حقيقي', schoolSourceFields: { 'اسم المشرف (نظافة)': 'مشرف حقيقي' } },
       { id: 'three', supervisorName: 'اسم محفوظ', schoolSourceFields: { 'اسم المشرف (نظافة)': '' } },
     ];
 
-    expect(cleaningSupervisorName(rows[0])).toBe('مشرف حقيقي');
+    expect(cleaningSupervisorName(rows[0])).toBe('اسم قديم');
     expect(cleaningSupervisorName(rows[2])).toBe('اسم محفوظ');
-    expect(cleaningSupervisorUpdates(rows)).toEqual([{ id: 'one', supervisorName: 'مشرف حقيقي' }]);
+    expect(cleaningSupervisorUpdates(rows)).toEqual([]);
+    expect(cleaningSupervisorUpdates([{
+      ...rows[0],
+      supervisorId: null,
+      currentSupervisor: {
+        school_id: 'school-1',
+        maintenance_supervisor_id: null,
+        maintenance_supervisor_name: null,
+        cleaning_supervisor_id: 'assigned',
+        cleaning_supervisor_name: 'مشرف مسند',
+      },
+    }])).toEqual([{ id: 'one', supervisorId: 'assigned', supervisorName: 'مشرف مسند' }]);
   });
 
-  it('uses the current maintenance supervisor stored with the school', () => {
+  it('uses the saved maintenance supervisor instead of an unvalidated name from the school sheet', () => {
     const row = {
       id: 'maintenance-row',
       supervisorName: 'مشرف قديم',
       schoolSourceFields: { 'اسم المشرف (صيانة)': 'مشرف الصيانة المعتمد' },
     };
 
-    expect(monthlySupervisorName(row, 'maintenance')).toBe('مشرف الصيانة المعتمد');
+    expect(monthlySupervisorName(row, 'maintenance')).toBe('مشرف قديم');
+    expect(monthlySupervisorName({ ...row, supervisorName: null }, 'maintenance')).toBe('مشرف الصيانة المعتمد');
+  });
+
+  it('does not present a name recorded for a school gatekeeper as a maintenance supervisor', () => {
+    expect(monthlySupervisorName({
+      id: 'maintenance-row',
+      supervisorName: 'حارس المدرسة',
+      schoolSourceFields: { 'اسم المشرف (صيانة)': 'حارس المدرسة' },
+    }, 'maintenance', [' حَارِس المدرسة '])).toBeNull();
   });
 
   it('searches plan rows by normalized school name or ministry number', () => {

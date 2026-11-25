@@ -1,5 +1,6 @@
 import type { SchoolSize } from '../../domain/staffing';
 import type { SchoolSizeCorrectionDetails } from '../../lib/schoolSizeCorrections';
+import type { CurrentSchoolSupervisors } from '../../domain/schoolSupervisors';
 
 export type SchoolSourceColumn = { header: string; value: unknown };
 
@@ -20,4 +21,6 @@ export type SchoolRecord = {
   class_count: number | null;
   building_type: string | null;
   has_elevator_contractor: boolean;
+  currentSupervisors?: CurrentSchoolSupervisors | null;
+  useSheetSupervisorFallback?: boolean;
 };

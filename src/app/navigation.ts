@@ -47,6 +47,7 @@ export const navigation: NavigationEntry[] = [
   },
   { label: 'المباني المدرسية', path: '/schools', icon: Building2, permission: 'schools.view' },
   { label: 'القوى العاملة', path: '/workforce', icon: Users, permission: 'workforce.view' },
+  { label: 'ترحيل المشرفين من الشيت', path: '/workforce/supervisor-migration', icon: Users, permission: 'workforce.assign_schools' },
   {
     label: 'المخزون',
     icon: Package,

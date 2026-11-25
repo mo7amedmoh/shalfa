@@ -34,20 +34,67 @@ const row = (values: Partial<ReportPlanRow> = {}): ReportPlanRow => ({
 });
 
 describe('monthly plan report metrics', () => {
-  it('uses the school database cleaning supervisor instead of a stale employee assignment', () => {
+  it('uses a saved supervisor ID before the current assignment and legacy text', () => {
     expect(reportSupervisorForPlanRow({
       planType: 'cleaning',
-      supervisorId: 'old-supervisor',
-      supervisorName: 'مشرف سابق',
+      supervisorId: 'saved-supervisor',
+      supervisorName: 'المشرف المحفوظ',
+      currentSupervisor: {
+        school_id: 'school-1',
+        maintenance_supervisor_id: null,
+        maintenance_supervisor_name: null,
+        cleaning_supervisor_id: 'current-supervisor',
+        cleaning_supervisor_name: 'المشرف الحالي',
+      },
       schoolSourceFields: { 'اسم المشرف (نظافة)': 'مشرف النظافة المعتمد' },
-    })).toEqual({ supervisorId: null, supervisorName: 'مشرف النظافة المعتمد' });
+    })).toEqual({ supervisorId: 'saved-supervisor', supervisorName: 'المشرف المحفوظ' });
+  });
+
+  it('uses current assignment before saved text, then the optional sheet fallback', () => {
+    expect(reportSupervisorForPlanRow({
+      planType: 'maintenance',
+      supervisorId: null,
+      supervisorName: 'مشرف الخطة القديم',
+      currentSupervisor: {
+        school_id: 'school-1',
+        maintenance_supervisor_id: 'maintenance-supervisor',
+        maintenance_supervisor_name: 'مشرف الصيانة الحالي',
+        cleaning_supervisor_id: null,
+        cleaning_supervisor_name: null,
+      },
+      schoolSourceFields: { 'اسم المشرف (صيانة)': 'مشرف الشيت' },
+    })).toEqual({ supervisorId: 'maintenance-supervisor', supervisorName: 'مشرف الصيانة الحالي' });
 
     expect(reportSupervisorForPlanRow({
       planType: 'maintenance',
-      supervisorId: 'maintenance-supervisor',
-      supervisorName: 'مشرف قديم',
-      schoolSourceFields: { 'اسم المشرف (صيانة)': 'مشرف الصيانة المعتمد' },
-    })).toEqual({ supervisorId: null, supervisorName: 'مشرف الصيانة المعتمد' });
+      supervisorId: null,
+      supervisorName: null,
+      schoolSourceFields: { 'اسم المشرف (صيانة)': 'مشرف الشيت' },
+    })).toEqual({ supervisorId: null, supervisorName: 'مشرف الشيت' });
+
+    expect(reportSupervisorForPlanRow({
+      planType: 'maintenance',
+      supervisorId: null,
+      supervisorName: null,
+      schoolSourceFields: { 'اسم المشرف (صيانة)': 'مشرف الشيت' },
+      useSheetFallback: false,
+    })).toEqual({ supervisorId: null, supervisorName: null });
+  });
+
+  it('preserves the displayed name for a school assigned to the same person as the sheet', () => {
+    expect(reportSupervisorForPlanRow({
+      planType: 'maintenance',
+      supervisorId: null,
+      supervisorName: null,
+      currentSupervisor: {
+        school_id: 'school-1',
+        maintenance_supervisor_id: 'same-supervisor',
+        maintenance_supervisor_name: 'مشرف مطابق',
+        cleaning_supervisor_id: null,
+        cleaning_supervisor_name: null,
+      },
+      schoolSourceFields: { 'اسم المشرف (صيانة)': 'مشرف مطابق' },
+    })).toEqual({ supervisorId: 'same-supervisor', supervisorName: 'مشرف مطابق' });
   });
 
   it('returns zero-safe metrics for a month with no plan rows', () => {

@@ -1,5 +1,6 @@
 import type { PlanType } from './types';
-import { normalizeImportName, schoolPersonDefault } from './imports';
+import { normalizeImportName } from './imports';
+import { resolvePlanSupervisor, type CurrentSchoolSupervisors } from './schoolSupervisors';
 
 export type ReportAxis = 'maintenance' | 'cleaning' | 'elevators' | 'security_safety';
 export type ReportAxisFilter = ReportAxis | 'all';
@@ -32,17 +33,18 @@ export function reportSupervisorForPlanRow(input: {
   planType: ReportAxis;
   supervisorId: string | null;
   supervisorName: string | null;
+  currentSupervisor?: CurrentSchoolSupervisors | null;
   schoolSourceFields?: Record<string, unknown> | null;
+  useSheetFallback?: boolean;
 }): { supervisorId: string | null; supervisorName: string | null } {
-  if (input.planType === 'cleaning' || input.planType === 'maintenance') {
-    const sourceName = schoolPersonDefault(
-      { source_fields: input.schoolSourceFields ?? {} },
-      'supervisor',
-      input.planType,
-    );
-    if (sourceName) return { supervisorId: null, supervisorName: sourceName };
-  }
-  return { supervisorId: input.supervisorId, supervisorName: input.supervisorName };
+  return resolvePlanSupervisor({
+    planType: input.planType,
+    supervisorId: input.supervisorId,
+    supervisorName: input.supervisorName,
+    current: input.currentSupervisor,
+    schoolSourceFields: input.schoolSourceFields,
+    useSheetFallback: input.useSheetFallback,
+  });
 }
 
 export type ReportPlanMetricRow = Pick<

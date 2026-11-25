@@ -4,12 +4,14 @@ import { Download, FileSpreadsheet, Upload, X } from 'lucide-react';
 import type * as XLSX from 'xlsx';
 import { loadXlsx } from '../../lib/xlsx';
 import { z } from 'zod';
-import { autoDetectImportColumns, matchImportEmployees, normalizeImportName, normalizeMinistryNumber, normalizePhone, parseImportDate, parseMonthlyPlanRows, resolvePlanPerson, schoolPersonDefault } from '../../domain/imports';
+import { autoDetectImportColumns, matchImportEmployees, normalizeImportName, normalizeMinistryNumber, normalizePhone, parseImportDate, parseMonthlyPlanRows, resolvePlanPerson, resolveSchoolPlanPerson, schoolPersonDefault } from '../../domain/imports';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
 import type { GeneralPlanType, PlanType } from '../../domain/types';
 import type { UserProfile } from '../../lib/auth';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { supabase } from '../../lib/supabase';
+import { loadCurrentSchoolSupervisors, loadSheetSupervisorFallback } from '../../lib/schoolSupervisors';
+import type { CurrentSchoolSupervisors } from '../../domain/schoolSupervisors';
 
 type ImportTarget =
   | { kind: 'monthly'; planType: PlanType }
@@ -18,13 +20,14 @@ type ImportTarget =
   | { kind: 'gatekeepers' };
 
 type Field = { key: string; label: string; aliases: string[]; required?: boolean; occurrence?: number };
-type SchoolRef = { id: string; ministry_no: string; ministry_key: string; name: string; plan_scope: boolean; source_fields: Record<string, unknown> };
+type SchoolRef = { id: string; ministry_no: string; ministry_key: string; name: string; plan_scope: boolean; source_fields: Record<string, unknown>; currentSupervisors: CurrentSchoolSupervisors | null };
 type EmployeeRef = { id: string; full_name: string; employee_no: string | null; category: string; job_title: string | null; phone: string | null };
 type AliasRef = { alias_normalised: string; employee_id: string };
 type ImportReferences = {
   schools: SchoolRef[];
   employees: EmployeeRef[];
   aliases: AliasRef[];
+  useSheetSupervisorFallback: boolean;
   gatekeeperSchoolIds: Set<string>;
   existingGatekeeperPhones: string[];
   eligibility: PlanEligibilityConfig | null;
@@ -247,7 +250,7 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
   async function loadReferences(): Promise<ImportReferences> {
     if (!supabase) throw new Error('يلزم إعداد الاتصال بقاعدة البيانات.');
     const client = supabase;
-    const [schools, employees, aliases, gatekeepers, configResult] = await Promise.all([
+    const [schools, employees, aliases, gatekeepers, configResult, currentSupervisors, useSheetSupervisorFallback] = await Promise.all([
       loadAllPages(async (start, end) => {
         let query = client.from('schools').select(APP_SCHEMA_SELECT.schoolsImport).order('name');
         if (target.kind === 'gatekeepers') query = query.eq('plan_scope', true);
@@ -273,14 +276,21 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
         return data;
       }),
       client.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
+      loadCurrentSchoolSupervisors(),
+      loadSheetSupervisorFallback(),
     ]);
     if (configResult.error) throw configResult.error;
     const eligibility = configResult.data ? eligibilitySchema.parse(configResult.data.value) : null;
     const gatekeeperRows = z.array(z.object({ school_id: z.string().uuid(), phone: z.string().nullable() })).parse(gatekeepers);
+    const assignmentsBySchool = new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment]));
     return {
-      schools: z.array(schoolSchema).parse(schools),
+      schools: z.array(schoolSchema).parse(schools).map((school) => ({
+        ...school,
+        currentSupervisors: assignmentsBySchool.get(school.id) ?? null,
+      })),
       employees: z.array(employeeSchema).parse(employees),
       aliases: aliasesSchema.parse(aliases),
+      useSheetSupervisorFallback,
       gatekeeperSchoolIds: new Set(gatekeeperRows.map((row) => row.school_id)),
       existingGatekeeperPhones: gatekeeperRows.map((row) => row.phone ?? ''),
       eligibility,
@@ -502,7 +512,9 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
       const supervisorField = target.planType === 'maintenance' || target.planType === 'cleaning';
       const engineerResolution = resolvePlanPerson(row.values.engineer, references?.employees ?? [], references?.aliases ?? [], school ? schoolPersonDefault(school, 'engineer', target.planType) : '');
       const supervisorResolution = supervisorField
-        ? resolvePlanPerson(row.values.assignment, references?.employees ?? [], references?.aliases ?? [], school ? schoolPersonDefault(school, 'supervisor', target.planType) : '')
+        ? school
+          ? resolveSchoolPlanPerson(row.values.assignment, references?.employees ?? [], references?.aliases ?? [], school, target.planType, school.currentSupervisors, references?.useSheetSupervisorFallback)
+          : resolvePlanPerson(row.values.assignment, references?.employees ?? [], references?.aliases ?? [])
         : { employee: null, name: '', source: 'empty' as const };
       const engineer = row.engineerId ? references?.employees.find((item) => item.id === row.engineerId) ?? null : engineerResolution.employee;
       const supervisor = row.supervisorId ? references?.employees.find((item) => item.id === row.supervisorId) ?? null : supervisorResolution.employee;
@@ -525,7 +537,9 @@ function ImportWizard({ target, profile, onClose }: { target: ImportTarget; prof
     }
     if (target.kind === 'general') {
       const engineerResolution = resolvePlanPerson(row.values.engineer, references?.employees ?? [], references?.aliases ?? [], school ? schoolPersonDefault(school, 'engineer', target.planType) : '');
-      const supervisorResolution = resolvePlanPerson(row.values.supervisor, references?.employees ?? [], references?.aliases ?? [], school ? schoolPersonDefault(school, 'supervisor', target.planType) : '');
+      const supervisorResolution = school
+        ? resolveSchoolPlanPerson(row.values.supervisor, references?.employees ?? [], references?.aliases ?? [], school, target.planType, school.currentSupervisors, references?.useSheetSupervisorFallback)
+        : resolvePlanPerson(row.values.supervisor, references?.employees ?? [], references?.aliases ?? []);
       if (engineerResolution.source === 'school') notes.push('مأخوذ من قاعدة المباني: اسم المهندس.');
       if (supervisorResolution.source === 'school') notes.push('مأخوذ من قاعدة المباني: اسم المشرف.');
       if (engineerResolution.name && !engineerResolution.employee) notes.push('اسم نصي (غير مسجل): المهندس.');

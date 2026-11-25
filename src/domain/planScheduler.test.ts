@@ -51,6 +51,27 @@ describe('plan scheduler', () => {
     expect(result.summary.warnings).toEqual([]);
   });
 
+  it('keeps the assigned supervisor ID when a same-name alias points elsewhere', () => {
+    const result = schedulePlan([{
+      id: 'school-1',
+      name: 'مدرسة',
+      supervisorId: 'assigned',
+      supervisorName: 'مشرف مشترك',
+    }], {
+      startDate: '2026-11-08',
+      endDate: '2026-11-09',
+      weekendDays: [],
+      defaultMaxSchoolsPerDay: 1,
+      supervisors: [{ id: 'alias-target', name: 'مشرف مشترك' }],
+      assignmentMode: 'keep',
+      clusterBy: 'none',
+    });
+
+    expect(result.assignments).toMatchObject([{ supervisorId: 'assigned', supervisorName: 'مشرف مشترك' }]);
+    expect(result.summary.matrix.find((row) => row.supervisorId === 'assigned'))
+      .toMatchObject({ supervisorId: 'assigned', supervisorName: 'مشرف مشترك' });
+  });
+
   it('warns when total work exceeds capacity and when an edited day exceeds a cap', () => {
     const assignments = schedulePlan(schools(5), {
       startDate: '2026-11-08',

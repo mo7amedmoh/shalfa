@@ -11,6 +11,8 @@ import type { ScheduleAssignment } from '../../domain/planScheduler';
 import type { PlanEligibilityConfig } from '../../domain/planEligibility';
 import { usePermission } from '../../app/permissionContext';
 import { supabase } from '../../lib/supabase';
+import { loadCurrentSchoolSupervisors, loadSheetSupervisorFallback } from '../../lib/schoolSupervisors';
+import type { CurrentSchoolSupervisors } from '../../domain/schoolSupervisors';
 import { BulkPlanUpdates } from './BulkPlanUpdates';
 import { SupervisorPlanGenerator } from './SupervisorPlanGenerator';
 
@@ -57,11 +59,18 @@ async function loadType(typeId: string): Promise<CustomPlanType> {
   return customPlanTypeSchema.parse(data);
 }
 
-async function loadCandidates(): Promise<{ schools: School[]; config: PlanEligibilityConfig | null }> {
-  if (!supabase) return { schools: [], config: null };
-  const [schoolsResult, configResult] = await Promise.all([
+async function loadCandidates(): Promise<{
+  schools: School[];
+  config: PlanEligibilityConfig | null;
+  currentSupervisors: Map<string, CurrentSchoolSupervisors>;
+  useSheetSupervisorFallback: boolean;
+}> {
+  if (!supabase) return { schools: [], config: null, currentSupervisors: new Map(), useSheetSupervisorFallback: true };
+  const [schoolsResult, configResult, currentSupervisors, useSheetSupervisorFallback] = await Promise.all([
     supabase.from('schools').select('id,name,ministry_no,ministry_key,extra,plan_scope,neighbourhood,latitude:lat,longitude:lng').order('name'),
     supabase.from('app_config').select('value').eq('key', 'plan_eligibility').maybeSingle(),
+    loadCurrentSchoolSupervisors(),
+    loadSheetSupervisorFallback(),
   ]);
   if (schoolsResult.error) throw schoolsResult.error;
   if (configResult.error) throw configResult.error;
@@ -69,7 +78,11 @@ async function loadCandidates(): Promise<{ schools: School[]; config: PlanEligib
     id: z.string().uuid(), name: z.string(), ministry_no: z.string(), ministry_key: z.string(),
     extra: z.record(z.string(), z.unknown()), plan_scope: z.boolean().nullable(),
     neighbourhood: z.string().nullable(), latitude: z.number().nullable(), longitude: z.number().nullable(),
-  })).parse(schoolsResult.data), config: configResult.data ? configSchema.parse(configResult.data.value) : null };
+  })).parse(schoolsResult.data),
+    config: configResult.data ? configSchema.parse(configResult.data.value) : null,
+    currentSupervisors: new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment])),
+    useSheetSupervisorFallback,
+  };
 }
 
 export function CustomPlanPage() {
@@ -125,14 +138,25 @@ export function CustomPlanPage() {
     .map((school) => {
       const sourceFields = { ...school.extra, plan_scope: school.plan_scope };
       const planType = type?.name.includes('نظافة') ? 'cleaning' : 'maintenance';
-      const knownName = schoolPersonDefault({ source_fields: sourceFields }, 'supervisor', planType);
-      const anySupervisor = Object.entries(sourceFields)
-        .find(([key, value]) => /مشرف/.test(key) && !/تكييف|شركة/.test(key) && String(value ?? '').trim());
+      const currentSupervisors = candidates.data?.currentSupervisors.get(school.id);
+      const knownName = schoolPersonDefault(
+        { source_fields: sourceFields },
+        'supervisor',
+        planType,
+        currentSupervisors,
+        candidates.data?.useSheetSupervisorFallback ?? true,
+      );
       return {
         id: school.id,
         name: school.name,
         ministryNumber: school.ministry_no,
-        supervisorName: knownName || String(anySupervisor?.[1] ?? '').trim() || null,
+        supervisorId: planType === 'cleaning'
+          ? currentSupervisors?.cleaning_supervisor_id ?? null
+          : currentSupervisors?.maintenance_supervisor_id ?? null,
+        supervisorName: knownName || null,
+        hasCurrentSupervisorAssignment: Boolean(planType === 'cleaning'
+          ? currentSupervisors?.cleaning_supervisor_id
+          : currentSupervisors?.maintenance_supervisor_id),
         neighbourhood: school.neighbourhood,
         latitude: school.latitude,
         longitude: school.longitude,

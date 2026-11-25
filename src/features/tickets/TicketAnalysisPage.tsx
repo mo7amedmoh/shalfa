@@ -20,6 +20,7 @@ import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { supabase } from '../../lib/supabase';
 import { exportReportPdf } from '../../lib/reportPdf';
 import { loadXlsx } from '../../lib/xlsx';
+import { loadCurrentSchoolSupervisors, loadSheetSupervisorFallback } from '../../lib/schoolSupervisors';
 import {
   defaultTicketReportLayout,
   getTicketReportLayout,
@@ -42,14 +43,15 @@ interface TicketReportData {
 
 const ticketReportCoreSections = ['header', 'summary'];
 const schoolSupervisorSchema = z.object({
+  id: z.string().uuid(),
   ministry_number: z.string(),
   ministry_key: z.string().nullable(),
   source_fields: z.record(z.string(), z.unknown()).nullable(),
 });
 
-async function loadSchoolSupervisorSources(): Promise<TicketSchoolSupervisorSource[]> {
+async function loadSchoolSupervisorSources(): Promise<{ schools: TicketSchoolSupervisorSource[]; useSheetFallback: boolean }> {
   if (!supabase) throw new Error('إعداد الاتصال بقاعدة البيانات غير مكتمل.');
-  const sources: TicketSchoolSupervisorSource[] = [];
+  const schoolRows: z.infer<typeof schoolSupervisorSchema>[] = [];
   const pageSize = 1000;
   for (let offset = 0; ; offset += pageSize) {
     const { data, error } = await supabase.from('schools')
@@ -58,13 +60,24 @@ async function loadSchoolSupervisorSources(): Promise<TicketSchoolSupervisorSour
       .range(offset, offset + pageSize - 1);
     if (error) throw error;
     const page = z.array(schoolSupervisorSchema).parse(data);
-    sources.push(...page.map((school) => ({
+    schoolRows.push(...page);
+    if (page.length < pageSize) break;
+  }
+  const [currentSupervisors, useSheetFallback] = await Promise.all([
+    loadCurrentSchoolSupervisors(schoolRows.map((school) => school.id)),
+    loadSheetSupervisorFallback(),
+  ]);
+  const assignments = new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment]));
+  return {
+    schools: schoolRows.map((school) => ({
+      id: school.id,
       ministryNumber: school.ministry_number,
       ministryKey: school.ministry_key,
       sourceFields: school.source_fields,
-    })));
-    if (page.length < pageSize) return sources;
-  }
+      currentSupervisor: assignments.get(school.id) ?? null,
+    })),
+    useSheetFallback,
+  };
 }
 
 async function parseSpreadsheet(file: File) {
@@ -93,6 +106,7 @@ async function analyzeSpreadsheets(
   files: readonly File[],
   schoolSources: readonly TicketSchoolSupervisorSource[],
   supervisorLookupUnavailable: boolean,
+  useSheetFallback: boolean,
 ): Promise<TicketReportData> {
   if (!files.length) throw new Error('اختر ملفًا واحدًا على الأقل.');
   const parsedFiles = await Promise.all(files.map(async (file) => {
@@ -104,7 +118,7 @@ async function analyzeSpreadsheets(
     }
   }));
   const allTickets = deduplicateTicketRecords(parsedFiles.flatMap(({ tickets }) => tickets));
-  const tickets = attachSchoolSupervisors(allTickets, schoolSources);
+  const tickets = attachSchoolSupervisors(allTickets, schoolSources, useSheetFallback);
   const currentMonth = currentUtcMonth();
   const currentTickets = filterTicketRecordsByCreatedMonth(tickets, currentMonth);
   return {
@@ -177,8 +191,9 @@ export function TicketAnalysisPage() {
     try {
       setReport(await analyzeSpreadsheets(
         files,
-        schoolSourcesQuery.data ?? [],
+        schoolSourcesQuery.data?.schools ?? [],
         Boolean(schoolSourcesQuery.error),
+        schoolSourcesQuery.data?.useSheetFallback ?? true,
       ));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'تعذر تحليل ملف البلاغات.');

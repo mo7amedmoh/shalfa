@@ -3,6 +3,7 @@ import { normalizeImportName } from './imports';
 export type SchedulerSchool = {
   id: string;
   name: string;
+  supervisorId?: string | null;
   supervisorName?: string | null;
   neighbourhood?: string | null;
   latitude?: number | null;
@@ -155,8 +156,19 @@ function supervisorsFor(
   const supervisors = [...configuredSupervisors];
   if (assignmentMode === 'keep') {
     const configuredNames = new Set(supervisors.map((supervisor) => normalizeImportName(supervisor.name)));
-    for (const name of schools.map((school) => school.supervisorName?.trim() ?? '').filter(Boolean)) {
+    const configuredIds = new Set(supervisors.map((supervisor) => supervisor.id));
+    for (const school of schools) {
+      if (school.supervisorId && school.supervisorName?.trim() && !configuredIds.has(school.supervisorId)) {
+        supervisors.push({ id: school.supervisorId, name: school.supervisorName.trim() });
+        configuredIds.add(school.supervisorId);
+      }
+      const name = school.supervisorName?.trim() ?? '';
+      if (!name) continue;
       const normalized = normalizeImportName(name);
+      if (school.supervisorId) {
+        configuredNames.add(normalized);
+        continue;
+      }
       if (!configuredNames.has(normalized)) {
         supervisors.push({ id: `name:${normalized}`, name });
         configuredNames.add(normalized);
@@ -191,10 +203,11 @@ function capacityErrors(
       normalizeImportName(supervisor.name),
       supervisor,
     ]));
+    const supervisorById = new Map(supervisors.map((supervisor) => [supervisor.id, supervisor]));
     for (const school of schools) {
-      const supervisor = school.supervisorName?.trim()
-        ? supervisorByName.get(normalizeImportName(school.supervisorName))
-        : supervisors.find((candidate) => candidate.id === '__unassigned__');
+      const supervisor = (school.supervisorId ? supervisorById.get(school.supervisorId) : undefined)
+        ?? (school.supervisorName?.trim() ? supervisorByName.get(normalizeImportName(school.supervisorName)) : undefined)
+        ?? supervisors.find((candidate) => candidate.id === '__unassigned__');
       if (supervisor) counts.set(supervisor.id, (counts.get(supervisor.id) ?? 0) + 1);
     }
   }
@@ -219,13 +232,16 @@ export function summarizePlanSchedule(
   for (const supervisor of supervisors) found.set(supervisor.id, supervisor);
 
   for (const assignment of assignments) {
-    const namedSupervisor = byName.get(normalizeImportName(assignment.supervisorName ?? ''));
     const idSupervisor = assignment.supervisorId
       ? supervisors.find((supervisor) => supervisor.id === assignment.supervisorId)
       : undefined;
-    const resolved = options.singleVisitPerDay
-      ? namedSupervisor ?? idSupervisor
-      : idSupervisor ?? namedSupervisor;
+    const namedSupervisor = assignment.supervisorId
+      ? undefined
+      : byName.get(normalizeImportName(assignment.supervisorName ?? ''));
+    const resolved = idSupervisor
+      ?? (assignment.supervisorId
+        ? { id: assignment.supervisorId, name: assignment.supervisorName?.trim() || 'غير محدد', maxSchoolsPerDay: null }
+        : namedSupervisor);
     const id = resolved?.id ?? assignment.supervisorId ?? (assignment.supervisorName ? `name:${normalizeImportName(assignment.supervisorName)}` : '__unassigned__');
     const name = resolved?.name ?? assignment.supervisorName?.trim() ?? 'غير محدد';
     const supervisor = resolved ?? { id, name, maxSchoolsPerDay: null };
@@ -313,6 +329,7 @@ export function schedulePlan(
   const totalBySupervisor = new Map<string, number>();
   const assignments: ScheduleAssignment[] = [];
   const supervisorByNormalizedName = new Map(supervisors.map((supervisor) => [normalizeImportName(supervisor.name), supervisor]));
+  const supervisorById = new Map(supervisors.map((supervisor) => [supervisor.id, supervisor]));
 
   const bestDay = (supervisor: SchedulerSupervisor, allowOverflow: boolean): string | undefined => {
     const daily = loadBySupervisor.get(supervisor.id) ?? new Map<string, number>();
@@ -330,9 +347,9 @@ export function schedulePlan(
     let supervisor: SchedulerSupervisor | undefined;
     if (options.assignmentMode === 'keep') {
       const existingName = school.supervisorName?.trim() ?? '';
-      supervisor = existingName
-        ? supervisorByNormalizedName.get(normalizeImportName(existingName))
-        : supervisors.find((candidate) => candidate.id === '__unassigned__');
+      supervisor = (school.supervisorId ? supervisorById.get(school.supervisorId) : undefined)
+        ?? (existingName ? supervisorByNormalizedName.get(normalizeImportName(existingName)) : undefined)
+        ?? supervisors.find((candidate) => candidate.id === '__unassigned__');
     } else {
       const available = supervisors.filter((candidate) => {
         const day = bestDay(candidate, false);

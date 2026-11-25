@@ -1,4 +1,6 @@
-import { normalizeImportName, normalizeMinistryNumber, schoolPersonDefault } from './imports';
+import { normalizeImportName, normalizeMinistryNumber } from './imports';
+import { isKnownGatekeeperName } from './supervisorMigration';
+import { resolvePlanSupervisor, type CurrentSchoolSupervisors } from './schoolSupervisors';
 
 export interface PlannedVisit {
   schoolId: string;
@@ -19,41 +21,58 @@ export interface PlanProgress {
 
 export interface CleaningSupervisorPlanRow {
   id: string;
+  supervisorId?: string | null;
   supervisorName: string | null;
   schoolSourceFields: Record<string, unknown> | null;
+  currentSupervisor?: CurrentSchoolSupervisors | null;
+  useSheetFallback?: boolean;
 }
 
 export function monthlySupervisorName(
   row: CleaningSupervisorPlanRow,
   planType: string,
+  gatekeeperNames: readonly string[] = [],
+  useSheetFallback = true,
 ): string | null {
-  if (planType !== 'maintenance' && planType !== 'cleaning') return row.supervisorName;
-  return schoolPersonDefault(
-    { source_fields: row.schoolSourceFields ?? {} },
-    'supervisor',
+  const resolved = resolvePlanSupervisor({
     planType,
-  ) || row.supervisorName;
+    supervisorId: row.supervisorId ?? null,
+    supervisorName: row.supervisorName,
+    current: row.currentSupervisor,
+    schoolSourceFields: row.schoolSourceFields,
+    useSheetFallback: row.useSheetFallback ?? useSheetFallback,
+  });
+  if (planType === 'maintenance') {
+    return isKnownGatekeeperName(resolved.supervisorName ?? '', gatekeeperNames) ? null : resolved.supervisorName;
+  }
+  return resolved.supervisorName;
 }
 
 export function cleaningSupervisorName(row: CleaningSupervisorPlanRow): string | null {
-  return schoolPersonDefault(
-    { source_fields: row.schoolSourceFields ?? {} },
-    'supervisor',
-    'cleaning',
-  ) || row.supervisorName;
+  return resolvePlanSupervisor({
+    planType: 'cleaning',
+    supervisorId: row.supervisorId ?? null,
+    supervisorName: row.supervisorName,
+    current: row.currentSupervisor,
+    schoolSourceFields: row.schoolSourceFields,
+    useSheetFallback: row.useSheetFallback,
+  }).supervisorName;
 }
 
 export function cleaningSupervisorUpdates(
   rows: readonly CleaningSupervisorPlanRow[],
-): Array<{ id: string; supervisorName: string }> {
+): Array<{ id: string; supervisorId: string | null; supervisorName: string }> {
   return rows.flatMap((row) => {
-    const sourceName = schoolPersonDefault(
-      { source_fields: row.schoolSourceFields ?? {} },
-      'supervisor',
-      'cleaning',
-    );
-    return sourceName && sourceName !== row.supervisorName?.trim()
-      ? [{ id: row.id, supervisorName: sourceName }]
+    const resolved = resolvePlanSupervisor({
+      planType: 'cleaning',
+      supervisorId: row.supervisorId ?? null,
+      supervisorName: row.supervisorName,
+      current: row.currentSupervisor,
+      schoolSourceFields: row.schoolSourceFields,
+      useSheetFallback: row.useSheetFallback,
+    });
+    return (resolved.supervisorId !== (row.supervisorId ?? null) || resolved.supervisorName !== row.supervisorName?.trim())
+      ? [{ id: row.id, supervisorId: resolved.supervisorId, supervisorName: resolved.supervisorName ?? '' }]
       : [];
   });
 }

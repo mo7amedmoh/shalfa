@@ -13,6 +13,7 @@ export const dashboardCardOptions = [
   { id: 'service-progress', label: 'أداء الخدمات', permissionHint: 'صلاحية عرض الخطط' },
   { id: 'supervisor-performance', label: 'التزام مشرفي الصيانة', permissionHint: 'صلاحية إسناد العاملين' },
   { id: 'workforce-coverage', label: 'تغطية القوى العاملة', permissionHint: 'صلاحية إسناد العاملين' },
+  { id: 'schools-missing-supervisors', label: 'مدارس بلا مشرف صيانة/نظافة', permissionHint: 'صلاحية عرض القوى العاملة' },
   { id: 'rewards-shortcut', label: 'مكافآت الفنيين', permissionHint: 'صلاحية توزيع المكافآت' },
   { id: 'schools-support', label: 'المدارس التي تحتاج دعمًا', permissionHint: 'صلاحية إسناد العاملين' },
   { id: 'contracts-summary', label: 'العقود والمخرجات', permissionHint: 'صلاحية مؤشرات الأداء أو المخرجات' },
@@ -68,6 +69,8 @@ export function isDashboardCardVisible(
     case 'workforce-coverage':
     case 'schools-support':
       return access.workforce && !access.reportFollowerView;
+    case 'schools-missing-supervisors':
+      return permissions.has('workforce.view');
     case 'rewards-shortcut':
       return access.rewardsShortcut;
     case 'contracts-summary':

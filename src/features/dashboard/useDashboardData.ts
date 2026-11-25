@@ -16,6 +16,8 @@ import type { PlanType } from '../../domain/types';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
+import { loadCurrentSchoolSupervisors, loadSheetSupervisorFallback } from '../../lib/schoolSupervisors';
+import { resolvePlanSupervisor } from '../../domain/schoolSupervisors';
 
 const planTypeSchema = z.enum(['maintenance', 'cleaning', 'security_safety', 'elevators']);
 const planSchema = z.object({
@@ -24,7 +26,8 @@ const planSchema = z.object({
   late_by_planned_date: z.boolean(),
   monthly_plan_rows: z.array(z.object({
     id: z.string().uuid(),
-    school: z.object({ name: z.string() }).nullable(),
+    school_id: z.string().uuid(),
+    school: z.object({ id: z.string().uuid(), name: z.string(), source_fields: z.record(z.string(), z.unknown()) }).nullable(),
     planned_date: z.string(),
     visited: z.boolean(),
     visited_at: z.string().nullable(),
@@ -42,6 +45,9 @@ const sourceSchoolSchema = z.object({
   size_source: z.enum(SCHOOL_SIZES).nullable(),
 });
 const assignmentSchema = z.object({ school_id: z.string().uuid() });
+const dashboardEmployeeSchema = z.object({ id: z.string().uuid(), full_name: z.string() });
+const dashboardSchoolSchema = z.object({ id: z.string().uuid(), name: z.string() });
+const currentSupervisorCoverageSchema = z.array(dashboardSchoolSchema);
 const gatekeeperSchema = z.object({ school_id: z.string().uuid() });
 const sizeCorrectionSchema = z.object({ school_id: z.string().uuid(), corrected_size: z.enum(SCHOOL_SIZES) });
 const exceptionSchemaRow = z.object({ school_id: z.string().uuid(), required_count: z.number().int(), reason: z.string() });
@@ -69,6 +75,7 @@ const dashboardPermissionKeys = [
   'plans.record_visit_report',
   'plans.create_delete',
   'plans.edit_rows',
+  'workforce.view',
   'workforce.assign_cleaners',
   'schools.sync',
   'rewards.distribute',
@@ -128,6 +135,10 @@ type StaffingData = {
     sizeMismatchSchools: Array<{ id: string; name: string }>;
   }) | null;
 };
+type SupervisorCoverage = {
+  maintenanceMissing: Array<{ id: string; name: string }>;
+  cleaningMissing: Array<{ id: string; name: string }>;
+};
 type DeliverablesData = {
   items: DashboardDeliverable[];
   dates: { contractSigningDate: string | null; siteHandoverDate: string | null; awardLetterDate: string | null };
@@ -171,21 +182,60 @@ async function loadPlanRows(month: string): Promise<DashboardPlanRow[]> {
     .select(APP_SCHEMA_SELECT.monthlyPlanDashboard)
     .eq('month', `${month}-01`);
   if (error) throw error;
-  return z.array(planSchema).parse(data).flatMap((plan) => plan.monthly_plan_rows.map((row) => ({
-    id: row.id,
-    planId: plan.id,
-    lateByPlannedDate: plan.late_by_planned_date,
-    schoolName: row.school?.name ?? 'مدرسة غير معروفة',
-    month,
-    planType: plan.plan_type,
-    plannedDate: row.planned_date,
-    visited: row.visited,
-    visitedDate: row.visited_at,
-    reportDone: row.report_done,
-    reportCompletedDate: row.report_completed_at,
-    supervisorId: row.supervisor_id,
-    supervisorName: row.supervisor_name,
-  })));
+  const plans = z.array(planSchema).parse(data);
+  const rows = plans.flatMap((plan) => plan.monthly_plan_rows.map((row) => ({ plan, row })));
+  const schoolIds = [...new Set(rows.map(({ row }) => row.school_id))];
+  const supervisorIds = [...new Set(rows.flatMap(({ row }) => row.supervisor_id ? [row.supervisor_id] : []))];
+  const [currentSupervisors, useSheetFallback, employeesResult] = await Promise.all([
+    loadCurrentSchoolSupervisors(schoolIds),
+    loadSheetSupervisorFallback(),
+    supervisorIds.length
+      ? supabase.from('employees').select('id,full_name').in('id', supervisorIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (employeesResult.error) throw employeesResult.error;
+  const currentBySchool = new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment]));
+  const employeeNames = new Map(z.array(dashboardEmployeeSchema).parse(employeesResult.data).map((employee) => [employee.id, employee.full_name]));
+  return rows.map(({ plan, row }) => {
+    const supervisor = resolvePlanSupervisor({
+      planType: plan.plan_type,
+      supervisorId: row.supervisor_id,
+      supervisorName: row.supervisor_id ? employeeNames.get(row.supervisor_id) ?? row.supervisor_name : row.supervisor_name,
+      current: currentBySchool.get(row.school_id),
+      schoolSourceFields: row.school?.source_fields,
+      useSheetFallback,
+    });
+    return {
+      id: row.id,
+      planId: plan.id,
+      lateByPlannedDate: plan.late_by_planned_date,
+      schoolName: row.school?.name ?? 'مدرسة غير معروفة',
+      month,
+      planType: plan.plan_type,
+      plannedDate: row.planned_date,
+      visited: row.visited,
+      visitedDate: row.visited_at,
+      reportDone: row.report_done,
+      reportCompletedDate: row.report_completed_at,
+      supervisorId: supervisor.supervisorId,
+      supervisorName: supervisor.supervisorName,
+    };
+  });
+}
+
+async function loadSupervisorCoverage(): Promise<SupervisorCoverage> {
+  if (!supabase) throw new Error('إعداد الاتصال بقاعدة البيانات غير مكتمل.');
+  const [schoolsResult, currentSupervisors] = await Promise.all([
+    supabase.from('schools').select('id,name').order('name'),
+    loadCurrentSchoolSupervisors(),
+  ]);
+  if (schoolsResult.error) throw schoolsResult.error;
+  const schools = currentSupervisorCoverageSchema.parse(schoolsResult.data);
+  const assignments = new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment]));
+  return {
+    maintenanceMissing: schools.filter((school) => !assignments.get(school.id)?.maintenance_supervisor_id),
+    cleaningMissing: schools.filter((school) => !assignments.get(school.id)?.cleaning_supervisor_id),
+  };
 }
 
 async function loadStaffingData(): Promise<StaffingData> {
@@ -383,6 +433,12 @@ export function useDashboardData(profile: UserProfile | null, filters: Dashboard
     enabled: access.staffing,
     staleTime: 60_000,
   });
+  const supervisorCoverage = useQuery({
+    queryKey: ['dashboard-supervisor-coverage', profile?.id, permissionFingerprint],
+    queryFn: loadSupervisorCoverage,
+    enabled: permissions.has('workforce.view'),
+    staleTime: 60_000,
+  });
   const syncTime = useQuery({
     queryKey: ['dashboard-school-sync-time', profile?.id],
     queryFn: loadLastSchoolSync,
@@ -488,6 +544,9 @@ export function useDashboardData(profile: UserProfile | null, filters: Dashboard
     lastSchoolSyncAt: access.syncTime ? syncTime.data ?? null : null,
     compliance: access.plans ? compliance : [],
     workforce: access.workforce ? staffing.data?.workforce ?? null : null,
+    supervisorCoverage: permissions.has('workforce.view') ? supervisorCoverage.data ?? null : null,
+    supervisorCoverageLoading: permissions.has('workforce.view') && supervisorCoverage.isLoading,
+    supervisorCoverageError: supervisorCoverage.error,
     deliverableSummary: access.deliverables ? deliverableSummary : null,
     latestKpi: access.kpi ? latestKpi.data ?? null : null,
     recentActivity: access.activity ? activity.data ?? [] : [],

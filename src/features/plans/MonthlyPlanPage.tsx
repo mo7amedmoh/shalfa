@@ -25,6 +25,8 @@ import type { ScheduleAssignment } from '../../domain/planScheduler';
 import type { PlanType } from '../../domain/types';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
+import { loadCurrentSchoolSupervisors, loadSheetSupervisorFallback } from '../../lib/schoolSupervisors';
+import type { CurrentSchoolSupervisors } from '../../domain/schoolSupervisors';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { useDisplayFormat } from '../../app/useDisplayFormat';
 import { usePermission } from '../../app/permissionContext';
@@ -81,7 +83,24 @@ const rowSchema = z.object({
   }).nullable(),
 });
 type PlanRow = z.infer<typeof rowSchema>;
-type CandidateData = { schools: z.infer<typeof sourceSchoolSchema>[]; eligibility: PlanEligibilityConfig | null };
+type CandidateData = {
+  schools: z.infer<typeof sourceSchoolSchema>[];
+  currentSupervisors: Map<string, CurrentSchoolSupervisors>;
+  useSheetSupervisorFallback: boolean;
+  eligibility: PlanEligibilityConfig | null;
+  gatekeeperNames: string[];
+};
+
+function supervisorRowFor(row: PlanRow, candidates?: CandidateData) {
+  return {
+    id: row.id,
+    supervisorId: row.supervisor_id,
+    supervisorName: row.supervisor_name,
+    schoolSourceFields: row.school?.source_fields ?? null,
+    currentSupervisor: candidates?.currentSupervisors.get(row.school_id) ?? null,
+    useSheetFallback: candidates?.useSheetSupervisorFallback ?? true,
+  };
+}
 
 const planTitles: Record<PlanType, string> = {
   maintenance: 'الصيانة',
@@ -91,18 +110,30 @@ const planTitles: Record<PlanType, string> = {
 };
 
 async function loadCandidates(): Promise<CandidateData> {
-  if (!supabase) return { schools: [], eligibility: null };
-  const [schoolsResult, settingsResult] = await Promise.all([
+  if (!supabase) return { schools: [], currentSupervisors: new Map(), useSheetSupervisorFallback: true, eligibility: null, gatekeeperNames: [] };
+  const [schoolsResult, settingsResult, gatekeepersResult, currentSupervisors, useSheetSupervisorFallback] = await Promise.all([
     supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsPlanGenerator).order('name'),
     supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
+    supabase.from('gatekeepers').select('full_name'),
+    loadCurrentSchoolSupervisors(),
+    loadSheetSupervisorFallback(),
   ]);
   if (schoolsResult.error) throw schoolsResult.error;
   if (settingsResult.error) throw settingsResult.error;
+  if (gatekeepersResult.error) throw gatekeepersResult.error;
   const schools = z.array(sourceSchoolSchema).parse(schoolsResult.data);
   const eligibility = settingsResult.data
     ? eligibilitySchema.parse(settingsResult.data.value)
     : null;
-  return { schools, eligibility };
+  return {
+    schools,
+    currentSupervisors: new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment])),
+    useSheetSupervisorFallback,
+    eligibility,
+    gatekeeperNames: z.array(z.object({ full_name: z.string() }))
+      .parse(gatekeepersResult.data)
+      .map(({ full_name }) => full_name),
+  };
 }
 
 async function loadPlans(planType: PlanType) {
@@ -307,44 +338,49 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
     mutationFn: async () => {
       if (!supabase || !activePlan || planType !== 'cleaning') throw new Error('اختر خطة نظافة أولاً.');
       if (!canCreate) throw new Error('لا تملك صلاحية تحديث أسماء المشرفين.');
-      const updates = cleaningSupervisorUpdates((rows.data ?? []).map((row) => ({
-        id: row.id,
-        supervisorName: row.supervisor_name,
-        schoolSourceFields: row.school?.source_fields ?? null,
-      })));
+      const updates = cleaningSupervisorUpdates((rows.data ?? []).map((row) => supervisorRowFor(row, candidates.data)));
       if (!updates.length) return 0;
-      if (!window.confirm(`سيتم استبدال أسماء المشرفين في ${updates.length} صفاً بالأسماء الواردة في قاعدة بيانات المدارس. هل تريد المتابعة؟`)) {
+      if (!window.confirm(`سيتم تحديث المشرفين في ${updates.length} صفاً وفق الإسناد الحالي، مع استخدام اسم الشيت كبديل عند تفعيله. هل تريد المتابعة؟`)) {
         throw new Error('تم إلغاء تحديث أسماء المشرفين.');
       }
 
-      const rowsByName = new Map<string, string[]>();
+      const rowsBySupervisor = new Map<string, { supervisorId: string | null; supervisorName: string; rowIds: string[] }>();
       for (const update of updates) {
-        const ids = rowsByName.get(update.supervisorName) ?? [];
-        ids.push(update.id);
-        rowsByName.set(update.supervisorName, ids);
+        const key = `${update.supervisorId ?? ''}\u0000${update.supervisorName}`;
+        const group = rowsBySupervisor.get(key) ?? {
+          supervisorId: update.supervisorId,
+          supervisorName: update.supervisorName,
+          rowIds: [],
+        };
+        group.rowIds.push(update.id);
+        rowsBySupervisor.set(key, group);
       }
-      for (const [supervisorName, rowIds] of rowsByName) {
+      for (const { supervisorId, supervisorName, rowIds } of rowsBySupervisor.values()) {
         const { error } = await supabase.from('monthly_plan_rows')
-          .update({ supervisor_id: null, supervisor_name: supervisorName })
+          .update({ supervisor_id: supervisorId, supervisor_name: supervisorName || null })
           .eq('plan_id', activePlan.id)
           .in('id', rowIds);
         if (error) throw error;
       }
 
       const { data, error } = await supabase.from('monthly_plan_rows')
-        .select('id,supervisor_name')
+        .select('id,supervisor_id,supervisor_name')
         .eq('plan_id', activePlan.id)
         .in('id', updates.map((update) => update.id));
       if (error) throw new Error(`تعذر التحقق من أسماء المشرفين المحفوظة: ${error.message}`);
-      const savedNames = new Map((data ?? []).map((row) => [row.id, row.supervisor_name]));
-      const notSaved = updates.filter((update) => savedNames.get(update.id) !== update.supervisorName);
-      if (notSaved.length) throw new Error(`لم تُحفظ أسماء المشرفين في ${notSaved.length} صفاً. تحقق من صلاحيات قاعدة البيانات.`);
+      const savedRows = new Map((data ?? []).map((row) => [row.id, row]));
+      const notSaved = updates.filter((update) => {
+        const saved = savedRows.get(update.id);
+        return saved?.supervisor_id !== update.supervisorId
+          || (saved?.supervisor_name ?? '') !== update.supervisorName;
+      });
+      if (notSaved.length) throw new Error(`لم تُحفظ بيانات المشرفين في ${notSaved.length} صفاً. تحقق من صلاحيات قاعدة البيانات.`);
       return updates.length;
     },
     onSuccess: (count) => setMessage(count
-      ? `تم تحديث أسماء مشرفي النظافة في ${count} صفاً من قاعدة بيانات المدارس.`
-      : 'أسماء مشرفي الخطة مطابقة بالفعل لقاعدة بيانات المدارس.'),
-    onError: (error: Error) => setMessage(`تعذر تحديث أسماء مشرفي النظافة: ${error.message}`),
+      ? `تم تحديث مشرفي النظافة في ${count} صفاً وفق الإسناد الحالي.`
+      : 'بيانات مشرفي الخطة مطابقة بالفعل للإسناد الحالي.'),
+    onError: (error: Error) => setMessage(`تعذر تحديث مشرفي النظافة: ${error.message}`),
     onSettled: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['monthly-plan-rows', activePlanId] }),
@@ -484,20 +520,12 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const completedVisits = rows.data?.filter((row) => row.visited_at).length ?? 0;
   const completedReports = rows.data?.filter((row) => row.report_completed_at).length ?? 0;
   const cleaningSupervisorChanges = useMemo(
-    () => cleaningSupervisorUpdates((rows.data ?? []).map((row) => ({
-      id: row.id,
-      supervisorName: row.supervisor_name,
-      schoolSourceFields: row.school?.source_fields ?? null,
-    }))),
-    [rows.data],
+    () => cleaningSupervisorUpdates((rows.data ?? []).map((row) => supervisorRowFor(row, candidates.data))),
+    [rows.data, candidates.data],
   );
   const missingSupervisorCount = (rows.data ?? []).filter((row) => {
     if (planType === 'elevators' || planType === 'security_safety') return false;
-    const supervisorName = monthlySupervisorName({
-      id: row.id,
-      supervisorName: row.supervisor_name,
-      schoolSourceFields: row.school?.source_fields ?? null,
-    }, planType);
+    const supervisorName = monthlySupervisorName(supervisorRowFor(row, candidates.data), planType, candidates.data?.gatekeeperNames);
     return !row.supervisor_id && !supervisorName;
   }).length;
   const filteredPlanRows = useMemo(
@@ -514,15 +542,30 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   const monthEnd = month && /^\d{4}-\d{2}$/.test(month)
     ? new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10)
     : '';
-  const schedulerSchools = eligibleSchools.map((school) => ({
-    id: school.id,
-    name: school.school_name,
-    ministryNumber: school.ministry_number,
-    supervisorName: schoolPersonDefault({ source_fields: school.source_fields }, 'supervisor', planType) || null,
-    neighbourhood: school.neighbourhood,
-    latitude: school.latitude,
-    longitude: school.longitude,
-  }));
+  const schedulerSchools = eligibleSchools.map((school) => {
+    const currentSupervisor = candidates.data?.currentSupervisors.get(school.id);
+    return {
+      id: school.id,
+      name: school.school_name,
+      ministryNumber: school.ministry_number,
+      supervisorId: planType === 'cleaning'
+        ? currentSupervisor?.cleaning_supervisor_id ?? null
+        : currentSupervisor?.maintenance_supervisor_id ?? null,
+      supervisorName: schoolPersonDefault(
+        { source_fields: school.source_fields },
+        'supervisor',
+        planType,
+        currentSupervisor,
+        candidates.data?.useSheetSupervisorFallback ?? true,
+      ) || null,
+      hasCurrentSupervisorAssignment: Boolean(planType === 'cleaning'
+        ? currentSupervisor?.cleaning_supervisor_id
+        : currentSupervisor?.maintenance_supervisor_id),
+      neighbourhood: school.neighbourhood,
+      latitude: school.latitude,
+      longitude: school.longitude,
+    };
+  });
   const exportPlan = async () => {
     if (!activePlan || !filteredPlanRows.length || exportingPlan) return;
     setExportingPlan(true);
@@ -545,11 +588,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
               reportCompletedAt: row.report_completed_at,
             }, today)
             : today > monthEnd && !row.report_completed_at;
-          const supervisorName = monthlySupervisorName({
-            id: row.id,
-            supervisorName: row.supervisor_name,
-            schoolSourceFields: row.school?.source_fields ?? null,
-          }, planType);
+          const supervisorName = monthlySupervisorName(supervisorRowFor(row, candidates.data), planType, candidates.data?.gatekeeperNames);
           return [
             row.school?.ministry_number ?? '',
             row.school?.school_name ?? row.school_id,
@@ -658,11 +697,11 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
               onClick={() => updateCleaningSupervisors.mutate()}
               disabled={updateCleaningSupervisors.isPending || !cleaningSupervisorChanges.length}
               className="rounded-lg border border-brand-700 px-3 py-2 text-sm font-semibold text-brand-800 disabled:opacity-50"
-              title="تحديث أسماء المشرفين من عمود «اسم المشرف (نظافة)» في قاعدة بيانات المدارس"
+              title="تحديث مشرفي الخطة وفق الإسناد الحالي، مع استخدام اسم الشيت كبديل عند تفعيله"
             >
               {updateCleaningSupervisors.isPending
                 ? 'جارٍ تحديث الأسماء…'
-                : `تحديث المشرفين من قاعدة المدارس (${formatNumber(cleaningSupervisorChanges.length)})`}
+                : `تحديث المشرفين من الإسناد الحالي (${formatNumber(cleaningSupervisorChanges.length)})`}
             </button>}
             {activePlan && canRedistribute && rows.data && <button
                 type="button"
@@ -721,11 +760,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                 schoolName: row.school?.school_name ?? row.school_id,
                 ministryNumber: row.school?.ministry_number ?? '',
                 ministryKey: row.school?.ministry_key ?? '',
-                supervisorName: monthlySupervisorName({
-                  id: row.id,
-                  supervisorName: row.supervisor_name,
-                  schoolSourceFields: row.school?.source_fields ?? null,
-                }, planType),
+                supervisorName: monthlySupervisorName(supervisorRowFor(row, candidates.data), planType, candidates.data?.gatekeeperNames),
                 visited: row.visited,
                 visitedAt: row.visited_at,
                 reportAt: row.report_completed_at,
@@ -763,11 +798,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                       reportCompletedAt: row.report_completed_at,
                     }, today)
                     : today > monthEnd && !row.report_completed_at;
-                  const supervisorName = monthlySupervisorName({
-                    id: row.id,
-                    supervisorName: row.supervisor_name,
-                    schoolSourceFields: row.school?.source_fields ?? null,
-                  }, planType);
+                  const supervisorName = monthlySupervisorName(supervisorRowFor(row, candidates.data), planType, candidates.data?.gatekeeperNames);
                   return <tr key={row.id}>
                     <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small>{supervisorName && <small className="block text-xs text-slate-500">المشرف: {supervisorName}</small>}</td>
                     <td>
@@ -842,11 +873,7 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
           schoolId: row.school_id,
           schoolName: row.school?.school_name ?? row.school_id,
           supervisorId: planType === 'maintenance' || planType === 'cleaning' ? null : row.supervisor_id,
-          supervisorName: monthlySupervisorName({
-            id: row.id,
-            supervisorName: row.supervisor_name,
-            schoolSourceFields: row.school?.source_fields ?? null,
-          }, planType),
+          supervisorName: monthlySupervisorName(supervisorRowFor(row, candidates.data), planType, candidates.data?.gatekeeperNames),
           plannedDate: row.planned_date,
           visited: row.visited,
         }))}

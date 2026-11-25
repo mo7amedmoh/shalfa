@@ -14,6 +14,7 @@ import { analyzeResidenceNumbers, employeeCategorySchema, type ResidenceEmployee
 import { paginateRows, TABLE_PAGE_SIZE } from '../../lib/pagination';
 import { TablePagination } from '../../components/TablePagination';
 import { usePermission } from '../../app/permissionContext';
+import { useSearchParams } from 'react-router-dom';
 import { SupervisorSchoolAssignmentsPanel } from './SupervisorSchoolAssignmentsPanel';
 
 const employeeSchema = z.object({
@@ -224,6 +225,7 @@ function parseImportRows(fileRows: Record<string, unknown>[]): EmployeeImportRow
 }
 
 export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { formatNumber } = useDisplayFormat();
   const [search, setSearch] = useState('');
@@ -234,7 +236,7 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [projectFilter, setProjectFilter] = useState('');
-  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(() => searchParams.get('employeeId'));
   const [activeCardTab, setActiveCardTab] = useState<'profile' | 'schools'>('profile');
   const [editMode, setEditMode] = useState(false);
   const [identityCardUrl, setIdentityCardUrl] = useState('');
@@ -272,6 +274,10 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
   }, [employees.data, search, categoryFilter, statusFilter, projectFilter]);
   const pagedEmployees = paginateRows(visibleEmployees, employeePage);
   const selectedEmployee = (employees.data ?? []).find((employee) => employee.id === selectedEmployeeId) ?? null;
+  useEffect(() => {
+    const employeeId = searchParams.get('employeeId');
+    if (employeeId) setSelectedEmployeeId(employeeId);
+  }, [searchParams]);
   const projectNames = useMemo(() => [...new Set((employees.data ?? [])
     .map((employee) => employee.project_name?.trim())
     .filter((project): project is string => Boolean(project)))]
@@ -738,6 +744,9 @@ export function WorkforcePage({ profile }: { profile: UserProfile | null }) {
                 <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${selectedEmployee.employment_status === 'active' ? 'bg-emerald-50 text-emerald-700' : selectedEmployee.employment_status === 'inactive' ? 'bg-amber-50 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
                   {selectedEmployee.employment_status === 'active' ? 'نشط' : selectedEmployee.employment_status === 'inactive' ? 'غير نشط' : 'منتهي الخدمة'}
                 </span>
+                {selectedEmployee.employee_category === 'supervisor'
+                  && (!selectedEmployee.employee_number || !selectedEmployee.job_title || !selectedEmployee.phone || !selectedEmployee.nationality || !selectedEmployee.hire_date)
+                  && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-800">بيانات ناقصة</span>}
               </div>
               <p className="mt-1 text-sm leading-5 text-slate-500">
                 {[selectedEmployee.job_title, selectedEmployee.department, selectedEmployee.project_name].filter(Boolean).join(' · ') || '—'}

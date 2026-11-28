@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { normalizeImportName, resolvePlanPerson } from '../../domain/imports';
 import { matchPlanSchoolsByMinistryNumbers } from '../../domain/plans';
 import { isKnownGatekeeperName } from '../../domain/supervisorMigration';
+import { isSupervisorEligibleEmployee } from '../../domain/workforce';
 import {
   schedulePlan,
   summarizePlanSchedule,
@@ -13,9 +14,9 @@ import {
   type SchedulerSupervisor,
 } from '../../domain/planScheduler';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
-import { supabase } from '../../lib/supabase';
+import { fetchAllPages, supabase } from '../../lib/supabase';
 
-type Employee = { id: string; full_name: string };
+type Employee = { id: string; full_name: string; category: string; job_title: string | null };
 type Alias = { alias_normalised: string; employee_id: string };
 type References = { employees: Employee[]; aliases: Alias[]; gatekeeperNames: string[] };
 type GeneratorSchool = SchedulerSchool & { ministryNumber: string; hasCurrentSupervisorAssignment?: boolean };
@@ -33,7 +34,12 @@ type Props = {
   onSave: (assignments: ScheduleAssignment[]) => void;
 };
 
-const employeeSchema = z.object({ id: z.string().uuid(), full_name: z.string() });
+const employeeSchema = z.object({
+  id: z.string().uuid(),
+  full_name: z.string(),
+  category: z.string(),
+  job_title: z.string().nullable(),
+});
 const aliasSchema = z.object({ alias_normalised: z.string(), employee_id: z.string().uuid() });
 const gatekeeperSchema = z.object({ full_name: z.string() });
 const inputClass = 'rounded-lg border border-slate-300 px-3 py-2 text-sm';
@@ -50,29 +56,32 @@ const weekdays = [
 
 async function loadReferences(): Promise<References> {
   if (!supabase) return { employees: [], aliases: [], gatekeeperNames: [] };
-  const [employeesResult, aliasesResult, gatekeepersResult] = await Promise.all([
-    supabase.from('employees')
-      .select(APP_SCHEMA_SELECT.employeesForImport)
-      .eq('category', 'supervisor')
+  const [employeeRows, aliasesResult, gatekeeperRows] = await Promise.all([
+    fetchAllPages((from, to) => supabase!.from('employees')
+      .select('id,full_name,category,job_title')
+      .in('category', ['supervisor', 'gatekeeper'])
       .eq('status', 'active')
-      .order('full_name'),
+      .order('full_name')
+      .order('id')
+      .range(from, to)),
     supabase.from('supervisor_aliases').select(APP_SCHEMA_SELECT.supervisorAliases),
-    supabase.from('gatekeepers').select('full_name'),
+    fetchAllPages((from, to) => supabase!.from('gatekeepers').select('full_name').order('id').range(from, to)),
   ]);
-  if (employeesResult.error) throw employeesResult.error;
   if (aliasesResult.error) throw aliasesResult.error;
-  if (gatekeepersResult.error) throw gatekeepersResult.error;
   return {
-    employees: z.array(employeeSchema).parse(employeesResult.data),
+    employees: z.array(employeeSchema).parse(employeeRows),
     aliases: z.array(aliasSchema).parse(aliasesResult.data),
-    gatekeeperNames: z.array(gatekeeperSchema).parse(gatekeepersResult.data).map(({ full_name }) => full_name),
+    gatekeeperNames: z.array(gatekeeperSchema).parse(gatekeeperRows).map(({ full_name }) => full_name),
   };
 }
 
-function optionForName(name: string, references: References, maintenanceMode: boolean): SchedulerSupervisor | null {
+function optionForName(name: string, references: References): SchedulerSupervisor | null {
   const person = resolvePlanPerson(name, references.employees, references.aliases);
-  if (maintenanceMode && (!person.employee || isKnownGatekeeperName(name, references.gatekeeperNames))) return null;
-  if (maintenanceMode && person.employee) return { id: person.employee.id, name: person.employee.full_name };
+  if (person.employee && !isSupervisorEligibleEmployee({
+    category: person.employee.category,
+    jobTitle: person.employee.job_title,
+  })) return null;
+  if (isKnownGatekeeperName(name, references.gatekeeperNames)) return null;
   return { id: person.employee?.id ?? `name:${normalizeImportName(person.name)}`, name: person.name };
 }
 
@@ -124,15 +133,21 @@ export function SupervisorPlanGenerator({
         ? referencesData.employees.find((employee) => employee.id === school.supervisorId)
         : undefined;
       const option = school.supervisorId
-        ? assignedEmployee ? { id: school.supervisorId, name: assignedEmployee.full_name } : null
-        : optionForName(school.supervisorName ?? '', referencesData, maintenanceMode);
+        ? assignedEmployee
+          ? isSupervisorEligibleEmployee({ category: assignedEmployee.category, jobTitle: assignedEmployee.job_title })
+            ? { id: school.supervisorId, name: assignedEmployee.full_name }
+            : null
+          : school.supervisorName?.trim() && !isKnownGatekeeperName(school.supervisorName, referencesData.gatekeeperNames)
+            ? { id: school.supervisorId, name: school.supervisorName.trim() }
+            : null
+        : optionForName(school.supervisorName ?? '', referencesData);
       if (!option) return [];
       const key = normalizeImportName(option.name);
       if (!key || seen.has(key)) return [];
       seen.add(key);
       return [option];
     });
-  }, [schools, referencesData, maintenanceMode]);
+  }, [schools, referencesData]);
   useEffect(() => {
     if (!sourceSupervisors.length) return;
     setSupervisors((current) => {
@@ -210,8 +225,15 @@ export function SupervisorPlanGenerator({
     const resolved = resolvePlanPerson(name, referencesData.employees, referencesData.aliases);
     const cleanName = resolved.name.trim();
     if (!cleanName) return;
-    if (maintenanceMode && isKnownGatekeeperName(cleanName, referencesData.gatekeeperNames)) {
-      setMessage('هذا الاسم مسجل كحارس مدرسة ولا يمكن إضافته كمشرف صيانة.');
+    if (isKnownGatekeeperName(cleanName, referencesData.gatekeeperNames)) {
+      setMessage('هذا الاسم مسجل كحارس مدرسة ولا يمكن إضافته كمشرف.');
+      return;
+    }
+    if (resolved.employee && !isSupervisorEligibleEmployee({
+      category: resolved.employee.category,
+      jobTitle: resolved.employee.job_title,
+    })) {
+      setMessage('هذا الموظف غير مؤهل للإسناد كمشرف.');
       return;
     }
     if (supervisors.some((item) => normalizeImportName(item.name) === normalizeImportName(cleanName))) {
@@ -236,7 +258,7 @@ export function SupervisorPlanGenerator({
         ...school,
         supervisorName: school.supervisorName
           ? maintenanceMode
-            ? optionForName(school.supervisorName, referencesData, true)?.name ?? null
+            ? optionForName(school.supervisorName, referencesData)?.name ?? null
             : resolvePlanPerson(school.supervisorName, referencesData.employees, referencesData.aliases).name
           : null,
       }));
@@ -274,8 +296,12 @@ export function SupervisorPlanGenerator({
     }));
   }
 
+  const eligibleEmployees = useMemo(() => referencesData.employees.filter((employee) => isSupervisorEligibleEmployee({
+    category: employee.category,
+    jobTitle: employee.job_title,
+  })), [referencesData.employees]);
   const allSelected = selectedIds.length === schools.length && schools.length > 0;
-  const availableEmployeeId = referencesData.employees.some((employee) => employee.id === employeeId) ? employeeId : '';
+  const availableEmployeeId = eligibleEmployees.some((employee) => employee.id === employeeId) ? employeeId : '';
   const isSuccessMessage = message.startsWith('تم إنشاء المعاينة.');
 
   return <details className="rounded-xl border border-slate-200">
@@ -347,7 +373,7 @@ export function SupervisorPlanGenerator({
         <label className="grid gap-1 text-sm font-semibold">اختيار موظف مشرف
           <select value={availableEmployeeId} onChange={(event) => setEmployeeId(event.target.value)} className={inputClass}>
             <option value="">اختر موظفاً</option>
-            {referencesData.employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name}</option>)}
+            {eligibleEmployees.map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name}</option>)}
           </select>
         </label>
         <label className="grid gap-1 text-sm font-semibold">أو اكتب اسماً
@@ -416,7 +442,7 @@ export function SupervisorPlanGenerator({
             ? [...selectedIds, school.id]
             : selectedIds.filter((id) => id !== school.id))} />
           <span>{school.name}</span><span className="text-slate-400">{school.ministryNumber}</span>
-          {school.supervisorName && optionForName(school.supervisorName, referencesData, maintenanceMode)?.name && <span className="ms-auto text-slate-500">المشرف الحالي: {optionForName(school.supervisorName, referencesData, maintenanceMode)?.name}</span>}
+          {school.supervisorName && optionForName(school.supervisorName, referencesData)?.name && <span className="ms-auto text-slate-500">المشرف الحالي: {optionForName(school.supervisorName, referencesData)?.name}</span>}
         </label>)}
       </div>
     )}

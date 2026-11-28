@@ -1,5 +1,6 @@
 import type { SchoolRecord } from './schoolTypes';
 import { SCHOOL_SIZE_LABELS } from '../../domain/staffing';
+import { schoolSupervisorSheetName } from '../../domain/imports';
 import { SchoolSupervisorDisplay } from './SchoolSupervisorDisplay';
 
 function display(value: unknown): string {
@@ -7,10 +8,12 @@ function display(value: unknown): string {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : '—';
 }
 
-function supervisorSheetName(school: SchoolRecord, header: string): string {
+function supervisorSheetName(school: SchoolRecord, planType: 'maintenance' | 'cleaning'): string {
   if (school.useSheetSupervisorFallback === false) return '';
-  const value = school.source_columns.find((column) => column.header === header)?.value;
-  return value === null || value === undefined ? '' : display(value) === '—' ? '' : display(value).trim();
+  return schoolSupervisorSheetName(
+    Object.fromEntries(school.source_columns.map(({ header, value }) => [header, value])),
+    planType,
+  );
 }
 
 export function SchoolDetails({ school }: { school: SchoolRecord }) {
@@ -28,12 +31,16 @@ export function SchoolDetails({ school }: { school: SchoolRecord }) {
         <div><dt className="font-bold">مشرف الصيانة: </dt><dd><SchoolSupervisorDisplay
           employeeId={school.currentSupervisors?.maintenance_supervisor_id ?? null}
           employeeName={school.currentSupervisors?.maintenance_supervisor_name ?? null}
-          sheetName={supervisorSheetName(school, 'اسم المشرف (صيانة)')}
+          sheetName={supervisorSheetName(school, 'maintenance')}
+          excludedSupervisorIds={school.excludedSupervisorIds}
+          excludedSupervisorNames={school.excludedSupervisorNames}
         /></dd></div>
         <div><dt className="font-bold">مشرف النظافة: </dt><dd><SchoolSupervisorDisplay
           employeeId={school.currentSupervisors?.cleaning_supervisor_id ?? null}
           employeeName={school.currentSupervisors?.cleaning_supervisor_name ?? null}
-          sheetName={supervisorSheetName(school, 'اسم المشرف (نظافة)')}
+          sheetName={supervisorSheetName(school, 'cleaning')}
+          excludedSupervisorIds={school.excludedSupervisorIds}
+          excludedSupervisorNames={school.excludedSupervisorNames}
         /></dd></div>
       </dl>
       <dl className="grid gap-1 border-t border-slate-200 pt-2">

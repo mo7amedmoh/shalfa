@@ -219,6 +219,7 @@ describe('permission catalog and legacy role visibility', () => {
       '202611220006_permission_enforcement_batch1.sql',
       '202611230001_inventory.sql',
       '202611240001_school_supervisor_assignments.sql',
+      '202611280003_secure_employee_import.sql',
     ].map((file) => readFileSync(new URL(`../../supabase/migrations/${file}`, import.meta.url), 'utf8'));
     const migrationKeys = migrations.flatMap((migration) => {
       const catalogInsert = migration.match(/insert into public\.permissions[\s\S]*?values([\s\S]*?);/);

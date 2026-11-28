@@ -15,6 +15,52 @@ export type ResidenceWorksite = {
   name: string;
 };
 
+export function isSchoolGatekeeperJobTitle(jobTitle: string | null): boolean {
+  const normalizedTitle = (jobTitle ?? '')
+    .normalize('NFKC')
+    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .trim();
+  return /(حارس|بواب)/.test(normalizedTitle);
+}
+
+export function isSupervisorEligibleEmployee(employee: {
+  category: string | null;
+  jobTitle: string | null;
+}): boolean {
+  return employee.category === 'supervisor' && !isSchoolGatekeeperJobTitle(employee.jobTitle);
+}
+
+/**
+ * Returns the effective display category for an employee, treating a supervisor-categorized
+ * employee whose job title is a school gatekeeper/doorman as a gatekeeper.
+ */
+export function effectiveEmployeeCategory(employee: {
+  category: string;
+  jobTitle: string | null;
+}): string {
+  if (employee.category === 'supervisor' && isSchoolGatekeeperJobTitle(employee.jobTitle)) {
+    return 'gatekeeper';
+  }
+  return employee.category;
+}
+
+/**
+ * Matches a workforce category filter while excluding school gatekeepers from the supervisor filter.
+ */
+export function matchesWorkforceCategoryFilter(
+  employee: { category: string; jobTitle: string | null },
+  categoryFilter: string,
+): boolean {
+  if (!categoryFilter) return true;
+  if (categoryFilter === 'supervisor') {
+    return isSupervisorEligibleEmployee(employee);
+  }
+  if (categoryFilter === 'gatekeeper') {
+    return effectiveEmployeeCategory(employee) === 'gatekeeper';
+  }
+  return employee.category === categoryFilter;
+}
+
 export type ResidenceEmployee = {
   id: string;
   fullName: string;

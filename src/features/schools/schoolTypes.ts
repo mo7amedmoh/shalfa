@@ -23,4 +23,6 @@ export type SchoolRecord = {
   has_elevator_contractor: boolean;
   currentSupervisors?: CurrentSchoolSupervisors | null;
   useSheetSupervisorFallback?: boolean;
+  excludedSupervisorNames?: string[];
+  excludedSupervisorIds?: string[];
 };

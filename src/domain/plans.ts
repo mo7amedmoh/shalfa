@@ -31,8 +31,9 @@ export interface CleaningSupervisorPlanRow {
 export function monthlySupervisorName(
   row: CleaningSupervisorPlanRow,
   planType: string,
-  gatekeeperNames: readonly string[] = [],
+  excludedSupervisorNames: readonly string[] = [],
   useSheetFallback = true,
+  excludedSupervisorIds: readonly string[] = [],
 ): string | null {
   const resolved = resolvePlanSupervisor({
     planType,
@@ -42,10 +43,10 @@ export function monthlySupervisorName(
     schoolSourceFields: row.schoolSourceFields,
     useSheetFallback: row.useSheetFallback ?? useSheetFallback,
   });
-  if (planType === 'maintenance') {
-    return isKnownGatekeeperName(resolved.supervisorName ?? '', gatekeeperNames) ? null : resolved.supervisorName;
+  if (resolved.supervisorId) {
+    return excludedSupervisorIds.includes(resolved.supervisorId) ? null : resolved.supervisorName;
   }
-  return resolved.supervisorName;
+  return isKnownGatekeeperName(resolved.supervisorName ?? '', excludedSupervisorNames) ? null : resolved.supervisorName;
 }
 
 export function cleaningSupervisorName(row: CleaningSupervisorPlanRow): string | null {

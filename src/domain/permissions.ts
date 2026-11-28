@@ -38,6 +38,7 @@ export const permissions = {
   'plans.redistribute_remaining': { group: 'plans', label: 'إعادة توزيع المتبقي' },
   'plans.manage_types': { group: 'plans', label: 'إدارة أنواع الخطط' },
   'workforce.view': { group: 'workforce', label: 'عرض القوى العاملة' },
+  'workforce.import_employees': { group: 'workforce', label: 'استيراد الموظفين' },
   'workforce.assign_cleaners': { group: 'workforce', label: 'إسناد العاملين' },
   'workforce.assign_schools': { group: 'workforce', label: 'إسناد المدارس للمشرفين' },
   'workforce.view_contacts': { group: 'workforce', label: 'عرض بيانات التواصل' },

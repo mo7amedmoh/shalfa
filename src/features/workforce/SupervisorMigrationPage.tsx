@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { normalizeImportName } from '../../domain/imports';
+import { isSupervisorEligibleEmployee } from '../../domain/workforce';
 import {
   isKnownGatekeeperName,
   resolveSupervisorMigrationName,
@@ -17,6 +18,7 @@ type MigrationEmployee = {
   id: string;
   full_name: string;
   category: string;
+  job_title: string | null;
   status: string;
   department: string | null;
   project_name: string | null;
@@ -49,6 +51,7 @@ const employeeSchema = z.object({
   id: z.string().uuid(),
   full_name: z.string(),
   category: z.string(),
+  job_title: z.string().nullable(),
   status: z.string(),
   department: z.string().nullable(),
   project_name: z.string().nullable(),
@@ -74,12 +77,27 @@ const labelByStatus: Record<SupervisorMigrationStatus, string> = {
 };
 const inputClass = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm';
 
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null) {
+    const record = error as Record<string, unknown>;
+    const fields = [
+      record.message,
+      record.details,
+      record.hint,
+      typeof record.code === 'string' ? `(${record.code})` : null,
+    ].filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+    if (fields.length) return fields.join(' — ');
+  }
+  return typeof error === 'string' ? error : 'حدث خطأ غير معروف.';
+}
+
 async function loadMigrationData(): Promise<MigrationData> {
   if (!supabase) throw new Error('يلزم إعداد Supabase.');
   const [rows, employees, aliases, gatekeepers] = await Promise.all([
     loadSourceRows(),
     loadRows((start, end) => supabase!.from('employees')
-      .select('id,full_name,category,status,department,project_name,manager_id')
+      .select('id,full_name,category,job_title,status,department,project_name,manager_id')
       .order('full_name')
       .range(start, end), employeeSchema),
     loadRows((start, end) => supabase!.from('supervisor_aliases')
@@ -133,7 +151,10 @@ function supervisorGroups(data: MigrationData): SupervisorGroup[] {
     grouped.set(key, [...(grouped.get(key) ?? []), row]);
   }
   const activeSupervisors = data.employees.filter((employee) =>
-    employee.category === 'supervisor' && employee.status === 'active');
+    employee.status === 'active' && isSupervisorEligibleEmployee({
+      category: employee.category,
+      jobTitle: employee.job_title,
+    }));
   return [...grouped].map(([key, rows]) => {
     const result = resolveSupervisorMigrationName(rows[0].source_name, activeSupervisors, data.aliases);
     const serverStatus = rows[0].match_status;
@@ -183,7 +204,10 @@ export function SupervisorMigrationPage() {
   });
   const groups = useMemo(() => migration.data ? supervisorGroups(migration.data) : [], [migration.data]);
   const activeSupervisors = (migration.data?.employees ?? []).filter((employee) =>
-    employee.category === 'supervisor' && employee.status === 'active');
+    employee.status === 'active' && isSupervisorEligibleEmployee({
+      category: employee.category,
+      jobTitle: employee.job_title,
+    }));
   const projectNames = [...new Set((migration.data?.employees ?? [])
     .map((employee) => employee.project_name?.trim())
     .filter((name): name is string => Boolean(name)))].sort((left, right) => left.localeCompare(right, 'ar'));
@@ -267,9 +291,9 @@ export function SupervisorMigrationPage() {
       const after = await loadSourceRows();
       setApplyReport(after);
       const beforeOutcomes = new Map(before.rows.map((row) => [`${row.school_id}:${row.service}`, row.outcome]));
-      const assigned = after.filter((row) => row.outcome === 'already_assigned'
+      const assigned = after.filter((row) => row.outcome === 'assigned'
         && beforeOutcomes.get(`${row.school_id}:${row.service}`) === 'proposed').length;
-      const alreadyAssigned = after.filter((row) => row.outcome === 'already_assigned').length - assigned;
+      const alreadyAssigned = after.filter((row) => row.outcome === 'already_assigned').length;
       const conflicts = after.filter((row) => row.outcome === 'conflict').length;
       const unresolved = after.filter((row) => row.outcome === 'unmatched' || row.outcome === 'ambiguous').length;
       setMessage(`اكتمل التطبيق: أُنشئ ${formatNumber(assigned)} إسناد، وتُرك ${formatNumber(alreadyAssigned)} إسناد قائم، و${formatNumber(conflicts)} تعارض، و${formatNumber(unresolved)} اسم غير محسوم.`);
@@ -280,7 +304,7 @@ export function SupervisorMigrationPage() {
         queryClient.invalidateQueries({ queryKey: ['monthly-plan-rows'] }),
       ]);
     } catch (error) {
-      setMessage(`تعذر تطبيق الإسناد: ${error instanceof Error ? error.message : String(error)}`);
+      setMessage(`تعذر تطبيق الإسناد: ${errorMessage(error)}`);
     } finally {
       setApplying(false);
     }

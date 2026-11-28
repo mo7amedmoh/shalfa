@@ -22,6 +22,64 @@ export function normalizeImportName(value: unknown): string {
     .toLocaleLowerCase();
 }
 
+const supervisorSourceHeaders = {
+  maintenance: [
+    'اسم المشرف (صيانة)',
+    'اسم المشرف صيانة',
+    'مشرف الصيانة',
+    'مشرف صيانة',
+    'مشرف الصيانه',
+    'اسم مشرف الصيانة',
+    'اسم مشرف الصيانه',
+  ],
+  cleaning: [
+    'اسم المشرف (نظافة)',
+    'اسم المشرف نظافة',
+    'مشرف النظافة',
+    'مشرف نظافة',
+    'مشرف النظافه',
+    'اسم مشرف النظافة',
+    'اسم مشرف النظافه',
+  ],
+} as const;
+
+export function isSchoolSupervisorSourceHeader(header: string): boolean {
+  const normalized = normalizeImportName(header);
+  if ([...supervisorSourceHeaders.maintenance, ...supervisorSourceHeaders.cleaning]
+    .some((candidate) => normalizeImportName(candidate) === normalized)) return true;
+  return /مشرف/.test(normalized)
+    && /(صيانة|صيانه)/.test(normalized)
+    || /مشرف/.test(normalized)
+    && /(نظافة|نظافه)/.test(normalized);
+}
+
+export function schoolSupervisorSheetName(
+  sourceFields: Record<string, unknown>,
+  planType: string,
+): string {
+  const headers = planType === 'cleaning' ? supervisorSourceHeaders.cleaning : supervisorSourceHeaders.maintenance;
+  const fields = new Map(Object.entries(sourceFields)
+    .map(([header, value]) => [normalizeImportName(header), value] as const));
+  for (const header of headers) {
+    const value = fields.get(normalizeImportName(header));
+    if (typeof value !== 'string' && typeof value !== 'number') continue;
+    const name = String(value).trim();
+    if (name) return name;
+  }
+  for (const [header, value] of Object.entries(sourceFields)) {
+    if (!isSchoolSupervisorSourceHeader(header)) continue;
+    const normalizedHeader = normalizeImportName(header);
+    const matchesService = planType === 'cleaning'
+      ? /(نظافة|نظافه)/.test(normalizedHeader)
+      : /(صيانة|صيانه)/.test(normalizedHeader);
+    if (!matchesService) continue;
+    if (typeof value !== 'string' && typeof value !== 'number') continue;
+    const name = String(value).trim();
+    if (name) return name;
+  }
+  return '';
+}
+
 export type PlanPersonResolution<T> = {
   employee: T | null;
   name: string;
@@ -77,7 +135,10 @@ export function schoolPersonDefault(
   }
   const names = kind === 'engineer'
     ? ['اسم مهندس المرافق', 'اسم مهندس المقاول']
-    : planType === 'cleaning' ? ['اسم المشرف (نظافة)'] : ['اسم المشرف (صيانة)'];
+    : [];
+  if (kind === 'supervisor') {
+    return schoolSupervisorSheetName(school.source_fields, planType);
+  }
   for (const header of names) {
     const value = school.source_fields[header];
     if (String(value ?? '').trim()) return String(value).trim();

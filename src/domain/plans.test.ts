@@ -53,6 +53,23 @@ describe('monthly plan date distribution', () => {
     }, 'maintenance', [' حَارِس المدرسة '])).toBeNull();
   });
 
+  it('does not present a name recorded for a school gatekeeper as a cleaning supervisor', () => {
+    expect(monthlySupervisorName({
+      id: 'cleaning-row',
+      supervisorName: 'حارس المدرسة',
+      schoolSourceFields: { 'اسم المشرف (نظافة)': 'حارس المدرسة' },
+    }, 'cleaning', [' حَارِس المدرسة '])).toBeNull();
+  });
+
+  it('excludes a gatekeeper by employee id even if the saved plan name is different', () => {
+    expect(monthlySupervisorName({
+      id: 'cleaning-row',
+      supervisorId: 'gatekeeper-id',
+      supervisorName: 'مازن صالح محمد اليامي',
+      schoolSourceFields: null,
+    }, 'cleaning', [], true, ['gatekeeper-id'])).toBeNull();
+  });
+
   it('searches plan rows by normalized school name or ministry number', () => {
     const school = {
       schoolName: 'مدرسة أُحد الابتدائية',

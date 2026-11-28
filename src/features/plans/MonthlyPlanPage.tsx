@@ -20,11 +20,12 @@ import {
   requiresVisitEditReason,
 } from '../../domain/planRowEdit';
 import { eligibleSchoolIds, type PlanEligibilityConfig } from '../../domain/planEligibility';
-import { schoolPersonDefault } from '../../domain/imports';
+import { resolveEligibleSchoolSupervisor } from '../../domain/schoolSupervisors';
+import { isSchoolGatekeeperJobTitle, isSupervisorEligibleEmployee } from '../../domain/workforce';
 import type { ScheduleAssignment } from '../../domain/planScheduler';
 import type { PlanType } from '../../domain/types';
 import type { UserProfile } from '../../lib/auth';
-import { supabase } from '../../lib/supabase';
+import { fetchAllPages, supabase } from '../../lib/supabase';
 import { loadCurrentSchoolSupervisors, loadSheetSupervisorFallback } from '../../lib/schoolSupervisors';
 import type { CurrentSchoolSupervisors } from '../../domain/schoolSupervisors';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
@@ -86,9 +87,11 @@ type PlanRow = z.infer<typeof rowSchema>;
 type CandidateData = {
   schools: z.infer<typeof sourceSchoolSchema>[];
   currentSupervisors: Map<string, CurrentSchoolSupervisors>;
+  employeeById: Map<string, { category: string; job_title: string | null; full_name: string }>;
   useSheetSupervisorFallback: boolean;
   eligibility: PlanEligibilityConfig | null;
-  gatekeeperNames: string[];
+  excludedSupervisorNames: string[];
+  excludedSupervisorIds: string[];
 };
 
 function supervisorRowFor(row: PlanRow, candidates?: CandidateData) {
@@ -110,29 +113,43 @@ const planTitles: Record<PlanType, string> = {
 };
 
 async function loadCandidates(): Promise<CandidateData> {
-  if (!supabase) return { schools: [], currentSupervisors: new Map(), useSheetSupervisorFallback: true, eligibility: null, gatekeeperNames: [] };
-  const [schoolsResult, settingsResult, gatekeepersResult, currentSupervisors, useSheetSupervisorFallback] = await Promise.all([
-    supabase.from('schools').select(APP_SCHEMA_SELECT.schoolsPlanGenerator).order('name'),
+  if (!supabase) return { schools: [], currentSupervisors: new Map(), employeeById: new Map(), useSheetSupervisorFallback: true, eligibility: null, excludedSupervisorNames: [], excludedSupervisorIds: [] };
+  const [schoolRows, settingsResult, gatekeeperRows, employeeRows, currentSupervisors, useSheetSupervisorFallback] = await Promise.all([
+    fetchAllPages((from, to) => supabase!.from('schools').select(APP_SCHEMA_SELECT.schoolsPlanGenerator).order('name').order('id').range(from, to)),
     supabase.from('app_config').select(APP_SCHEMA_SELECT.appConfigValue).eq('key', 'plan_eligibility').maybeSingle(),
-    supabase.from('gatekeepers').select('full_name'),
+    fetchAllPages((from, to) => supabase!.from('gatekeepers').select('full_name').order('id').range(from, to)),
+    fetchAllPages((from, to) => supabase!.from('employees').select('id,full_name,category,job_title').in('category', ['supervisor', 'gatekeeper']).order('id').range(from, to)),
     loadCurrentSchoolSupervisors(),
     loadSheetSupervisorFallback(),
   ]);
-  if (schoolsResult.error) throw schoolsResult.error;
   if (settingsResult.error) throw settingsResult.error;
-  if (gatekeepersResult.error) throw gatekeepersResult.error;
-  const schools = z.array(sourceSchoolSchema).parse(schoolsResult.data);
+  const schools = z.array(sourceSchoolSchema).parse(schoolRows);
+  const employeeRoles = z.array(z.object({
+    id: z.string().uuid(),
+    full_name: z.string(),
+    category: z.string(),
+    job_title: z.string().nullable(),
+  })).parse(employeeRows);
   const eligibility = settingsResult.data
     ? eligibilitySchema.parse(settingsResult.data.value)
     : null;
   return {
     schools,
     currentSupervisors: new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment])),
+    employeeById: new Map(employeeRoles.map((employee) => [employee.id, employee])),
     useSheetSupervisorFallback,
     eligibility,
-    gatekeeperNames: z.array(z.object({ full_name: z.string() }))
-      .parse(gatekeepersResult.data)
-      .map(({ full_name }) => full_name),
+    excludedSupervisorNames: [
+      ...z.array(z.object({ full_name: z.string() })).parse(gatekeeperRows).map(({ full_name }) => full_name),
+      ...employeeRoles
+        .filter((employee) => employee.category === 'gatekeeper'
+          || (employee.category === 'supervisor' && isSchoolGatekeeperJobTitle(employee.job_title)))
+        .map(({ full_name }) => full_name),
+    ],
+    excludedSupervisorIds: employeeRoles
+      .filter((employee) => employee.category === 'gatekeeper'
+        || (employee.category === 'supervisor' && isSchoolGatekeeperJobTitle(employee.job_title)))
+      .map(({ id }) => id),
   };
 }
 
@@ -149,12 +166,12 @@ async function loadPlans(planType: PlanType) {
 
 async function loadPlanRows(planId: string): Promise<PlanRow[]> {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('monthly_plan_rows')
+  const data = await fetchAllPages((from, to) => supabase!.from('monthly_plan_rows')
     .select(APP_SCHEMA_SELECT.monthlyPlanRows)
     .eq('plan_id', planId)
-    .order('planned_date');
-  if (error) throw error;
+    .order('planned_date')
+    .order('id')
+    .range(from, to));
   return z.array(rowSchema).parse(data);
 }
 
@@ -222,12 +239,20 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
     queryFn: async () => {
       if (!supabase) return [];
       const { data, error } = await supabase.from('employees')
-        .select('id,full_name')
+        .select('id,full_name,category,job_title')
         .eq('category', 'supervisor')
         .eq('status', 'active')
         .order('full_name');
       if (error) throw error;
-      return z.array(z.object({ id: z.string().uuid(), full_name: z.string() })).parse(data);
+      return z.array(z.object({
+        id: z.string().uuid(),
+        full_name: z.string(),
+        category: z.string(),
+        job_title: z.string().nullable(),
+      })).parse(data).filter((employee) => isSupervisorEligibleEmployee({
+        category: employee.category,
+        jobTitle: employee.job_title,
+      }));
     },
     enabled: canEditSchedule,
   });
@@ -525,7 +550,10 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
   );
   const missingSupervisorCount = (rows.data ?? []).filter((row) => {
     if (planType === 'elevators' || planType === 'security_safety') return false;
-    const supervisorName = monthlySupervisorName(supervisorRowFor(row, candidates.data), planType, candidates.data?.gatekeeperNames);
+    const supervisorName = monthlySupervisorName(
+      supervisorRowFor(row, candidates.data), planType, candidates.data?.excludedSupervisorNames,
+      undefined, candidates.data?.excludedSupervisorIds,
+    );
     return !row.supervisor_id && !supervisorName;
   }).length;
   const filteredPlanRows = useMemo(
@@ -544,23 +572,24 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
     : '';
   const schedulerSchools = eligibleSchools.map((school) => {
     const currentSupervisor = candidates.data?.currentSupervisors.get(school.id);
+    const assignedId = planType === 'cleaning'
+      ? currentSupervisor?.cleaning_supervisor_id
+      : currentSupervisor?.maintenance_supervisor_id;
+    const resolvedSupervisor = resolveEligibleSchoolSupervisor({
+      current: currentSupervisor,
+      planType,
+      schoolSourceFields: school.source_fields,
+      employeeById: candidates.data?.employeeById,
+      excludedSupervisorNames: candidates.data?.excludedSupervisorNames,
+      useSheetFallback: candidates.data?.useSheetSupervisorFallback ?? true,
+    });
     return {
       id: school.id,
       name: school.school_name,
       ministryNumber: school.ministry_number,
-      supervisorId: planType === 'cleaning'
-        ? currentSupervisor?.cleaning_supervisor_id ?? null
-        : currentSupervisor?.maintenance_supervisor_id ?? null,
-      supervisorName: schoolPersonDefault(
-        { source_fields: school.source_fields },
-        'supervisor',
-        planType,
-        currentSupervisor,
-        candidates.data?.useSheetSupervisorFallback ?? true,
-      ) || null,
-      hasCurrentSupervisorAssignment: Boolean(planType === 'cleaning'
-        ? currentSupervisor?.cleaning_supervisor_id
-        : currentSupervisor?.maintenance_supervisor_id),
+      supervisorId: resolvedSupervisor.supervisorId,
+      supervisorName: resolvedSupervisor.supervisorName,
+      hasCurrentSupervisorAssignment: Boolean(assignedId && resolvedSupervisor.supervisorId === assignedId),
       neighbourhood: school.neighbourhood,
       latitude: school.latitude,
       longitude: school.longitude,
@@ -588,7 +617,10 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
               reportCompletedAt: row.report_completed_at,
             }, today)
             : today > monthEnd && !row.report_completed_at;
-          const supervisorName = monthlySupervisorName(supervisorRowFor(row, candidates.data), planType, candidates.data?.gatekeeperNames);
+          const supervisorName = monthlySupervisorName(
+            supervisorRowFor(row, candidates.data), planType, candidates.data?.excludedSupervisorNames,
+            undefined, candidates.data?.excludedSupervisorIds,
+          );
           return [
             row.school?.ministry_number ?? '',
             row.school?.school_name ?? row.school_id,
@@ -760,7 +792,10 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                 schoolName: row.school?.school_name ?? row.school_id,
                 ministryNumber: row.school?.ministry_number ?? '',
                 ministryKey: row.school?.ministry_key ?? '',
-                supervisorName: monthlySupervisorName(supervisorRowFor(row, candidates.data), planType, candidates.data?.gatekeeperNames),
+                supervisorName: monthlySupervisorName(
+                  supervisorRowFor(row, candidates.data), planType, candidates.data?.excludedSupervisorNames,
+                  undefined, candidates.data?.excludedSupervisorIds,
+                ),
                 visited: row.visited,
                 visitedAt: row.visited_at,
                 reportAt: row.report_completed_at,
@@ -798,7 +833,10 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
                       reportCompletedAt: row.report_completed_at,
                     }, today)
                     : today > monthEnd && !row.report_completed_at;
-                  const supervisorName = monthlySupervisorName(supervisorRowFor(row, candidates.data), planType, candidates.data?.gatekeeperNames);
+                  const supervisorName = monthlySupervisorName(
+                    supervisorRowFor(row, candidates.data), planType, candidates.data?.excludedSupervisorNames,
+                    undefined, candidates.data?.excludedSupervisorIds,
+                  );
                   return <tr key={row.id}>
                     <td>{row.school?.school_name ?? row.school_id}<small className="block text-xs text-slate-400">{row.school?.ministry_number}</small>{supervisorName && <small className="block text-xs text-slate-500">المشرف: {supervisorName}</small>}</td>
                     <td>
@@ -873,7 +911,10 @@ export function MonthlyPlanPage({ planType, profile }: { planType: PlanType; pro
           schoolId: row.school_id,
           schoolName: row.school?.school_name ?? row.school_id,
           supervisorId: planType === 'maintenance' || planType === 'cleaning' ? null : row.supervisor_id,
-          supervisorName: monthlySupervisorName(supervisorRowFor(row, candidates.data), planType, candidates.data?.gatekeeperNames),
+          supervisorName: monthlySupervisorName(
+            supervisorRowFor(row, candidates.data), planType, candidates.data?.excludedSupervisorNames,
+            undefined, candidates.data?.excludedSupervisorIds,
+          ),
           plannedDate: row.planned_date,
           visited: row.visited,
         }))}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   autoDetectImportColumns,
+  isSchoolSupervisorSourceHeader,
   matchImportEmployees,
   normalizeImportName,
   normalizeMinistryNumber,
@@ -11,6 +12,7 @@ import {
   resolvePlanPerson,
   resolveSchoolPlanPerson,
   schoolPersonDefault,
+  schoolSupervisorSheetName,
 } from './imports';
 
 describe('import value normalization', () => {
@@ -63,6 +65,25 @@ describe('import value normalization', () => {
       maintenance_supervisor_name: 'مشرف مسند',
     }, false)).toBe('مشرف مسند');
     expect(schoolPersonDefault(school, 'supervisor', 'maintenance', null, false)).toBe('');
+  });
+
+  it('resolves building supervisor headers independently by service', () => {
+    const sourceFields = {
+      'مشرف الصيانة': 'مشرف صيانة المبنى',
+      'مشرف النظافة': 'مشرف نظافة المبنى',
+    };
+    expect(schoolSupervisorSheetName(sourceFields, 'maintenance')).toBe('مشرف صيانة المبنى');
+    expect(schoolSupervisorSheetName(sourceFields, 'cleaning')).toBe('مشرف نظافة المبنى');
+    expect(isSchoolSupervisorSourceHeader('اسم المشرف صيانة')).toBe(true);
+    expect(isSchoolSupervisorSourceHeader('مشرف النظافة')).toBe(true);
+    expect(schoolSupervisorSheetName({
+      'اسم مشرف الصيانة العام': 'مشرف الصيانة البديل',
+      'اسم مشرف النظافة العام': 'مشرف النظافة البديل',
+    }, 'maintenance')).toBe('مشرف الصيانة البديل');
+    expect(schoolSupervisorSheetName({
+      'اسم مشرف الصيانة العام': 'مشرف الصيانة البديل',
+      'اسم مشرف النظافة العام': 'مشرف النظافة البديل',
+    }, 'cleaning')).toBe('مشرف النظافة البديل');
   });
 
   it('resolves an assigned school supervisor by employee ID before aliases', () => {

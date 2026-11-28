@@ -10,9 +10,10 @@ import { normalizeMinistryNumber, parseImportDate, schoolPersonDefault } from '.
 import type { ScheduleAssignment } from '../../domain/planScheduler';
 import type { PlanEligibilityConfig } from '../../domain/planEligibility';
 import { usePermission } from '../../app/permissionContext';
-import { supabase } from '../../lib/supabase';
+import { fetchAllPages, supabase } from '../../lib/supabase';
 import { loadCurrentSchoolSupervisors, loadSheetSupervisorFallback } from '../../lib/schoolSupervisors';
-import type { CurrentSchoolSupervisors } from '../../domain/schoolSupervisors';
+import { excludeIneligibleSupervisor, type CurrentSchoolSupervisors } from '../../domain/schoolSupervisors';
+import { isSupervisorEligibleEmployee } from '../../domain/workforce';
 import { BulkPlanUpdates } from './BulkPlanUpdates';
 import { SupervisorPlanGenerator } from './SupervisorPlanGenerator';
 
@@ -64,24 +65,53 @@ async function loadCandidates(): Promise<{
   config: PlanEligibilityConfig | null;
   currentSupervisors: Map<string, CurrentSchoolSupervisors>;
   useSheetSupervisorFallback: boolean;
+  excludedSupervisorNames: string[];
+  employeeById: Map<string, { category: string | null; job_title: string | null }>;
 }> {
-  if (!supabase) return { schools: [], config: null, currentSupervisors: new Map(), useSheetSupervisorFallback: true };
-  const [schoolsResult, configResult, currentSupervisors, useSheetSupervisorFallback] = await Promise.all([
-    supabase.from('schools').select('id,name,ministry_no,ministry_key,extra,plan_scope,neighbourhood,latitude:lat,longitude:lng').order('name'),
+  if (!supabase) {
+    return {
+      schools: [],
+      config: null,
+      currentSupervisors: new Map(),
+      useSheetSupervisorFallback: true,
+      excludedSupervisorNames: [],
+      employeeById: new Map(),
+    };
+  }
+  const [schoolRows, configResult, gatekeeperRows, employeeRows, currentSupervisors, useSheetSupervisorFallback] = await Promise.all([
+    fetchAllPages((from, to) => supabase!.from('schools').select('id,name,ministry_no,ministry_key,extra,plan_scope,neighbourhood,latitude:lat,longitude:lng').order('name').order('id').range(from, to)),
     supabase.from('app_config').select('value').eq('key', 'plan_eligibility').maybeSingle(),
+    fetchAllPages((from, to) => supabase!.from('gatekeepers').select('full_name').order('id').range(from, to)),
+    fetchAllPages((from, to) => supabase!.from('employees').select('id,full_name,category,job_title').in('category', ['supervisor', 'gatekeeper']).order('id').range(from, to)),
     loadCurrentSchoolSupervisors(),
     loadSheetSupervisorFallback(),
   ]);
-  if (schoolsResult.error) throw schoolsResult.error;
   if (configResult.error) throw configResult.error;
+  const employeeRoles = z.array(z.object({
+    id: z.string().uuid(),
+    full_name: z.string(),
+    category: z.string(),
+    job_title: z.string().nullable(),
+  })).parse(employeeRows);
+  const excludedSupervisorNames = [
+    ...z.array(z.object({ full_name: z.string() })).parse(gatekeeperRows).map(({ full_name }) => full_name),
+    ...employeeRoles
+      .filter((employee) => !isSupervisorEligibleEmployee({
+        category: employee.category,
+        jobTitle: employee.job_title,
+      }))
+      .map(({ full_name }) => full_name),
+  ];
   return { schools: z.array(z.object({
     id: z.string().uuid(), name: z.string(), ministry_no: z.string(), ministry_key: z.string(),
     extra: z.record(z.string(), z.unknown()), plan_scope: z.boolean().nullable(),
     neighbourhood: z.string().nullable(), latitude: z.number().nullable(), longitude: z.number().nullable(),
-  })).parse(schoolsResult.data),
+  })).parse(schoolRows),
     config: configResult.data ? configSchema.parse(configResult.data.value) : null,
     currentSupervisors: new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment])),
     useSheetSupervisorFallback,
+    excludedSupervisorNames,
+    employeeById: new Map(employeeRoles.map((employee) => [employee.id, { category: employee.category, job_title: employee.job_title }])),
   };
 }
 
@@ -146,17 +176,23 @@ export function CustomPlanPage() {
         currentSupervisors,
         candidates.data?.useSheetSupervisorFallback ?? true,
       );
+      const rawSupervisorId = planType === 'cleaning'
+        ? currentSupervisors?.cleaning_supervisor_id ?? null
+        : currentSupervisors?.maintenance_supervisor_id ?? null;
+      const filteredSupervisor = excludeIneligibleSupervisor(
+        { supervisorId: rawSupervisorId, supervisorName: knownName || null },
+        {
+          employeeById: candidates.data?.employeeById,
+          excludedSupervisorNames: candidates.data?.excludedSupervisorNames,
+        },
+      );
       return {
         id: school.id,
         name: school.name,
         ministryNumber: school.ministry_no,
-        supervisorId: planType === 'cleaning'
-          ? currentSupervisors?.cleaning_supervisor_id ?? null
-          : currentSupervisors?.maintenance_supervisor_id ?? null,
-        supervisorName: knownName || null,
-        hasCurrentSupervisorAssignment: Boolean(planType === 'cleaning'
-          ? currentSupervisors?.cleaning_supervisor_id
-          : currentSupervisors?.maintenance_supervisor_id),
+        supervisorId: filteredSupervisor.supervisorId,
+        supervisorName: filteredSupervisor.supervisorName,
+        hasCurrentSupervisorAssignment: Boolean(filteredSupervisor.supervisorId),
         neighbourhood: school.neighbourhood,
         latitude: school.latitude,
         longitude: school.longitude,

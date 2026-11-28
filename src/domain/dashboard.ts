@@ -105,7 +105,7 @@ export function summarizeSupervisorCompliance(
       completedOnTime: 0,
     };
     current.planned += 1;
-    if (row.visited && row.visitedDate !== null && row.visitedDate <= row.plannedDate) {
+    if (row.visited) {
       current.completedOnTime += 1;
     }
     groups.set(id, current);

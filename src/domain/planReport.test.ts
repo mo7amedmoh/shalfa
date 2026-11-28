@@ -34,7 +34,7 @@ const row = (values: Partial<ReportPlanRow> = {}): ReportPlanRow => ({
 });
 
 describe('monthly plan report metrics', () => {
-  it('uses a saved supervisor ID before the current assignment and legacy text', () => {
+  it('uses the current assignment before a saved supervisor ID and legacy text', () => {
     expect(reportSupervisorForPlanRow({
       planType: 'cleaning',
       supervisorId: 'saved-supervisor',
@@ -47,7 +47,7 @@ describe('monthly plan report metrics', () => {
         cleaning_supervisor_name: 'المشرف الحالي',
       },
       schoolSourceFields: { 'اسم المشرف (نظافة)': 'مشرف النظافة المعتمد' },
-    })).toEqual({ supervisorId: 'saved-supervisor', supervisorName: 'المشرف المحفوظ' });
+    })).toEqual({ supervisorId: 'current-supervisor', supervisorName: 'المشرف الحالي' });
   });
 
   it('uses current assignment before saved text, then the optional sheet fallback', () => {

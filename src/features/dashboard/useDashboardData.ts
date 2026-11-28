@@ -15,27 +15,30 @@ import type { PlanEligibilityConfig } from '../../domain/planEligibility';
 import type { PlanType } from '../../domain/types';
 import type { UserProfile } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
+import { fetchAllPages } from '../../lib/supabase';
 import { APP_SCHEMA_SELECT } from '../../lib/schemaColumns';
 import { loadCurrentSchoolSupervisors, loadSheetSupervisorFallback } from '../../lib/schoolSupervisors';
-import { resolvePlanSupervisor } from '../../domain/schoolSupervisors';
+import { excludeIneligibleSupervisor, resolvePlanSupervisor } from '../../domain/schoolSupervisors';
+import { isSupervisorEligibleEmployee } from '../../domain/workforce';
 
 const planTypeSchema = z.enum(['maintenance', 'cleaning', 'security_safety', 'elevators']);
-const planSchema = z.object({
+const planHeaderSchema = z.object({
   id: z.string().uuid(),
   plan_type: planTypeSchema,
   late_by_planned_date: z.boolean(),
-  monthly_plan_rows: z.array(z.object({
-    id: z.string().uuid(),
-    school_id: z.string().uuid(),
-    school: z.object({ id: z.string().uuid(), name: z.string(), source_fields: z.record(z.string(), z.unknown()) }).nullable(),
-    planned_date: z.string(),
-    visited: z.boolean(),
-    visited_at: z.string().nullable(),
-    report_done: z.boolean(),
-    report_completed_at: z.string().nullable(),
-    supervisor_id: z.string().uuid().nullable(),
-    supervisor_name: z.string().nullable(),
-  })),
+});
+const planRowSchema = z.object({
+  id: z.string().uuid(),
+  plan_id: z.string().uuid(),
+  school_id: z.string().uuid(),
+  school: z.object({ id: z.string().uuid(), name: z.string(), source_fields: z.record(z.string(), z.unknown()) }).nullable(),
+  planned_date: z.string(),
+  visited: z.boolean(),
+  visited_at: z.string().nullable(),
+  report_done: z.boolean(),
+  report_completed_at: z.string().nullable(),
+  supervisor_id: z.string().uuid().nullable(),
+  supervisor_name: z.string().nullable(),
 });
 const sourceSchoolSchema = z.object({
   id: z.string().uuid(),
@@ -45,7 +48,13 @@ const sourceSchoolSchema = z.object({
   size_source: z.enum(SCHOOL_SIZES).nullable(),
 });
 const assignmentSchema = z.object({ school_id: z.string().uuid() });
-const dashboardEmployeeSchema = z.object({ id: z.string().uuid(), full_name: z.string() });
+const dashboardEmployeeSchema = z.object({
+  id: z.string().uuid(),
+  full_name: z.string(),
+  category: z.string(),
+  job_title: z.string().nullable(),
+});
+const gatekeeperNameSchema = z.object({ full_name: z.string() });
 const dashboardSchoolSchema = z.object({ id: z.string().uuid(), name: z.string() });
 const currentSupervisorCoverageSchema = z.array(dashboardSchoolSchema);
 const gatekeeperSchema = z.object({ school_id: z.string().uuid() });
@@ -178,32 +187,61 @@ function previousMonth(month: string): string {
 
 async function loadPlanRows(month: string): Promise<DashboardPlanRow[]> {
   if (!supabase) throw new Error('إعداد الاتصال بقاعدة البيانات غير مكتمل.');
-  const { data, error } = await supabase.from('monthly_plans')
-    .select(APP_SCHEMA_SELECT.monthlyPlanDashboard)
+  const { data: plansData, error } = await supabase.from('monthly_plans')
+    .select('id,plan_type,late_by_planned_date')
     .eq('month', `${month}-01`);
   if (error) throw error;
-  const plans = z.array(planSchema).parse(data);
-  const rows = plans.flatMap((plan) => plan.monthly_plan_rows.map((row) => ({ plan, row })));
+  const plans = z.array(planHeaderSchema).parse(plansData);
+  if (!plans.length) return [];
+  const planById = new Map(plans.map((plan) => [plan.id, plan]));
+  const rawRows = await fetchAllPages((from, to) => supabase!.from('monthly_plan_rows')
+    .select('id,plan_id,school_id,school:schools(id,name,source_fields:extra),planned_date,visited,visited_at:visited_date,report_done,report_completed_at:report_done_date,supervisor_id,supervisor_name')
+    .in('plan_id', plans.map((plan) => plan.id))
+    .order('id')
+    .range(from, to));
+  const rows = z.array(planRowSchema).parse(rawRows).map((row) => ({
+    plan: planById.get(row.plan_id)!,
+    row,
+  }));
   const schoolIds = [...new Set(rows.map(({ row }) => row.school_id))];
-  const supervisorIds = [...new Set(rows.flatMap(({ row }) => row.supervisor_id ? [row.supervisor_id] : []))];
-  const [currentSupervisors, useSheetFallback, employeesResult] = await Promise.all([
+  const [currentSupervisors, useSheetFallback, gatekeeperRows] = await Promise.all([
     loadCurrentSchoolSupervisors(schoolIds),
     loadSheetSupervisorFallback(),
-    supervisorIds.length
-      ? supabase.from('employees').select('id,full_name').in('id', supervisorIds)
-      : Promise.resolve({ data: [], error: null }),
+    fetchAllPages((from, to) => supabase!.from('gatekeepers').select('full_name').order('id').range(from, to)),
   ]);
-  if (employeesResult.error) throw employeesResult.error;
   const currentBySchool = new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment]));
-  const employeeNames = new Map(z.array(dashboardEmployeeSchema).parse(employeesResult.data).map((employee) => [employee.id, employee.full_name]));
+  const supervisorIds = [...new Set([
+    ...rows.flatMap(({ row }) => row.supervisor_id ? [row.supervisor_id] : []),
+    ...currentSupervisors.flatMap((assignment) => [
+      assignment.maintenance_supervisor_id,
+      assignment.cleaning_supervisor_id,
+    ].filter((id): id is string => Boolean(id))),
+  ])];
+  const employeesResult = supervisorIds.length
+    ? await supabase.from('employees').select('id,full_name,category,job_title').in('id', supervisorIds)
+    : { data: [], error: null };
+  if (employeesResult.error) throw employeesResult.error;
+  const employees = z.array(dashboardEmployeeSchema).parse(employeesResult.data);
+  const employeeById = new Map(employees.map((employee) => [employee.id, employee]));
+  const excludedSupervisorNames = [
+    ...z.array(gatekeeperNameSchema).parse(gatekeeperRows).map(({ full_name }) => full_name),
+    ...employees.filter((employee) => !isSupervisorEligibleEmployee({
+      category: employee.category,
+      jobTitle: employee.job_title,
+    })).map(({ full_name }) => full_name),
+  ];
   return rows.map(({ plan, row }) => {
-    const supervisor = resolvePlanSupervisor({
+    const resolvedSupervisor = resolvePlanSupervisor({
       planType: plan.plan_type,
       supervisorId: row.supervisor_id,
-      supervisorName: row.supervisor_id ? employeeNames.get(row.supervisor_id) ?? row.supervisor_name : row.supervisor_name,
+      supervisorName: row.supervisor_id ? employeeById.get(row.supervisor_id)?.full_name ?? row.supervisor_name : row.supervisor_name,
       current: currentBySchool.get(row.school_id),
       schoolSourceFields: row.school?.source_fields,
       useSheetFallback,
+    });
+    const supervisor = excludeIneligibleSupervisor(resolvedSupervisor, {
+      employeeById,
+      excludedSupervisorNames,
     });
     return {
       id: row.id,

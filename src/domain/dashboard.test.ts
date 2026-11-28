@@ -16,7 +16,7 @@ const metricRow = (values: Partial<ReportPlanMetricRow> = {}): ReportPlanMetricR
 });
 
 describe('dashboard summaries', () => {
-  it('groups maintenance compliance by linked supervisor or normalized free-text name and excludes future rows', () => {
+  it('groups completed maintenance visits by linked supervisor or normalized free-text name and excludes future rows', () => {
     expect(summarizeSupervisorCompliance([
       { supervisorId: 'employee-1', supervisorName: 'أحمد علي', plannedDate: '2026-11-02', visited: true, visitedDate: '2026-11-03' },
       { supervisorId: 'employee-1', supervisorName: 'أحمد علي', plannedDate: '2026-11-03', visited: true, visitedDate: '2026-11-03' },
@@ -24,8 +24,16 @@ describe('dashboard summaries', () => {
       { supervisorId: null, supervisorName: 'محمد سالم', plannedDate: '2026-11-04', visited: false, visitedDate: null },
       { supervisorId: null, supervisorName: 'مشرف لاحق', plannedDate: '2026-11-12', visited: false, visitedDate: null },
     ], '2026-11-04')).toEqual([
-      { id: 'employee-1', name: 'أحمد علي', planned: 2, completedOnTime: 1, percent: 50 },
+      { id: 'employee-1', name: 'أحمد علي', planned: 2, completedOnTime: 2, percent: 100 },
       { id: 'name:محمد سالم', name: 'مُحَمَّد   سالم', planned: 2, completedOnTime: 1, percent: 50 },
+    ]);
+  });
+
+  it('counts a visit as completed when it is marked visited even without an actual visit date', () => {
+    expect(summarizeSupervisorCompliance([
+      { supervisorId: 'employee-1', supervisorName: 'مشرف تجريبي', plannedDate: '2026-11-02', visited: true, visitedDate: null },
+    ], '2026-11-04')).toEqual([
+      { id: 'employee-1', name: 'مشرف تجريبي', planned: 1, completedOnTime: 1, percent: 100 },
     ]);
   });
 

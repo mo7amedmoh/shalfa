@@ -1,9 +1,38 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeResidenceNumbers, employeeCategorySchema } from './workforce';
+import {
+  analyzeResidenceNumbers,
+  effectiveEmployeeCategory,
+  employeeCategorySchema,
+  isSchoolGatekeeperJobTitle,
+  isSupervisorEligibleEmployee,
+  matchesWorkforceCategoryFilter,
+} from './workforce';
 
 describe('employee categories', () => {
   it('accepts school gatekeepers in the workforce roster', () => {
     expect(employeeCategorySchema.parse('gatekeeper')).toBe('gatekeeper');
+  });
+
+  it('does not treat a gatekeeper job title as an eligible supervisor', () => {
+    expect(isSchoolGatekeeperJobTitle('حَارِس المدرسة')).toBe(true);
+    expect(isSupervisorEligibleEmployee({ category: 'supervisor', jobTitle: 'حارس مدرسة' })).toBe(false);
+    expect(isSupervisorEligibleEmployee({ category: 'supervisor', jobTitle: 'مشرف صيانة' })).toBe(true);
+    expect(isSupervisorEligibleEmployee({ category: 'gatekeeper', jobTitle: 'حارس مدرسة' })).toBe(false);
+  });
+
+  it('excludes gatekeeper-titled employees from supervisor filter and displays them as gatekeepers', () => {
+    const misclassifiedGuard = { category: 'supervisor', jobTitle: 'حارس مدرسة' };
+    const actualSupervisor = { category: 'supervisor', jobTitle: 'مشرف صيانة' };
+    const gatekeeper = { category: 'gatekeeper', jobTitle: 'حارس' };
+
+    expect(effectiveEmployeeCategory(misclassifiedGuard)).toBe('gatekeeper');
+    expect(effectiveEmployeeCategory(actualSupervisor)).toBe('supervisor');
+
+    expect(matchesWorkforceCategoryFilter(misclassifiedGuard, 'supervisor')).toBe(false);
+    expect(matchesWorkforceCategoryFilter(actualSupervisor, 'supervisor')).toBe(true);
+    expect(matchesWorkforceCategoryFilter(misclassifiedGuard, 'gatekeeper')).toBe(true);
+    expect(matchesWorkforceCategoryFilter(gatekeeper, 'gatekeeper')).toBe(true);
+    expect(matchesWorkforceCategoryFilter(misclassifiedGuard, '')).toBe(true);
   });
 
   describe('residence number quality', () => {

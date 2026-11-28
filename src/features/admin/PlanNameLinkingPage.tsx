@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { normalizeImportName } from '../../domain/imports';
 import { getUnlinkedPlanNames } from '../../domain/planNameLinking';
+import { isSupervisorEligibleEmployee } from '../../domain/workforce';
 import { supabase } from '../../lib/supabase';
 import { usePermission } from '../../app/permissionContext';
 
@@ -17,7 +18,7 @@ export function PlanNameLinkingPage() {
     const [monthly, general, staff, aliases] = await Promise.all([
       supabase.from('monthly_plan_rows').select('supervisor_id,supervisor_name').is('supervisor_id', null).not('supervisor_name', 'is', null),
       supabase.from('general_plan_rows').select('supervisor_name').not('supervisor_name', 'is', null),
-      supabase.from('employees').select('id,full_name').order('full_name'),
+      supabase.from('employees').select('id,full_name,category,job_title').order('full_name'),
       supabase.from('supervisor_aliases').select('alias_normalised'),
     ]);
     if (monthly.error || general.error || staff.error || aliases.error) throw monthly.error ?? general.error ?? staff.error ?? aliases.error;
@@ -25,10 +26,16 @@ export function PlanNameLinkingPage() {
       .map((row) => String(row.supervisor_name ?? '').trim())
       .filter(Boolean);
     const uniqueNames = getUnlinkedPlanNames(names, (aliases.data ?? []).map((alias) => alias.alias_normalised));
-    setEmployees(staff.data ?? []);
+    const eligibleSupervisors = (staff.data ?? [])
+      .filter((employee) => isSupervisorEligibleEmployee({
+        category: employee.category,
+        jobTitle: employee.job_title,
+      }))
+      .map(({ id, full_name }) => ({ id, full_name }));
+    setEmployees(eligibleSupervisors);
     setItems(uniqueNames.map((name) => {
       const key = normalizeImportName(name);
-      return { name, employee: (staff.data ?? []).find((candidate) => normalizeImportName(candidate.full_name) === key) ?? null };
+      return { name, employee: eligibleSupervisors.find((candidate) => normalizeImportName(candidate.full_name) === key) ?? null };
     }));
   }, [canManage]);
   useEffect(() => { void load().catch((error: Error) => setMessage(error.message)); }, [load]);

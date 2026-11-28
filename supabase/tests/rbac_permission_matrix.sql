@@ -34,7 +34,7 @@ begin
             'dashboard.view','schools.view','schools.edit','schools.correct_size','schools.export_csv',
             'plans.view','plans.create_delete','plans.edit_rows','plans.write_row_fields','plans.record_visit_report',
             'plans.bulk_update_general','plans.import','plans.redistribute_remaining','plans.manage_types',
-            'workforce.view','workforce.assign_cleaners','placement.cleaners.view',
+            'workforce.view','workforce.import_employees','workforce.assign_cleaners','placement.cleaners.view',
             'placement.gatekeepers.view','gatekeepers.manage','gatekeepers.backfill',
             'gatekeepers.export_residence','residence.reveal','staffing.rules.view',
             'staffing.exceptions.manage','attendance.view','attendance.manage','attendance.import',

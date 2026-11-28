@@ -19,6 +19,8 @@ import { SchoolSizeCorrectionBadge } from './SchoolSizeCorrectionBadge';
 import { SchoolSupervisorDisplay } from './SchoolSupervisorDisplay';
 import { selectSchoolOnMap } from './schoolMapView';
 import type { SchoolRecord } from './schoolTypes';
+import { isSchoolSupervisorSourceHeader, schoolSupervisorSheetName } from '../../domain/imports';
+import { isSupervisorEligibleEmployee } from '../../domain/workforce';
 import { loadCurrentSchoolSupervisors, loadSheetSupervisorFallback } from '../../lib/schoolSupervisors';
 import { hasSizeClassDifference, normalizeSchoolSize, SCHOOL_SIZE_CODES, SCHOOL_SIZE_LABELS, SCHOOL_SIZES, type SchoolSize } from '../../domain/staffing';
 import 'leaflet/dist/leaflet.css';
@@ -46,15 +48,43 @@ const categoricalHeaders = ['الحي', 'نوع المبنى', 'حجم المد�
 
 async function loadSchools(): Promise<SchoolRecord[]> {
   if (!supabase) return [];
-  const [schoolsResult, corrections, currentSupervisors, useSheetSupervisorFallback] = await Promise.all([
+  const [schoolsResult, corrections, currentSupervisors, useSheetSupervisorFallback, gatekeepersResult] = await Promise.all([
     supabase.from('schools')
       .select(APP_SCHEMA_SELECT.schoolsMap)
       .order('source_row'),
     loadSchoolSizeCorrections(),
     loadCurrentSchoolSupervisors(),
     loadSheetSupervisorFallback(),
+    supabase.from('gatekeepers').select('full_name'),
   ]);
   if (schoolsResult.error) throw schoolsResult.error;
+  if (gatekeepersResult.error) throw gatekeepersResult.error;
+  const gatekeeperNames = z.array(z.object({ full_name: z.string() }))
+    .parse(gatekeepersResult.data)
+    .map(({ full_name }) => full_name);
+  const supervisorIds = [...new Set(currentSupervisors.flatMap((assignment) => [
+    assignment.maintenance_supervisor_id,
+    assignment.cleaning_supervisor_id,
+  ]).filter((id): id is string => Boolean(id)))];
+  const employeeResult = supervisorIds.length
+    ? await supabase.from('employees').select('id,full_name,category,job_title').in('id', supervisorIds)
+    : { data: [], error: null };
+  if (employeeResult.error) throw employeeResult.error;
+  const assignedEmployees = z.array(z.object({
+    id: z.string(),
+    full_name: z.string(),
+    category: z.string(),
+    job_title: z.string().nullable(),
+  })).parse(employeeResult.data);
+  const excludedEmployees = assignedEmployees.filter((employee) => !isSupervisorEligibleEmployee({
+    category: employee.category,
+    jobTitle: employee.job_title,
+  }));
+  const excludedSupervisorIds = excludedEmployees.map(({ id }) => id);
+  const excludedSupervisorNames = [
+    ...gatekeeperNames,
+    ...excludedEmployees.map(({ full_name }) => full_name),
+  ];
   const correctionBySchool = new Map(corrections.map((correction) => [correction.schoolId, correction]));
   const supervisorsBySchool = new Map(currentSupervisors.map((assignment) => [assignment.school_id, assignment]));
   return z.array(schoolSchema).parse(schoolsResult.data)
@@ -63,7 +93,17 @@ async function loadSchools(): Promise<SchoolRecord[]> {
       sizeCorrection: correctionBySchool.get(school.id) ?? null,
       currentSupervisors: supervisorsBySchool.get(school.id) ?? null,
       useSheetSupervisorFallback,
+      excludedSupervisorIds,
+      excludedSupervisorNames,
     }));
+}
+
+function supervisorSheetFallbackName(school: SchoolRecord, planType: 'maintenance' | 'cleaning'): string {
+  if (school.useSheetSupervisorFallback === false) return '';
+  return schoolSupervisorSheetName(
+    Object.fromEntries(school.source_columns.map(({ header, value }) => [header, value])),
+    planType,
+  );
 }
 
 function cellValue(school: SchoolRecord, header: string): string {
@@ -554,13 +594,13 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
         <section className="schools-table-scroll">
           <table dir="rtl" className="schools-source-table">
             <thead><tr>{columns.filter(({ index, header }) => visible.has(index)
-              && header !== 'اسم المشرف (صيانة)' && header !== 'اسم المشرف (نظافة)').map(({ index, header }) => (
+              && !isSchoolSupervisorSourceHeader(header)).map(({ index, header }) => (
               <th key={index} style={styleForColumn(index, header, true)}>{header}</th>
             ))}<th>مشرف الصيانة</th><th>مشرف النظافة</th>{canManageSchools && <th className="school-actions-cell">إجراءات</th>}</tr></thead>
             <tbody>{filtered.map((school, rowIndex) => (
               <tr key={school.id} className={school.missing_from_sheet_at ? 'school-row-missing' : ''}>
                 {columns.filter(({ index, header }) => visible.has(index)
-                  && header !== 'اسم المشرف (صيانة)' && header !== 'اسم المشرف (نظافة)').map(({ index, header }) => (
+                  && !isSchoolSupervisorSourceHeader(header)).map(({ index, header }) => (
                   header === 'المبني' ? (() => {
                     const buildingNumber = cellValue(school, 'م');
                     const buildingName = resolvedBuildingNames.get(school.id) ?? '';
@@ -605,12 +645,16 @@ export function SchoolsPage({ profile }: { profile: UserProfile | null }) {
                 <td><SchoolSupervisorDisplay
                   employeeId={school.currentSupervisors?.maintenance_supervisor_id ?? null}
                   employeeName={school.currentSupervisors?.maintenance_supervisor_name ?? null}
-                  sheetName={school.useSheetSupervisorFallback === false ? '' : cellValue(school, 'اسم المشرف (صيانة)')}
+                  sheetName={supervisorSheetFallbackName(school, 'maintenance')}
+                  excludedSupervisorIds={school.excludedSupervisorIds}
+                  excludedSupervisorNames={school.excludedSupervisorNames}
                 /></td>
                 <td><SchoolSupervisorDisplay
                   employeeId={school.currentSupervisors?.cleaning_supervisor_id ?? null}
                   employeeName={school.currentSupervisors?.cleaning_supervisor_name ?? null}
-                  sheetName={school.useSheetSupervisorFallback === false ? '' : cellValue(school, 'اسم المشرف (نظافة)')}
+                  sheetName={supervisorSheetFallbackName(school, 'cleaning')}
+                  excludedSupervisorIds={school.excludedSupervisorIds}
+                  excludedSupervisorNames={school.excludedSupervisorNames}
                 /></td>
                 {canManageSchools && (
                   <td className="school-actions-cell">
